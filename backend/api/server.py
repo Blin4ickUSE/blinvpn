@@ -142,6 +142,137 @@ def apply_promocode():
     result = core.apply_promocode(user_id, code)
     return jsonify(result)
 
+@app.route('/api/user/devices', methods=['GET'])
+def get_user_devices():
+    """Получить список устройств пользователя"""
+    telegram_id = request.args.get('telegram_id', type=int)
+    if not telegram_id:
+        return jsonify({'error': 'telegram_id required'}), 400
+    
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT d.id, d.name, d.platform, d.added_date, d.is_active,
+                   vk.key_config, vk.key_uuid, vk.status as key_status
+            FROM devices d
+            LEFT JOIN vpn_keys vk ON d.vpn_key_id = vk.id
+            WHERE d.user_id = ? AND d.is_active = 1
+            ORDER BY d.added_date DESC
+        """, (user['id'],))
+        
+        rows = cursor.fetchall()
+        devices = []
+        for row in rows:
+            from datetime import datetime
+            added_date = row['added_date']
+            if added_date:
+                try:
+                    if isinstance(added_date, str):
+                        dt = datetime.fromisoformat(added_date.replace('Z', '+00:00'))
+                    else:
+                        dt = added_date
+                    added_formatted = dt.strftime('%d.%m.%Y')
+                except:
+                    added_formatted = str(added_date)[:10]
+            else:
+                added_formatted = datetime.now().strftime('%d.%m.%Y')
+            
+            devices.append({
+                'id': row['id'],
+                'name': row['name'] or 'Устройство',
+                'type': row['platform'] or 'unknown',
+                'added': added_formatted,
+                'key_config': row['key_config'],
+                'key_uuid': row['key_uuid'],
+                'key_status': row['key_status']
+            })
+        
+        return jsonify(devices)
+    finally:
+        conn.close()
+
+@app.route('/api/user/history', methods=['GET'])
+def get_user_history():
+    """Получить историю транзакций пользователя"""
+    telegram_id = request.args.get('telegram_id', type=int)
+    if not telegram_id:
+        return jsonify({'error': 'telegram_id required'}), 400
+    
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT id, type, amount, description, created_at, status, payment_method
+            FROM transactions
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 100
+        """, (user['id'],))
+        
+        rows = cursor.fetchall()
+        history = []
+        for row in rows:
+            # Маппинг типов транзакций
+            type_map = {
+                'deposit': 'deposit',
+                'withdrawal': 'withdrawal',
+                'subscription': 'sub_off',
+                'device_purchase': 'buy_dev',
+                'trial': 'trial'
+            }
+            
+            title_map = {
+                'deposit': f'Пополнение баланса ({row["payment_method"] or ""})',
+                'withdrawal': 'Вывод средств',
+                'subscription': 'Списание за подписку',
+                'device_purchase': 'Покупка устройства',
+                'trial': 'Активация пробного периода'
+            }
+            
+            trans_type = type_map.get(row['type'], row['type'])
+            title = row['description'] or title_map.get(row['type'], row['type'])
+            
+            # Форматирование даты
+            from datetime import datetime
+            date_str = row['created_at']
+            if date_str:
+                try:
+                    if isinstance(date_str, str):
+                        dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                    else:
+                        dt = date_str
+                    # Месяцы на русском
+                    months = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
+                    month_idx = dt.month - 1
+                    date_formatted = f"{dt.day} {months[month_idx]} {dt.year}"
+                except:
+                    date_formatted = str(date_str)[:10]
+            else:
+                date_formatted = datetime.now().strftime('%d %b %Y')
+            
+            history.append({
+                'id': row['id'],
+                'type': trans_type,
+                'title': title,
+                'amount': float(row['amount']),
+                'date': date_formatted
+            })
+        
+        return jsonify(history)
+    finally:
+        conn.close()
+
 @app.route('/api/subscription/create', methods=['POST'])
 def create_subscription():
     """Создать подписку"""
@@ -376,6 +507,136 @@ def get_tickets():
         )
 
     return jsonify(tickets)
+
+@app.route('/api/panel/transactions', methods=['GET'])
+@require_auth
+def get_transactions():
+    """Получить список транзакций"""
+    limit = request.args.get('limit', 100, type=int)
+    offset = request.args.get('offset', 0, type=int)
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT 
+                t.id,
+                t.user_id,
+                u.username,
+                t.type,
+                t.amount,
+                t.status,
+                t.payment_method,
+                t.payment_provider,
+                t.payment_id,
+                t.hash,
+                t.created_at
+            FROM transactions t
+            LEFT JOIN users u ON t.user_id = u.id
+            ORDER BY t.created_at DESC
+            LIMIT ? OFFSET ?
+        """, (limit, offset))
+        
+        rows = cursor.fetchall()
+        transactions = []
+        for row in rows:
+            username = row['username'] or f"user_{row['user_id']}"
+            transactions.append({
+                'id': row['id'],
+                'user_id': row['user_id'],
+                'user': f"@{username}" if username and not username.startswith('@') else username,
+                'amount': float(row['amount']),
+                'type': row['type'],
+                'status': row['status'] or 'Pending',
+                'payment_method': row['payment_method'] or 'Unknown',
+                'payment_provider': row['payment_provider'] or '',
+                'payment_id': row['payment_id'] or '',
+                'hash': row['hash'] or row['payment_id'] or '',
+                'created_at': row['created_at']
+            })
+        
+        return jsonify(transactions)
+    finally:
+        conn.close()
+
+@app.route('/api/panel/keys', methods=['GET'])
+@require_auth
+def get_keys():
+    """Получить список ключей VPN"""
+    limit = request.args.get('limit', 100, type=int)
+    offset = request.args.get('offset', 0, type=int)
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT 
+                vk.id,
+                vk.user_id,
+                u.username,
+                vk.key_uuid,
+                vk.key_config,
+                vk.status,
+                vk.expiry_date,
+                vk.traffic_used,
+                vk.traffic_limit,
+                vk.devices_limit,
+                vk.server_location,
+                vk.created_at
+            FROM vpn_keys vk
+            LEFT JOIN users u ON vk.user_id = u.id
+            ORDER BY vk.created_at DESC
+            LIMIT ? OFFSET ?
+        """, (limit, offset))
+        
+        rows = cursor.fetchall()
+        keys = []
+        for row in rows:
+            username = row['username'] or f"user_{row['user_id']}"
+            key_display = row['key_config'] or row['key_uuid'] or f"key_{row['id']}"
+            if len(key_display) > 50:
+                key_display = key_display[:47] + '...'
+            
+            # Вычисляем оставшиеся дни
+            expiry_days = 0
+            if row['expiry_date']:
+                try:
+                    from datetime import datetime
+                    if isinstance(row['expiry_date'], str):
+                        expiry = datetime.fromisoformat(row['expiry_date'].replace('Z', '+00:00'))
+                    else:
+                        expiry = row['expiry_date']
+                    now = datetime.now()
+                    if expiry.tzinfo:
+                        from datetime import timezone
+                        now = datetime.now(timezone.utc)
+                    diff = expiry - now
+                    expiry_days = max(0, int(diff.total_seconds() / 86400))
+                except:
+                    expiry_days = 0
+            
+            keys.append({
+                'id': row['id'],
+                'key_config': row['key_config'],
+                'key_uuid': row['key_uuid'],
+                'key': key_display,
+                'user_id': row['user_id'],
+                'username': f"@{username}" if username and not username.startswith('@') else username,
+                'status': row['status'] or 'Active',
+                'expiry_date': row['expiry_date'],
+                'expiry': expiry_days,
+                'traffic_used': float(row['traffic_used'] or 0),
+                'traffic_limit': float(row['traffic_limit'] or 0),
+                'devices_used': 0,  # TODO: подсчитать из devices
+                'devices_limit': row['devices_limit'] or 1,
+                'server_location': row['server_location'] or 'Unknown'
+            })
+        
+        return jsonify(keys)
+    finally:
+        conn.close()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('API_PORT', 8000)))
