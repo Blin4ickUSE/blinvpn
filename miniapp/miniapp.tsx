@@ -567,17 +567,7 @@ export default function App() {
 
   // Referral Data
   const [referrals, setReferrals] = useState({ count: 0, earned: 0 });
-  const [referralList] = useState<ReferralUser[]>([
-    { id: 101, name: 'Alex_K', date: '28.12.2024', spent: 1500, myProfit: 150, history: [
-        { date: '28.12.2024', action: 'Покупка VPN (1 мес)', sum: 99, profit: 9.9 },
-        { date: '20.12.2024', action: 'Пополнение', sum: 500, profit: 50 }
-    ]},
-    { id: 102, name: 'User_9921', date: '25.12.2024', spent: 3000, myProfit: 300, history: [
-        { date: '25.12.2024', action: 'Покупка VPN (3 мес)', sum: 249, profit: 24.9 }
-    ]},
-    { id: 103, name: 'Misha_V', date: '20.12.2024', spent: 500, myProfit: 50, history: [] },
-    { id: 104, name: 'Elena_S', date: '18.12.2024', spent: 4500, myProfit: 450, history: [] },
-  ]);
+  const [referralList, setReferralList] = useState<ReferralUser[]>([]);
   const [selectedReferral, setSelectedReferral] = useState<ReferralUser | null>(null);
   const [withdrawState, setWithdrawState] = useState({ 
     step: 1, 
@@ -643,28 +633,22 @@ export default function App() {
 
     (async () => {
       try {
-        // Загружаем информацию о пользователе
-        const userRes = await miniApiFetch(`/user/info?telegram_id=${tgId}`);
-        if (userRes.ok) {
-          const userData = await userRes.json();
+        // Пользователь
+        const userData = await miniApiFetch(`/user/info?telegram_id=${tgId}`);
+        if (userData) {
           setUserId(userData.id);
           setBalance(userData.balance || 0);
           setUsername(userData.username || `User_${tgId}`);
           setIsTrialUsed(userData.trial_used === 1 || userData.trial_used === true);
-          
-          if (userData.referrals_count !== undefined) {
-            setReferrals(prev => ({
-              ...prev,
-              count: userData.referrals_count || 0,
-              earned: userData.referral_earned || userData.partner_balance || 0
-            }));
-          }
+          setReferrals({
+            count: userData.referrals_count || 0,
+            earned: userData.referral_earned || userData.partner_balance || 0,
+          });
         }
 
-        // Загружаем устройства
-        const devicesRes = await miniApiFetch(`/user/devices?telegram_id=${tgId}`);
-        if (devicesRes.ok) {
-          const devicesData = await devicesRes.json();
+        // Устройства
+        const devicesData = await miniApiFetch(`/user/devices?telegram_id=${tgId}`);
+        if (Array.isArray(devicesData)) {
           const devicesList: Device[] = devicesData.map((d: any) => ({
             id: d.id,
             name: d.name,
@@ -673,7 +657,6 @@ export default function App() {
           }));
           setDevices(devicesList);
           
-          // Сохраняем ключи для копирования
           const keysMap = new Map<number, string>();
           devicesData.forEach((d: any) => {
             if (d.key_config) {
@@ -683,31 +666,31 @@ export default function App() {
           setDeviceKeys(keysMap);
         }
 
-        // Загружаем историю транзакций
-        const historyRes = await miniApiFetch(`/user/history?telegram_id=${tgId}`);
-        if (historyRes.ok) {
-          const historyData = await historyRes.json();
+        // История
+        const historyData = await miniApiFetch(`/user/history?telegram_id=${tgId}`);
+        if (Array.isArray(historyData)) {
           setHistory(historyData);
         }
       } catch (err) {
         console.error('Ошибка загрузки данных:', err);
       }
     })();
+  }, []);
+  
+  // Load referrals list
+  useEffect(() => {
+    if (!telegramId) return;
+    (async () => {
       try {
-        const data = await miniApiFetch(`/user/info?telegram_id=${tgId}`);
-        setUserId(data.id);
-        setUsername(data.username || `id${tgId}`);
-        setBalance(data.balance ?? 0);
-        setIsTrialUsed(Boolean(data.trial_used));
-        setReferrals({
-          count: data.referrals_count ?? 0,
-          earned: data.referral_earned ?? data.partner_balance ?? 0,
-        });
+        const data = await miniApiFetch(`/user/referrals?telegram_id=${telegramId}`);
+        if (Array.isArray(data)) {
+          setReferralList(data);
+        }
       } catch (e) {
-        console.error('Failed to load user info', e);
+        console.error('Failed to load referrals list', e);
       }
     })();
-  }, []);
+  }, [telegramId]);
   
   // Helpers
   const formatMoney = (val: number) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(val);
@@ -721,6 +704,32 @@ export default function App() {
       date: new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })
     };
     setHistory(prev => [newItem, ...prev]);
+  };
+
+  const refreshDevices = async () => {
+    if (!telegramId) return;
+    try {
+      const devicesData = await miniApiFetch(`/user/devices?telegram_id=${telegramId}`);
+      if (Array.isArray(devicesData)) {
+        const devicesList: Device[] = devicesData.map((d: any) => ({
+          id: d.id,
+          name: d.name,
+          type: d.type,
+          added: d.added
+        }));
+        setDevices(devicesList);
+
+        const keysMap = new Map<number, string>();
+        devicesData.forEach((d: any) => {
+          if (d.key_config) {
+            keysMap.set(d.id, d.key_config);
+          }
+        });
+        setDeviceKeys(keysMap);
+      }
+    } catch (e) {
+      console.error('Failed to refresh devices', e);
+    }
   };
 
   const handleCopy = (text: string, deviceId?: number) => {
@@ -924,15 +933,11 @@ export default function App() {
       .then((res) => {
         if (res && res.success) {
           setBalance(prev => prev - price);
-          const newDevice = { 
-            id: Date.now(), 
-            name: name, 
-            type: wizardPlatform, 
-            added: new Date().toLocaleDateString('ru-RU') 
-          };
-          setDevices(prev => [...prev, newDevice]);
           addHistoryItem('buy_dev', `Подключение: ${name}`, -price);
-          setWizardStep(4);
+          // Обновляем устройства и ключи, чтобы копирование работало сразу
+          refreshDevices().then(() => {
+            setWizardStep(4);
+          });
         } else {
           alert(res?.error || 'Не удалось создать подписку');
         }
