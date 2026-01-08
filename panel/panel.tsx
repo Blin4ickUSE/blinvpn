@@ -1034,8 +1034,25 @@ export default function App() {
 // --- SUB-COMPONENTS FOR PAGES ---
 
 const Dashboard = () => {
-    const usersData = [30, 45, 50, 60, 55, 78, 90, 95, 100, 110, 125, 130, 128, 140, 150];
-    const keysData = [20, 25, 30, 28, 35, 40, 45, 50, 55, 60, 58, 65, 70, 75, 80];
+    const [usersData, setUsersData] = useState<number[]>([]);
+    const [keysData, setKeysData] = useState<number[]>([]);
+    const [labels, setLabels] = useState<string[]>([]);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const data = await apiFetch('/panel/stats/charts');
+                if (data) {
+                    setUsersData(Array.isArray(data.users) ? data.users : []);
+                    setKeysData(Array.isArray(data.keys) ? data.keys : []);
+                    setLabels(Array.isArray(data.labels) ? data.labels : []);
+                }
+            } catch (e) {
+                console.error('Failed to load dashboard charts', e);
+            }
+        })();
+    }, []);
+
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div><h2 className="text-2xl font-bold text-white">Добро пожаловать в панель управления</h2><p className="text-gray-400 mt-1">Вот что происходит с BlinVPN сегодня.</p></div>
@@ -1045,7 +1062,22 @@ const Dashboard = () => {
               <StatCard title="Доход за месяц" value="854,200 ₽" change="+18%" icon={DollarSign} color="indigo" />
               <StatCard title="Открытые тикеты" value="12" change="-2" icon={MessageSquare} color="orange" />
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-sm"><div className="flex justify-between items-center mb-6"><h3 className="text-lg font-semibold text-gray-200 flex items-center"><TrendingUp className="w-5 h-5 mr-2 text-blue-500" />Динамика новых пользователей</h3><span className="text-xs font-medium text-green-400 bg-green-500/10 px-2 py-1 rounded">+234 сегодня</span></div><SmoothAreaChart color="#3b82f6" label="Пользователей" data={usersData} id="chart1" /></div><div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-sm"><div className="flex justify-between items-center mb-6"><h3 className="text-lg font-semibold text-gray-200 flex items-center"><Key className="w-5 h-5 mr-2 text-purple-500" />Новые ключи</h3><span className="text-xs font-medium text-purple-400 bg-purple-500/10 px-2 py-1 rounded">+180 сегодня</span></div><SmoothAreaChart color="#a855f7" label="Ключей" data={keysData} id="chart2" /></div></div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-sm">
+                    <div className="flex justify-between items-center mb-6">
+                        <h3 className="text-lg font-semibold text-gray-200 flex items-center"><TrendingUp className="w-5 h-5 mr-2 text-blue-500" />Динамика новых пользователей</h3>
+                        <span className="text-xs font-medium text-green-400 bg-green-500/10 px-2 py-1 rounded">{labels.at(-1) || ''}</span>
+                    </div>
+                    <SmoothAreaChart color="#3b82f6" label="Пользователей" data={usersData} id="chart1" />
+                </div>
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-sm">
+                    <div className="flex justify-between items-center mb-6">
+                        <h3 className="text-lg font-semibold text-gray-200 flex items-center"><Key className="w-5 h-5 mr-2 text-purple-500" />Новые ключи</h3>
+                        <span className="text-xs font-medium text-purple-400 bg-purple-500/10 px-2 py-1 rounded">{labels.at(-1) || ''}</span>
+                    </div>
+                    <SmoothAreaChart color="#a855f7" label="Ключей" data={keysData} id="chart2" />
+                </div>
+            </div>
         </div>
     );
 };
