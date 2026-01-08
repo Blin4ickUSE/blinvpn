@@ -549,6 +549,7 @@ export default function App() {
   const [userId, setUserId] = useState<number | null>(null);
   const [telegramId, setTelegramId] = useState<number | null>(null);
   const [username, setUsername] = useState<string>('User');
+  const [plans, setPlans] = useState<Plan[]>([]);
   
   // Data
   const [history, setHistory] = useState<HistoryItem[]>([]);
