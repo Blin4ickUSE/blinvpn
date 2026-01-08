@@ -201,61 +201,8 @@ const ToastContainer: React.FC<ToastContainerProps> = ({ toasts, removeToast }) 
 };
 
 // ==========================================
-// 3. MOCK DATA GENERATORS
+// 3. API HELPERS (Mock generators removed - all data comes from backend)
 // ==========================================
-
-const generateMockTransactions = (count: number, startId: number): Transaction[] => {
-  const users = ["@vpn_user", "@crypto_fan", "@anon_777", "@telegram_guy", "@secure_net"];
-  const methods = ["СБП", "Card", "USDT", "TON", "Bitcoin"];
-  const statuses = ["Успешно", "Успешно", "Успешно", "Ошибка", "Ожидание"];
-  
-  return Array.from({ length: count }, (_, i) => ({
-    id: startId - i,
-    user: users[Math.floor(Math.random() * users.length)],
-    amount: Math.random() > 0.3 ? Math.floor(Math.random() * 1000) + 100 : -(Math.floor(Math.random() * 500)),
-    type: Math.random() > 0.3 ? 'income' : 'expense',
-    status: statuses[Math.floor(Math.random() * statuses.length)],
-    method: methods[Math.floor(Math.random() * methods.length)],
-    date: new Date().toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute:'2-digit' }),
-    hash: Math.random().toString(36).substring(7).toUpperCase()
-  }));
-};
-
-const generateMockUsers = (): User[] => {
-  // Бэкап на случай отсутствия API; основной источник данных — backend
-  return [];
-};
-
-const generateMockKeys = (): KeyItem[] => {
-    return Array.from({ length: 15 }, (_, i) => ({
-        id: 5000 + i,
-        key: `ss://YmxlbmRpbmRvZz...${Math.random().toString(36).substring(7)}`,
-        user: i % 3 === 0 ? '@dark_lord' : i % 3 === 1 ? '@new_user_1' : '@anon_user',
-        status: i % 5 === 0 ? 'Expired' : i % 10 === 0 ? 'Banned' : 'Active',
-        expiry: i % 5 === 0 ? -2 : 28, 
-        trafficUsed: Math.floor(Math.random() * 50),
-        trafficLimit: 100,
-        devicesUsed: Math.floor(Math.random() * 3),
-        devicesLimit: 5,
-        server: '🇩🇪 Germany #1'
-    }));
-};
-
-const generateMockPromos = (): Promo[] => {
-    return [];
-};
-
-const generateMockPlans = (): Plan[] => {
-    return [
-        { id: 1, name: '1 Месяц', price: 199, oldPrice: 250, duration: 30, isHit: false, description: 'Базовый доступ ко всем серверам' },
-        { id: 2, name: '3 Месяца', price: 499, oldPrice: 750, duration: 90, isHit: true, description: 'Выгоднее на 15%' },
-        { id: 3, name: '1 Год', price: 1500, oldPrice: 2400, duration: 365, isHit: false, description: 'Максимальная выгода' },
-    ]
-}
-
-const generateMockTickets = (): Ticket[] => {
-    return [];
-};
 
 // ==========================================
 // 4. UI COMPONENTS
@@ -854,7 +801,31 @@ export default function App() {
 
     const load = async () => {
       try {
-        setTransactions(generateMockTransactions(20, 10250)); // пока нет отдельного API
+        // Транзакции
+        try {
+          const transactionsFromApi = await apiFetch('/panel/transactions?limit=100');
+          if (!cancelled && Array.isArray(transactionsFromApi)) {
+            const mapped: Transaction[] = transactionsFromApi.map((t: any) => ({
+              id: t.id,
+              user: t.user || `@user_${t.user_id}`,
+              amount: t.amount ?? 0,
+              type: t.amount > 0 ? 'income' : 'expense',
+              status: t.status || 'Pending',
+              method: t.payment_method || 'Unknown',
+              date: t.created_at
+                ? new Date(t.created_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                : '',
+              hash: t.hash || t.payment_id || '',
+            }));
+            setTransactions(mapped);
+          }
+        } catch (e) {
+          console.error('Failed to load transactions from API', e);
+          if (!cancelled) {
+            addToast('Ошибка', 'Не удалось загрузить транзакции', 'error');
+            setTransactions([]);
+          }
+        }
 
         // Пользователи
         try {
@@ -889,7 +860,10 @@ export default function App() {
           }
         } catch (e) {
           console.error('Failed to load users from API', e);
-          if (!cancelled) setUsers(generateMockUsers());
+          if (!cancelled) {
+            addToast('Ошибка', 'Не удалось загрузить пользователей', 'error');
+            setUsers([]);
+          }
         }
 
         // Промокоды
@@ -911,7 +885,10 @@ export default function App() {
           }
         } catch (e) {
           console.error('Failed to load promocodes from API', e);
-          if (!cancelled) setPromos(generateMockPromos());
+          if (!cancelled) {
+            addToast('Ошибка', 'Не удалось загрузить промокоды', 'error');
+            setPromos([]);
+          }
         }
 
         // Тикеты
@@ -935,16 +912,53 @@ export default function App() {
           }
         } catch (e) {
           console.error('Failed to load tickets from API', e);
-          if (!cancelled) setTickets(generateMockTickets());
+          if (!cancelled) {
+            addToast('Ошибка', 'Не удалось загрузить тикеты', 'error');
+            setTickets([]);
+          }
         }
 
-        // Тарифы пока локально
+        // Ключи VPN
+        try {
+          const keysFromApi = await apiFetch('/panel/keys?limit=500');
+          if (!cancelled && Array.isArray(keysFromApi)) {
+            const mappedKeys: KeyItem[] = keysFromApi.map((k: any) => ({
+              id: k.id,
+              key: k.key_config || k.key_uuid || `key_${k.id}`,
+              user: k.username || `@user_${k.user_id}`,
+              status: (k.status as KeyStatus) || 'Active',
+              expiry: k.expiry_date
+                ? Math.ceil((new Date(k.expiry_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+                : 0,
+              trafficUsed: k.traffic_used ?? 0,
+              trafficLimit: k.traffic_limit ?? 0,
+              devicesUsed: k.devices_used ?? 0,
+              devicesLimit: k.devices_limit ?? 1,
+              server: k.server_location || 'Unknown',
+            }));
+            setKeys(mappedKeys);
+          }
+        } catch (e) {
+          console.error('Failed to load keys from API', e);
+          if (!cancelled) {
+            addToast('Ошибка', 'Не удалось загрузить ключи', 'error');
+            setKeys([]);
+          }
+        }
+
+        // Тарифы (локальные, так как это конфигурация, а не данные из БД)
         if (!cancelled) {
-          setKeys(generateMockKeys());
-          setPlans(generateMockPlans());
+          setPlans([
+            { id: 1, name: '1 Месяц', price: 199, oldPrice: 250, duration: 30, isHit: false, description: 'Базовый доступ ко всем серверам' },
+            { id: 2, name: '3 Месяца', price: 499, oldPrice: 750, duration: 90, isHit: true, description: 'Выгоднее на 15%' },
+            { id: 3, name: '1 Год', price: 1500, oldPrice: 2400, duration: 365, isHit: false, description: 'Максимальная выгода' },
+          ]);
         }
       } catch (e) {
         console.error('Initial panel data load failed', e);
+        if (!cancelled) {
+          addToast('Ошибка', 'Не удалось загрузить данные панели', 'error');
+        }
       }
     };
 
