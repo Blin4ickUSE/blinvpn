@@ -635,6 +635,17 @@ export default function App() {
 
     (async () => {
       try {
+        const plansData = await miniApiFetch('/plans');
+        if (Array.isArray(plansData)) {
+            setPlans(plansData.map((p: any) => ({
+                id: p.id,
+                duration: p.name,
+                price: p.price,
+                highlight: !!p.is_hit,
+                days: p.days,
+                isTrial: !!p.is_trial
+            })));
+        }
         // Пользователь
         const userData = await miniApiFetch(`/user/info?telegram_id=${tgId}`);
         if (userData) {
@@ -927,8 +938,8 @@ export default function App() {
     miniApiFetch('/subscription/create', {
       method: 'POST',
       body: JSON.stringify({
-        user_id: userId,
-        days: wizardType === 'vpn' ? wizardPlan?.days : 30,
+        // user_id больше не нужен, сервер берет его из токена
+        plan_id: wizardPlan?.id, // Отправляем ID плана вместо дней
         type: wizardType,
       }),
     })
@@ -1124,7 +1135,7 @@ export default function App() {
             {wizardType === 'vpn' ? (
                 <div className="space-y-3">
                     <p className="text-slate-400 text-sm mb-2">Выберите период защиты для <b>{PLATFORMS.find(p => p.id === wizardPlatform)?.name}</b>:</p>
-                    {VPN_PLANS.filter(plan => !plan.isTrial || !isTrialUsed).map(plan => (
+                    {plans.filter(plan => !plan.isTrial || !isTrialUsed).map(plan => (
                         <div 
                             key={plan.id}
                             onClick={() => { setWizardPlan(plan); setWizardStep(3); }}
