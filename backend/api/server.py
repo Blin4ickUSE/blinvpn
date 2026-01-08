@@ -339,7 +339,7 @@ def get_user_history():
     finally:
         conn.close()
 
-@@app.route('/api/subscription/create', methods=['POST'])
+@app.route('/api/subscription/create', methods=['POST'])
 @require_webapp_auth  # <--- Защита
 def create_subscription():
     data = request.json
@@ -821,6 +821,7 @@ def get_stats_charts():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('API_PORT', 8000)))
+
 
 
 
