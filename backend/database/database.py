@@ -214,6 +214,30 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_traffic_stats_date ON traffic_stats(date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_telegram_id ON blacklist(telegram_id)")
+
+        # --- ВСТАВИТЬ СЮДА ---
+        # Таблица тарифов
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                price REAL NOT NULL,
+                days INTEGER NOT NULL,
+                currency TEXT DEFAULT 'RUB',
+                is_hit INTEGER DEFAULT 0,
+                is_trial INTEGER DEFAULT 0
+            )
+        """)
+        
+        # Добавляем дефолтные планы, если таблица пустая
+        cursor.execute("SELECT count(*) FROM plans")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("INSERT INTO plans (name, price, days, is_trial) VALUES ('Trial', 0, 3, 1)")
+            cursor.execute("INSERT INTO plans (name, price, days, is_hit) VALUES ('1 Месяц', 99, 30, 0)")
+            cursor.execute("INSERT INTO plans (name, price, days, is_hit) VALUES ('3 Месяца', 249, 90, 1)")
+            cursor.execute("INSERT INTO plans (name, price, days, is_hit) VALUES ('1 Год', 799, 365, 1)")
+        # ---------------------
         
         conn.commit()
         logger.info("База данных успешно инициализирована")
@@ -331,4 +355,5 @@ def hash_hwid(hwid: str) -> str:
 # Инициализация при импорте
 if __name__ != "__main__":
     init_database()
+
 
