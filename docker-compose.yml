@@ -1,0 +1,116 @@
+version: '3.8'
+
+services:
+  # Основной бот
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    container_name: blinvpn_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data.db:/app/data.db
+    depends_on:
+      - webhook
+
+  # Бот поддержки
+  support_bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.support_bot
+    container_name: blinvpn_support_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data.db:/app/data.db
+    depends_on:
+      - webhook
+
+  # Webhook сервер для платежных систем
+  webhook:
+    build:
+      context: .
+      dockerfile: Dockerfile.webhook
+    container_name: blinvpn_webhook
+    restart: unless-stopped
+    ports:
+      - "${WEBHOOK_PORT:-5000}:5000"
+    env_file:
+      - .env
+    volumes:
+      - ./data.db:/app/data.db
+
+  # REST API для панели и мини-приложения
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: blinvpn_api
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data.db:/app/data.db
+    ports:
+      - "${API_PORT:-8000}:8000"
+
+  # Мини-приложение (React)
+  miniapp:
+    build:
+      context: .
+      dockerfile: Dockerfile.miniapp
+    container_name: blinvpn_miniapp
+    restart: unless-stopped
+    ports:
+      - "${MINIAPP_PORT:-3000}:3000"
+    env_file:
+      - .env
+    depends_on:
+      - webhook
+
+  # Панель управления (React)
+  panel:
+    build:
+      context: .
+      dockerfile: Dockerfile.panel
+    container_name: blinvpn_panel
+    restart: unless-stopped
+    ports:
+      - "${PANEL_PORT:-3001}:3001"
+    env_file:
+      - .env
+    depends_on:
+      - webhook
+
+  # Nginx для проксирования и SSL
+  nginx:
+    image: nginx:alpine
+    container_name: blinvpn_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - miniapp
+      - panel
+      - webhook
+
+  # Certbot для SSL сертификатов
+  certbot:
+    image: certbot/certbot
+    container_name: blinvpn_certbot
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt
+      - ./certbot:/var/www/certbot
+    command: certonly --webroot -w /var/www/certbot --keep-until-expiring --email ${SSL_EMAIL} --agree-tos --no-eff-email -d ${PANEL_DOMAIN} -d ${MINIAPP_DOMAIN} -d ${WEBHOOK_DOMAIN}
+
+volumes:
+  data:
+
