@@ -550,14 +550,9 @@ export default function App() {
   const [username, setUsername] = useState<string>('User');
   
   // Data
-  const [history, setHistory] = useState<HistoryItem[]>([
-    { id: 1, type: 'sub_off', title: 'Списание за подписку', amount: -199, date: '30 дек 2024' },
-    { id: 2, type: 'deposit', title: 'Пополнение баланса', amount: 500, date: '01 дек 2024' },
-  ]);
-  const [devices, setDevices] = useState<Device[]>([
-    { id: 1, name: 'iPhone 13 Pro', type: 'ios', added: '12.10.2024' },
-    { id: 2, name: 'Рабочий ПК', type: 'windows', added: '05.11.2024' }
-  ]);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [deviceKeys, setDeviceKeys] = useState<Map<number, string>>(new Map()); // key: device_id, value: key_config
   
   // Modal States
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -648,6 +643,57 @@ export default function App() {
 
     (async () => {
       try {
+        // Загружаем информацию о пользователе
+        const userRes = await miniApiFetch(`/user/info?telegram_id=${tgId}`);
+        if (userRes.ok) {
+          const userData = await userRes.json();
+          setUserId(userData.id);
+          setBalance(userData.balance || 0);
+          setUsername(userData.username || `User_${tgId}`);
+          setIsTrialUsed(userData.trial_used === 1 || userData.trial_used === true);
+          
+          if (userData.referrals_count !== undefined) {
+            setReferrals(prev => ({
+              ...prev,
+              count: userData.referrals_count || 0,
+              earned: userData.referral_earned || userData.partner_balance || 0
+            }));
+          }
+        }
+
+        // Загружаем устройства
+        const devicesRes = await miniApiFetch(`/user/devices?telegram_id=${tgId}`);
+        if (devicesRes.ok) {
+          const devicesData = await devicesRes.json();
+          const devicesList: Device[] = devicesData.map((d: any) => ({
+            id: d.id,
+            name: d.name,
+            type: d.type,
+            added: d.added
+          }));
+          setDevices(devicesList);
+          
+          // Сохраняем ключи для копирования
+          const keysMap = new Map<number, string>();
+          devicesData.forEach((d: any) => {
+            if (d.key_config) {
+              keysMap.set(d.id, d.key_config);
+            }
+          });
+          setDeviceKeys(keysMap);
+        }
+
+        // Загружаем историю транзакций
+        const historyRes = await miniApiFetch(`/user/history?telegram_id=${tgId}`);
+        if (historyRes.ok) {
+          const historyData = await historyRes.json();
+          setHistory(historyData);
+        }
+      } catch (err) {
+        console.error('Ошибка загрузки данных:', err);
+      }
+    })();
+      try {
         const data = await miniApiFetch(`/user/info?telegram_id=${tgId}`);
         setUserId(data.id);
         setUsername(data.username || `id${tgId}`);
@@ -677,10 +723,16 @@ export default function App() {
     setHistory(prev => [newItem, ...prev]);
   };
 
-  const handleCopy = (text: string) => {
+  const handleCopy = (text: string, deviceId?: number) => {
     try {
+      // Если передан deviceId, пытаемся получить реальный ключ из deviceKeys
+      let keyToCopy = text;
+      if (deviceId && deviceKeys.has(deviceId)) {
+        keyToCopy = deviceKeys.get(deviceId)!;
+      }
+      
       const el = document.createElement('textarea');
-      el.value = text;
+      el.value = keyToCopy;
       document.body.appendChild(el);
       el.select();
       document.execCommand('copy');
@@ -919,7 +971,7 @@ export default function App() {
           </div>
           <div>
             <div className="text-xs text-slate-400 font-medium">Добро пожаловать</div>
-            <div className="font-bold text-slate-100">User_7723</div>
+            <div className="font-bold text-slate-100">{username}</div>
           </div>
         </div>
       </div>
@@ -1251,10 +1303,24 @@ export default function App() {
                             {step.actions.map((action, aIdx) => (
                                 <button
                                 key={aIdx}
-                                onClick={() => {
-                                    if (action.type === 'copy_key') handleCopy('vmess://dummy-key-for-demo-user-7723');
-                                    else if (action.type === 'trigger_add') alert('Имитация: Подписка добавляется...');
-                                    else if (action.url) window.open(action.url, '_blank');
+                                onClick={async () => {
+                                    if (action.type === 'copy_key') {
+                                        // Получаем ключ первого активного устройства или показываем сообщение
+                                        const activeDevice = devices.find(d => d.id);
+                                        if (activeDevice && deviceKeys.has(activeDevice.id)) {
+                                            handleCopy('', activeDevice.id);
+                                        } else {
+                                            alert('У вас нет активных устройств с ключами. Сначала создайте подписку.');
+                                        }
+                                    } else if (action.type === 'trigger_add') {
+                                        // Для iOS/Android - открываем инструкцию или создаем подписку
+                                        if (wizardPlatform === 'ios' || wizardPlatform === 'android') {
+                                            // Показываем инструкцию по добавлению подписки
+                                            alert('Для добавления подписки:\n1. Откройте приложение Happ\n2. Нажмите кнопку "+"\n3. Выберите "Добавить подписку"\n4. Отсканируйте QR-код или введите ключ вручную');
+                                        }
+                                    } else if (action.url) {
+                                        window.open(action.url, '_blank');
+                                    }
                                 }}
                                 className={`py-2 px-3 rounded-lg text-xs font-semibold text-center transition-colors ${
                                     action.primary 
@@ -1754,12 +1820,27 @@ export default function App() {
                   {step.actions.map((action, aIdx) => (
                     <button
                       key={aIdx}
-                      onClick={() => {
-                        if (action.type === 'copy_key') handleCopy('vmess://dummy-key-for-demo-user-7723');
-                        else if (action.type === 'nav_android') setActivePlatform('android');
-                        else if (action.type === 'nav_ios') setActivePlatform('ios');
-                        else if (action.type === 'trigger_add') alert('Имитация: Подписка добавляется...');
-                        else if (action.url) window.open(action.url, '_blank');
+                      onClick={async () => {
+                        if (action.type === 'copy_key') {
+                          // Получаем ключ устройства для текущей платформы
+                          const deviceForPlatform = devices.find(d => d.type === activePlatform);
+                          if (deviceForPlatform && deviceKeys.has(deviceForPlatform.id)) {
+                            handleCopy('', deviceForPlatform.id);
+                          } else {
+                            alert('У вас нет активных устройств с ключами для этой платформы. Сначала создайте подписку.');
+                          }
+                        } else if (action.type === 'nav_android') {
+                          setActivePlatform('android');
+                        } else if (action.type === 'nav_ios') {
+                          setActivePlatform('ios');
+                        } else if (action.type === 'trigger_add') {
+                          // Для iOS/Android - показываем инструкцию
+                          if (activePlatform === 'ios' || activePlatform === 'android') {
+                            alert('Для добавления подписки:\n1. Откройте приложение Happ\n2. Нажмите кнопку "+"\n3. Выберите "Добавить подписку"\n4. Отсканируйте QR-код или введите ключ вручную');
+                          }
+                        } else if (action.url) {
+                          window.open(action.url, '_blank');
+                        }
                       }}
                       className={`py-3 px-4 rounded-xl text-sm font-semibold text-center transition-colors ${
                         action.primary 
