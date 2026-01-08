@@ -25,7 +25,7 @@
 ### Автоматическая установка (Ubuntu/Debian)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/your-repo/main/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/Blin4ickUSE/blinvpn/main/install.sh | sudo bash
 ```
 
 Скрипт автоматически:
@@ -38,7 +38,7 @@ curl -sSL https://raw.githubusercontent.com/your-repo/main/install.sh | sudo bas
 
 1. **Клонируйте репозиторий:**
 ```bash
-git clone https://github.com/your-repo/blinvpn.git
+git clone https://github.com/Blin4ickUSE/blinvpn.git
 cd blinvpn
 ```
 
@@ -167,4 +167,5 @@ cp data.db data.db.backup
 ## Лицензия
 
 Proprietary - Все права защищены
+
 
