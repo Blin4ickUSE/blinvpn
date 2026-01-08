@@ -30,6 +30,7 @@ async function miniApiFetch(path: string, options: RequestInit = {}): Promise<an
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      'X-Telegram-Init-Data': (window as any).Telegram?.WebApp?.initData || '',
       ...(options.headers || {}),
     },
   });
