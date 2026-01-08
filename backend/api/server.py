@@ -290,7 +290,9 @@ def create_subscription():
     
     # Проверяем баланс
     price = days * 3.3  # Примерная цена
-    if user.get('balance', 0) < price:
+    # Списываем баланс внутри транзакции и не допускаем отрицательного
+    deducted = database.update_user_balance(user_id, -price, ensure_non_negative=True)
+    if not deducted:
         return jsonify({'error': 'Insufficient balance'}), 400
     
     # Создаем подписку
@@ -299,10 +301,10 @@ def create_subscription():
     )
     
     if result:
-        # Списываем баланс
-        database.update_user_balance(user_id, -price)
         return jsonify({'success': True, 'subscription': result})
     
+    # Откат баланса, если создание не удалось
+    database.update_user_balance(user_id, price)
     return jsonify({'error': 'Failed to create subscription'}), 500
 
 # ========== API для панели ==========
@@ -635,6 +637,113 @@ def get_keys():
             })
         
         return jsonify(keys)
+    finally:
+        conn.close()
+
+
+@app.route('/api/user/referrals', methods=['GET'])
+def get_user_referrals():
+    """Получить список рефералов пользователя"""
+    telegram_id = request.args.get('telegram_id', type=int)
+    if not telegram_id:
+        return jsonify({'error': 'telegram_id required'}), 400
+
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+            """
+            SELECT id, username, registration_date
+            FROM users
+            WHERE referred_by = ?
+            ORDER BY registration_date DESC
+            """,
+            (user["id"],),
+        )
+        referrals_rows = cursor.fetchall()
+
+        # Загружаем ставки
+        rate = user.get("partner_rate", 20) / 100
+
+        referrals = []
+        for r in referrals_rows:
+            ref_id = r["id"]
+            # Сумма пополнений реферала
+            cursor.execute(
+                """
+                SELECT COALESCE(SUM(amount), 0) as total
+                FROM transactions
+                WHERE user_id = ? AND type = 'deposit'
+                """,
+                (ref_id,),
+            )
+            spent_row = cursor.fetchone()
+            total_spent = float(spent_row["total"] or 0)
+            profit = total_spent * rate
+
+            referrals.append(
+                {
+                    "id": ref_id,
+                    "name": r["username"] or f"id{ref_id}",
+                    "date": r["registration_date"] or "",
+                    "spent": total_spent,
+                    "myProfit": profit,
+                    "history": [],  # История можно дополнить при необходимости
+                }
+            )
+
+        return jsonify(referrals)
+    finally:
+        conn.close()
+
+
+@app.route('/api/panel/stats/charts', methods=['GET'])
+@require_auth
+def get_stats_charts():
+    """Графики для дашборда панели (последние 14 дней)"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    from datetime import datetime, timedelta
+
+    try:
+        # Подготовим даты
+        days = []
+        today = datetime.utcnow().date()
+        for i in range(14):
+            days.append(today - timedelta(days=13 - i))
+
+        # Пользователи по дням
+        cursor.execute(
+            """
+            SELECT DATE(registration_date) as d, COUNT(*) as cnt
+            FROM users
+            GROUP BY DATE(registration_date)
+            """
+        )
+        users_map = {row["d"]: row["cnt"] for row in cursor.fetchall()}
+        users_series = [users_map.get(str(d), 0) for d in days]
+
+        # Ключи по дням
+        cursor.execute(
+            """
+            SELECT DATE(created_at) as d, COUNT(*) as cnt
+            FROM vpn_keys
+            GROUP BY DATE(created_at)
+            """
+        )
+        keys_map = {row["d"]: row["cnt"] for row in cursor.fetchall()}
+        keys_series = [keys_map.get(str(d), 0) for d in days]
+
+        return jsonify({
+            "users": users_series,
+            "keys": keys_series,
+            "labels": [d.strftime("%d.%m") for d in days],
+        })
     finally:
         conn.close()
 
