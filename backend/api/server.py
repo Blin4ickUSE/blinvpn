@@ -3,6 +3,11 @@ REST API сервер для мини-приложения и панели
 """
 import os
 import logging
+import hmac
+import hashlib
+import json
+from urllib.parse import parse_qsl
+from functools import wraps
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import sys
@@ -27,6 +32,60 @@ logger = logging.getLogger(__name__)
 # Секретный ключ для аутентификации панели
 PANEL_SECRET = os.getenv('PANEL_SECRET', 'change_this_secret')
 
+# --- ВСТАВИТЬ СЮДА (ПЕРЕД require_auth) ---
+
+# Получаем токен из переменных окружения
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+
+def validate_telegram_data(init_data):
+    """Проверяет подлинность данных от Telegram (HMAC-SHA256)"""
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN is not set in environment variables")
+        return None
+
+    try:
+        parsed_data = dict(parse_qsl(init_data))
+    except ValueError:
+        return None
+
+    if 'hash' not in parsed_data:
+        return None
+
+    received_hash = parsed_data.pop('hash')
+    # Сортируем параметры по алфавиту
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed_data.items()))
+    
+    # Создаем секретный ключ на основе токена бота
+    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+    # Хэшируем строку данных
+    calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+    
+    # Сравниваем хэши
+    if calculated_hash == received_hash:
+        return json.loads(parsed_data['user'])
+    return None
+
+def require_webapp_auth(f):
+    """Декоратор для защиты роутов через Telegram InitData"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Ожидаем заголовок X-Telegram-Init-Data от фронтенда
+        init_data = request.headers.get('X-Telegram-Init-Data')
+        
+        if not init_data:
+            return jsonify({'error': 'No auth data provided'}), 401
+        
+        user_data = validate_telegram_data(init_data)
+        if not user_data:
+            return jsonify({'error': 'Invalid auth data'}), 403
+            
+        # Сохраняем ID проверенного пользователя в запрос
+        request.validated_user_id = user_data['id']
+        return f(*args, **kwargs)
+    return decorated_function
+
+# ---------------------
+
 def require_auth(f):
     """Декоратор для проверки аутентификации"""
     def wrapper(*args, **kwargs):
@@ -39,10 +98,15 @@ def require_auth(f):
 
 # ========== API для мини-приложения ==========
 
+@app.route('/api/plans', methods=['GET'])
+def get_plans():
+    return jsonify(database.get_active_plans())
+
 @app.route('/api/user/info', methods=['GET'])
+@require_webapp_auth
 def get_user_info():
     """Получить информацию о пользователе"""
-    telegram_id = request.args.get('telegram_id', type=int)
+    telegram_id = request.validated_user_id
     if not telegram_id:
         return jsonify({'error': 'telegram_id required'}), 400
     
@@ -143,9 +207,10 @@ def apply_promocode():
     return jsonify(result)
 
 @app.route('/api/user/devices', methods=['GET'])
+@require_webapp_auth
 def get_user_devices():
     """Получить список устройств пользователя"""
-    telegram_id = request.args.get('telegram_id', type=int)
+    telegram_id = request.validated_user_id
     if not telegram_id:
         return jsonify({'error': 'telegram_id required'}), 400
     
@@ -198,9 +263,10 @@ def get_user_devices():
         conn.close()
 
 @app.route('/api/user/history', methods=['GET'])
+@require_webapp_auth
 def get_user_history():
     """Получить историю транзакций пользователя"""
-    telegram_id = request.args.get('telegram_id', type=int)
+    telegram_id = request.validated_user_id
     if not telegram_id:
         return jsonify({'error': 'telegram_id required'}), 400
     
@@ -642,9 +708,10 @@ def get_keys():
 
 
 @app.route('/api/user/referrals', methods=['GET'])
+@require_webapp_auth
 def get_user_referrals():
     """Получить список рефералов пользователя"""
-    telegram_id = request.args.get('telegram_id', type=int)
+    telegram_id = request.validated_user_id
     if not telegram_id:
         return jsonify({'error': 'telegram_id required'}), 400
 
@@ -749,4 +816,5 @@ def get_stats_charts():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('API_PORT', 8000)))
+
 
