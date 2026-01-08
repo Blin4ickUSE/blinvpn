@@ -339,29 +339,34 @@ def get_user_history():
     finally:
         conn.close()
 
-@app.route('/api/subscription/create', methods=['POST'])
+@@app.route('/api/subscription/create', methods=['POST'])
+@require_webapp_auth  # <--- Защита
 def create_subscription():
-    """Создать подписку"""
     data = request.json
-    user_id = data.get('user_id')
-    days = data.get('days')
-    plan_type = data.get('type')  # 'vpn' or 'whitelist'
+    # Берем ID из авторизации, а не из JSON, чтобы нельзя было купить другому за свой счет (или наоборот)
+    auth_tg_id = request.validated_user_id 
+    plan_id = data.get('plan_id')
     
-    if not user_id or not days:
-        return jsonify({'error': 'Missing required fields'}), 400
-    
-    user = database.get_user_by_id(user_id)
+    # Ищем пользователя по Telegram ID
+    user = database.get_user_by_telegram_id(auth_tg_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
     
-    # Проверяем баланс
-    price = days * 3.3  # Примерная цена
-    # Списываем баланс внутри транзакции и не допускаем отрицательного
-    deducted = database.update_user_balance(user_id, -price, ensure_non_negative=True)
-    if not deducted:
+    user_id = user['id']
+
+    # Получаем план из базы
+    plan = database.get_plan_by_id(plan_id)
+    if not plan:
+        return jsonify({'error': 'Invalid plan'}), 400
+        
+    price = plan['price']
+    days = plan['days']
+    
+    # Списание средств
+    if not database.update_user_balance(user_id, -price, ensure_non_negative=True):
         return jsonify({'error': 'Insufficient balance'}), 400
     
-    # Создаем подписку
+    # Создание подписки
     result = core.create_user_and_subscription(
         user['telegram_id'], user.get('username', ''), days
     )
@@ -369,7 +374,7 @@ def create_subscription():
     if result:
         return jsonify({'success': True, 'subscription': result})
     
-    # Откат баланса, если создание не удалось
+    # Возврат средств при ошибке
     database.update_user_balance(user_id, price)
     return jsonify({'error': 'Failed to create subscription'}), 500
 
@@ -816,5 +821,6 @@ def get_stats_charts():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('API_PORT', 8000)))
+
 
 
