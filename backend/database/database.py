@@ -14,9 +14,12 @@ logger = logging.getLogger(__name__)
 DB_PATH = os.getenv('DB_PATH', 'data.db')
 
 def get_db_connection():
-    """Получить соединение с базой данных"""
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    """Получить соединение с базой данных (WAL, таймаут)"""
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, isolation_level=None)
     conn.row_factory = sqlite3.Row
+    # Настройки для стабильности при параллельных запросах
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
     return conn
 
 def init_database():
@@ -280,17 +283,30 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     finally:
         conn.close()
 
-def update_user_balance(user_id: int, amount: float) -> bool:
-    """Обновить баланс пользователя"""
+def update_user_balance(user_id: int, amount: float, ensure_non_negative: bool = False) -> bool:
+    """
+    Обновить баланс пользователя.
+    Если ensure_non_negative=True, операция не выполнится, если баланс станет отрицательным.
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
     
     try:
+        cursor.execute("BEGIN IMMEDIATE")
+        cursor.execute("SELECT balance FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            conn.rollback()
+            return False
+        new_balance = (row["balance"] or 0) + amount
+        if ensure_non_negative and new_balance < 0:
+            conn.rollback()
+            return False
         cursor.execute("""
             UPDATE users 
-            SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP
+            SET balance = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        """, (amount, user_id))
+        """, (new_balance, user_id))
         conn.commit()
         return cursor.rowcount > 0
     finally:
