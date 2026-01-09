@@ -41,12 +41,19 @@ def check_device_limit(user_id: int, hwid: str) -> Dict[str, Any]:
             # Если это другое устройство и оно использовалось недавно (в последние 5 минут)
             if key_hwid and key_hwid != hwid_hash:
                 if last_used:
-                    last_used_dt = datetime.fromisoformat(last_used)
-                    if (datetime.now() - last_used_dt).total_seconds() < 300:  # 5 минут
-                        return {
-                            'allowed': False,
-                            'reason': 'Одновременное использование нескольких устройств запрещено. Одно подписка = одно устройство.'
-                        }
+                    try:
+                        if isinstance(last_used, str):
+                            last_used_dt = datetime.fromisoformat(last_used.replace('Z', '+00:00'))
+                        else:
+                            last_used_dt = last_used
+                        if (datetime.now() - last_used_dt.replace(tzinfo=None)).total_seconds() < 300:  # 5 минут
+                            return {
+                                'allowed': False,
+                                'reason': 'Одновременное использование нескольких устройств запрещено. Одно подписка = одно устройство.'
+                            }
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Error parsing last_used timestamp: {e}")
+                        # Продолжаем проверку, если не удалось распарсить дату
         
         return {'allowed': True}
     finally:
