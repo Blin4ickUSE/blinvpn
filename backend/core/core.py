@@ -62,7 +62,7 @@ def send_notification_to_support_group(message: str) -> bool:
         return False
 
 def create_user_and_subscription(telegram_id: int, username: str, days: int, 
-                                 referred_by: int = None) -> Optional[Dict]:
+                                 referred_by: int = None, traffic_limit: int = None) -> Optional[Dict]:
     """Создать пользователя и подписку"""
     try:
         # Создаем пользователя в БД
@@ -77,7 +77,7 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         user_uuid = remnawave_user.get('uuid')
         
         # Создаем подписку
-        subscription = remnawave.remnawave_api.create_subscription(user_uuid, days)
+        subscription = remnawave.remnawave_api.create_subscription(user_uuid, days, traffic_limit=traffic_limit)
         if not subscription:
             logger.error(f"Failed to create subscription: {user_uuid}")
             return None
@@ -87,9 +87,9 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         cursor = conn.cursor()
         expiry_date = (datetime.now() + timedelta(days=days)).isoformat()
         cursor.execute("""
-            INSERT INTO vpn_keys (user_id, key_uuid, status, expiry_date, devices_limit)
-            VALUES (?, ?, 'Active', ?, 1)
-        """, (user_id, user_uuid, expiry_date))
+            INSERT INTO vpn_keys (user_id, key_uuid, status, expiry_date, devices_limit, traffic_limit)
+            VALUES (?, ?, 'Active', ?, 1, ?)
+        """, (user_id, user_uuid, expiry_date, traffic_limit))
         conn.commit()
         conn.close()
         
