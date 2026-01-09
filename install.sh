@@ -209,9 +209,8 @@ ensure_certbot_nginx() {
 
 configure_nginx() {
     local domain="$1"
-    local port="$2"
-    local nginx_conf="$3"
-    local nginx_link="$4"
+    local nginx_conf="$2"
+    local nginx_link="$3"
 
     log_info "\nШаг 4: настройка Nginx"
     sudo rm -f /etc/nginx/sites-enabled/default
@@ -297,8 +296,7 @@ EOF
 
 create_env_file() {
     local domain="$1"
-    local webhook_port="$2"
-    local email="$3"
+    local email="$2"
     
     log_info "\nЗаполнение переменных окружения:"
     
@@ -474,14 +472,7 @@ else
     log_success "✔ Сертификаты Let's Encrypt успешно получены."
 fi
 
-prompt "Какой порт использовать для вебхуков YooKassa? (443 или 8443, по умолчанию 8443): " YOOKASSA_PORT_INPUT
-YOOKASSA_PORT="${YOOKASSA_PORT_INPUT:-8443}"
-if [[ "$YOOKASSA_PORT" != "443" && "$YOOKASSA_PORT" != "8443" ]]; then
-    log_warn "Указан неподдерживаемый порт. Будет использован 8443."
-    YOOKASSA_PORT=8443
-fi
-
-configure_nginx "$DOMAIN" "$YOOKASSA_PORT" "$NGINX_CONF" "$NGINX_LINK"
+configure_nginx "$DOMAIN" "$NGINX_CONF" "$NGINX_LINK"
 
 log_info "\nШаг 5: настройка переменных окружения (.env)"
 
@@ -491,11 +482,11 @@ if [[ -f ".env" ]]; then
         log_info "Используется существующий .env файл."
     else
         log_info "Создание нового .env файла..."
-        create_env_file "$DOMAIN" "$YOOKASSA_PORT" "$EMAIL"
+        create_env_file "$DOMAIN" "$EMAIL"
     fi
 else
     log_info "Создание .env файла..."
-    create_env_file "$DOMAIN" "$YOOKASSA_PORT" "$EMAIL"
+    create_env_file "$DOMAIN" "$EMAIL"
 fi
 
 log_info "\nШаг 6: сборка и запуск Docker-контейнеров"
