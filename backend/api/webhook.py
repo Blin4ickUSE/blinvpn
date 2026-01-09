@@ -42,7 +42,9 @@ def yookassa_webhook():
                 conn.close()
                 
                 # Уведомление в бот
-                core.send_notification_to_user(int(user_id), f"Баланс пополнен на {amount}₽ через YooKassa")
+                user = database.get_user_by_id(int(user_id))
+                if user:
+                    core.send_notification_to_user(user['telegram_id'], f"Баланс пополнен на {amount}₽ через YooKassa")
         
         return jsonify({'status': 'ok'}), 200
     except Exception as e:
