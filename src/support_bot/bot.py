@@ -102,7 +102,8 @@ def get_user_info(user_id: int) -> dict:
     
     # Получаем рефералов
     cursor.execute("SELECT COUNT(*) FROM users WHERE referred_by = ?", (user_id,))
-    referrals_count = cursor.fetchone()[0] if cursor.fetchone() else 0
+    referrals_row = cursor.fetchone()
+    referrals_count = referrals_row[0] if referrals_row else 0
     
     conn.close()
     
