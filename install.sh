@@ -310,7 +310,6 @@ create_env_file() {
     prompt "Remnawave API URL (по умолчанию https://api.remnawave.com): " REMWAVE_API_URL_INPUT
     REMWAVE_API_URL="${REMWAVE_API_URL_INPUT:-https://api.remnawave.com}"
     prompt "Remnawave API Key: " REMWAVE_API_KEY
-    prompt "Remnawave UUID: " REMWAVE_UUID
     
     prompt "YooKassa Shop ID: " YOOKASSA_SHOP_ID
     prompt "YooKassa Secret Key: " YOOKASSA_SECRET_KEY
@@ -339,7 +338,6 @@ TELEGRAM_SUPPORT_GROUP_ID=${TELEGRAM_SUPPORT_GROUP_ID}
 # Remnawave
 REMWAVE_API_URL=${REMWAVE_API_URL}
 REMWAVE_API_KEY=${REMWAVE_API_KEY}
-REMWAVE_UUID=${REMWAVE_UUID}
 
 # YooKassa
 YOOKASSA_SHOP_ID=${YOOKASSA_SHOP_ID}
