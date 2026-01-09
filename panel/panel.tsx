@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Home, DollarSign, BarChart2, Users, Key, Handshake, Mail, Tag, Percent, 
+  Home, DollarSign, BarChart2, Users, Key, Mail, Tag, Percent, 
   MessageSquare, Server, FileText, Globe, Settings, Menu, X, CheckCircle, 
   AlertCircle, TrendingUp, CreditCard, Search, Filter, ArrowUpRight, 
   ArrowDownLeft, Activity, Calendar, Download, Loader, RefreshCcw, 
@@ -723,7 +723,7 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
                     {/* PARTNER SECTION */}
                     {user.isPartner && (
                         <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                            <h3 className="text-lg font-bold text-gray-200 flex items-center mb-4"><Handshake size={18} className="mr-2 text-indigo-400"/> Партнёрская программа</h3>
+                            <h3 className="text-lg font-bold text-gray-200 flex items-center mb-4"><Users size={18} className="mr-2 text-indigo-400"/> Партнёрская программа</h3>
                             <div className="grid grid-cols-2 gap-4 mb-4">
                                 <div className="bg-gray-950 p-3 rounded-xl border border-gray-800">
                                     <div className="text-xs text-gray-500">Баланс</div>
