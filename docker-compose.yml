@@ -65,7 +65,7 @@ services:
     container_name: blinvpn_miniapp
     restart: unless-stopped
     ports:
-      - "${MINIAPP_PORT:-9741}:9741"
+      - "127.0.0.1:${MINIAPP_PORT:-9741}:3000"
     env_file:
       - .env
     depends_on:
@@ -90,16 +90,14 @@ services:
     image: nginx:alpine
     container_name: blinvpn_nginx
     restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
+    network_mode: "host"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       - miniapp
       - panel
+      - api
       - webhook
 
   # Certbot для SSL сертификатов
@@ -113,5 +111,4 @@ services:
 
 volumes:
   data:
-
 
