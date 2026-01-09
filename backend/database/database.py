@@ -214,30 +214,6 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_traffic_stats_date ON traffic_stats(date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_telegram_id ON blacklist(telegram_id)")
-
-        # --- ВСТАВИТЬ СЮДА ---
-        # Таблица тарифов
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS plans (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                price REAL NOT NULL,
-                days INTEGER NOT NULL,
-                currency TEXT DEFAULT 'RUB',
-                is_hit INTEGER DEFAULT 0,
-                is_trial INTEGER DEFAULT 0
-            )
-        """)
-        
-        # Добавляем дефолтные планы, если таблица пустая
-        cursor.execute("SELECT count(*) FROM plans")
-        if cursor.fetchone()[0] == 0:
-            cursor.execute("INSERT INTO plans (name, price, days, is_trial) VALUES ('Trial', 0, 3, 1)")
-            cursor.execute("INSERT INTO plans (name, price, days, is_hit) VALUES ('1 Месяц', 99, 30, 0)")
-            cursor.execute("INSERT INTO plans (name, price, days, is_hit) VALUES ('3 Месяца', 249, 90, 1)")
-            cursor.execute("INSERT INTO plans (name, price, days, is_hit) VALUES ('1 Год', 799, 365, 1)")
-        # ---------------------
         
         conn.commit()
         logger.info("База данных успешно инициализирована")
@@ -266,13 +242,7 @@ def create_user(telegram_id: int, username: str = None, full_name: str = None, r
         conn.commit()
         
         # Если пользователь пришел по реферальной ссылке, обновляем статистику реферера
-        if referred_by:
-            cursor.execute("""
-                UPDATE users 
-                SET referrals = referrals + 1 
-                WHERE telegram_id = ?
-            """, (referred_by,))
-            conn.commit()
+        # Примечание: статистика рефералов вычисляется динамически, не хранится в БД
         
         return user_id
     except sqlite3.IntegrityError:
@@ -352,32 +322,7 @@ def hash_hwid(hwid: str) -> str:
     """Хешировать HWID для безопасного хранения"""
     return hashlib.sha256(hwid.encode()).hexdigest()
 
-# --- ВСТАВИТЬ СЮДА ---
-def get_active_plans() -> List[Dict[str, Any]]:
-    """Получить список всех тарифов"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT * FROM plans ORDER BY price ASC")
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows] if rows else []
-    finally:
-        conn.close()
-
-def get_plan_by_id(plan_id: int) -> Optional[Dict[str, Any]]:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT * FROM plans WHERE id = ?", (plan_id,))
-        row = cursor.fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
-# ---------------------
-
 # Инициализация при импорте
 if __name__ != "__main__":
     init_database()
-
-
 
