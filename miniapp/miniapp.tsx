@@ -30,7 +30,6 @@ async function miniApiFetch(path: string, options: RequestInit = {}): Promise<an
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      'X-Telegram-Init-Data': (window as any).Telegram?.WebApp?.initData || '',
       ...(options.headers || {}),
     },
   });
@@ -245,6 +244,46 @@ const VPN_PLANS: Plan[] = [
 ];
 
 const PRESET_AMOUNTS = [100, 250, 500, 1000, 2000, 5000];
+
+/**
+ * Рассчитывает цену за whitelist bypass по прогрессивной системе:
+ * 5-9 ГБ: 30₽/ГБ
+ * 10-14 ГБ: 25₽/ГБ
+ * 15-24 ГБ: 20₽/ГБ
+ * 25-50 ГБ: 15₽/ГБ
+ */
+function calculateWhitelistPrice(gb: number): number {
+  if (gb < 5) gb = 5;
+  if (gb > 50) gb = 50;
+  
+  let total = 0;
+  
+  // 5-9 ГБ: 30₽/ГБ
+  if (gb >= 5) {
+    const tier1 = Math.min(gb, 9) - 4; // ГБ с 5 по 9 (включительно)
+    total += tier1 * 30;
+  }
+  
+  // 10-14 ГБ: 25₽/ГБ
+  if (gb >= 10) {
+    const tier2 = Math.min(gb, 14) - 9; // ГБ с 10 по 14 (включительно)
+    total += tier2 * 25;
+  }
+  
+  // 15-24 ГБ: 20₽/ГБ
+  if (gb >= 15) {
+    const tier3 = Math.min(gb, 24) - 14; // ГБ с 15 по 24 (включительно)
+    total += tier3 * 20;
+  }
+  
+  // 25-50 ГБ: 15₽/ГБ
+  if (gb >= 25) {
+    const tier4 = gb - 24; // ГБ с 25 по 50 (включительно)
+    total += tier4 * 15;
+  }
+  
+  return total;
+}
 
 const PAYMENT_METHODS: PaymentMethod[] = [
   { 
@@ -549,7 +588,6 @@ export default function App() {
   const [userId, setUserId] = useState<number | null>(null);
   const [telegramId, setTelegramId] = useState<number | null>(null);
   const [username, setUsername] = useState<string>('User');
-  const [plans, setPlans] = useState<Plan[]>([]);
   
   // Data
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -635,17 +673,6 @@ export default function App() {
 
     (async () => {
       try {
-        const plansData = await miniApiFetch('/plans');
-        if (Array.isArray(plansData)) {
-            setPlans(plansData.map((p: any) => ({
-                id: p.id,
-                duration: p.name,
-                price: p.price,
-                highlight: !!p.is_hit,
-                days: p.days,
-                isTrial: !!p.is_trial
-            })));
-        }
         // Пользователь
         const userData = await miniApiFetch(`/user/info?telegram_id=${tgId}`);
         if (userData) {
@@ -855,7 +882,7 @@ export default function App() {
 
     if (finalGB !== whitelistGB) setWhitelistGB(finalGB);
 
-    let price = finalGB * 15;
+    let price = calculateWhitelistPrice(finalGB);
     let name = `Whitelist (${finalGB} ГБ)`;
     
     if (addVpnToWhitelist) {
@@ -909,7 +936,7 @@ export default function App() {
         price = wizardPlan.price;
         name = `VPN (${wizardPlan.duration})`;
     } else {
-        price = whitelistGB * 15;
+        price = calculateWhitelistPrice(whitelistGB);
         name = `Whitelist (${whitelistGB} ГБ)`;
         if (addVpnToWhitelist) {
             price += 79;
@@ -938,9 +965,12 @@ export default function App() {
     miniApiFetch('/subscription/create', {
       method: 'POST',
       body: JSON.stringify({
-        // user_id больше не нужен, сервер берет его из токена
-        plan_id: wizardPlan?.id, // Отправляем ID плана вместо дней
+        user_id: userId,
+        days: wizardType === 'vpn' ? wizardPlan?.days : 30,
         type: wizardType,
+        whitelist_gb: wizardType === 'whitelist' ? whitelistGB : undefined,
+        add_vpn: wizardType === 'whitelist' ? addVpnToWhitelist : false,
+        price: price,
       }),
     })
       .then((res) => {
@@ -1135,7 +1165,7 @@ export default function App() {
             {wizardType === 'vpn' ? (
                 <div className="space-y-3">
                     <p className="text-slate-400 text-sm mb-2">Выберите период защиты для <b>{PLATFORMS.find(p => p.id === wizardPlatform)?.name}</b>:</p>
-                    {plans.filter(plan => !plan.isTrial || !isTrialUsed).map(plan => (
+                    {VPN_PLANS.filter(plan => !plan.isTrial || !isTrialUsed).map(plan => (
                         <div 
                             key={plan.id}
                             onClick={() => { setWizardPlan(plan); setWizardStep(3); }}
@@ -1216,9 +1246,9 @@ export default function App() {
                     <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4 flex justify-between items-center">
                         <div>
                         <div className="text-slate-400 text-sm">Стоимость</div>
-                        <div className="text-xs text-slate-500">15 ₽ / ГБ в месяц</div>
+                        <div className="text-xs text-slate-500">Прогрессивная цена</div>
                         </div>
-                        <div className="text-2xl font-bold text-white">{whitelistGB * 15} ₽</div>
+                        <div className="text-2xl font-bold text-white">{calculateWhitelistPrice(whitelistGB)} ₽</div>
                     </div>
 
                     <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-6">
@@ -1266,7 +1296,7 @@ export default function App() {
                 <div className="border-t border-slate-700 pt-4 flex justify-between items-center">
                     <span className="text-slate-400">Стоимость:</span>
                     <span className="text-xl font-bold text-white">
-                        {wizardType === 'vpn' ? wizardPlan?.price : (whitelistGB * 15 + (addVpnToWhitelist ? 79 : 0))} ₽
+                        {wizardType === 'vpn' ? wizardPlan?.price : (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0))} ₽
                     </span>
                 </div>
             </div>
@@ -1274,16 +1304,16 @@ export default function App() {
             <div className="mt-auto">
                 <div className="flex justify-between items-center mb-4 text-sm">
                     <span className="text-slate-400">Ваш баланс:</span>
-                    <span className={`${balance < (wizardType === 'vpn' ? (wizardPlan?.price || 0) : (whitelistGB * 15 + (addVpnToWhitelist ? 79 : 0))) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
+                    <span className={`${balance < (wizardType === 'vpn' ? (wizardPlan?.price || 0) : (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0))) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
                 </div>
 
-                {balance >= (wizardType === 'vpn' ? (wizardPlan?.price || 0) : (whitelistGB * 15 + (addVpnToWhitelist ? 79 : 0))) ? (
+                {balance >= (wizardType === 'vpn' ? (wizardPlan?.price || 0) : (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0))) ? (
                     <Button onClick={wizardActivate} variant={wizardType === 'vpn' && wizardPlan?.isTrial ? 'trial' : 'primary'}>
                         {wizardType === 'vpn' && wizardPlan?.isTrial ? 'Активировать бесплатно' : 'Оплатить и подключить'}
                     </Button>
                 ) : (
                     <Button onClick={() => {
-                        const price = wizardType === 'vpn' ? (wizardPlan?.price || 0) : (whitelistGB * 15 + (addVpnToWhitelist ? 79 : 0));
+                        const price = wizardType === 'vpn' ? (wizardPlan?.price || 0) : (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0));
                         setPendingAction({
                             type: 'wizard',
                             payload: { wizardType, wizardPlan, whitelistGB, addVpnToWhitelist, price, name: wizardType === 'vpn' ? `VPN (${wizardPlan?.duration})` : `Whitelist (${whitelistGB} ГБ)` }
@@ -1292,7 +1322,7 @@ export default function App() {
                         setTopupStep(1); 
                         setView('topup');
                     }}>
-                        Пополнить на {(wizardType === 'vpn' ? (wizardPlan?.price || 0) : (whitelistGB * 15 + (addVpnToWhitelist ? 79 : 0))) - balance} ₽
+                        Пополнить на {(wizardType === 'vpn' ? (wizardPlan?.price || 0) : (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0))) - balance} ₽
                     </Button>
                 )}
             </div>
@@ -1692,9 +1722,9 @@ export default function App() {
           <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4 flex justify-between items-center">
              <div>
                <div className="text-slate-400 text-sm">Стоимость</div>
-               <div className="text-xs text-slate-500">15 ₽ / ГБ в месяц</div>
+               <div className="text-xs text-slate-500">Прогрессивная цена</div>
              </div>
-             <div className="text-2xl font-bold text-white">{whitelistGB * 15} ₽</div>
+             <div className="text-2xl font-bold text-white">{calculateWhitelistPrice(whitelistGB)} ₽</div>
           </div>
 
           <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-6">
@@ -1724,19 +1754,19 @@ export default function App() {
           <div className="mt-auto pb-4 pt-4 border-t border-slate-800">
              <div className="flex justify-between items-center mb-4 text-sm">
                <span className="text-slate-400">Ваш баланс:</span>
-               <span className={`${balance < (whitelistGB * 15 + (addVpnToWhitelist ? 79 : 0)) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
+               <span className={`${balance < (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0)) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
              </div>
              <Button 
                 onClick={buyWhitelist}
-                variant={balance < (whitelistGB * 15 + (addVpnToWhitelist ? 79 : 0)) ? "secondary" : "primary"}
+                variant={balance < (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0)) ? "secondary" : "primary"}
              >
-                {balance < (whitelistGB * 15 + (addVpnToWhitelist ? 79 : 0))
+                {balance < (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0))
                     ? "Недостаточно средств" 
-                    : `Купить за ${whitelistGB * 15 + (addVpnToWhitelist ? 79 : 0)} ₽`
+                    : `Купить за ${calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0)} ₽`
                 }
              </Button>
-             {balance < (whitelistGB * 15 + (addVpnToWhitelist ? 79 : 0)) && (
-               <button onClick={() => { setTopupAmount((whitelistGB * 15 + (addVpnToWhitelist ? 79 : 0)) - balance); setTopupStep(1); setView('topup'); }} className="w-full mt-3 text-blue-500 text-sm font-medium hover:underline">
+             {balance < (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0)) && (
+               <button onClick={() => { setTopupAmount((calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0)) - balance); setTopupStep(1); setView('topup'); }} className="w-full mt-3 text-blue-500 text-sm font-medium hover:underline">
                  Пополнить баланс
                </button>
              )}
