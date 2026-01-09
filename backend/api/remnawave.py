@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 REMWAVE_API_URL = os.getenv('REMWAVE_API_URL', 'https://api.remnawave.com')
 REMWAVE_API_KEY = os.getenv('REMWAVE_API_KEY', '')
-REMWAVE_UUID = os.getenv('REMWAVE_UUID', '')
 
 class RemnawaveAPI:
     """Класс для работы с Remnawave API"""
@@ -20,7 +19,6 @@ class RemnawaveAPI:
     def __init__(self):
         self.base_url = REMWAVE_API_URL
         self.api_key = REMWAVE_API_KEY
-        self.uuid = REMWAVE_UUID
         self.headers = {
             'Authorization': f'Bearer {self.api_key}',
             'Content-Type': 'application/json'
