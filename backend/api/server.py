@@ -3,11 +3,6 @@ REST API сервер для мини-приложения и панели
 """
 import os
 import logging
-import hmac
-import hashlib
-import json
-from urllib.parse import parse_qsl
-from functools import wraps
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import sys
@@ -16,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
 
 from backend.database import database
 from backend.core import core, abuse_detected
+from backend.core.whitelist_billing import calculate_whitelist_price
 from backend.api import remnawave, yookassa, heleket, platega
 
 app = Flask(__name__)
@@ -32,60 +28,6 @@ logger = logging.getLogger(__name__)
 # Секретный ключ для аутентификации панели
 PANEL_SECRET = os.getenv('PANEL_SECRET', 'change_this_secret')
 
-# --- ВСТАВИТЬ СЮДА (ПЕРЕД require_auth) ---
-
-# Получаем токен из переменных окружения
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-
-def validate_telegram_data(init_data):
-    """Проверяет подлинность данных от Telegram (HMAC-SHA256)"""
-    if not BOT_TOKEN:
-        logger.error("BOT_TOKEN is not set in environment variables")
-        return None
-
-    try:
-        parsed_data = dict(parse_qsl(init_data))
-    except ValueError:
-        return None
-
-    if 'hash' not in parsed_data:
-        return None
-
-    received_hash = parsed_data.pop('hash')
-    # Сортируем параметры по алфавиту
-    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed_data.items()))
-    
-    # Создаем секретный ключ на основе токена бота
-    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
-    # Хэшируем строку данных
-    calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-    
-    # Сравниваем хэши
-    if calculated_hash == received_hash:
-        return json.loads(parsed_data['user'])
-    return None
-
-def require_webapp_auth(f):
-    """Декоратор для защиты роутов через Telegram InitData"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Ожидаем заголовок X-Telegram-Init-Data от фронтенда
-        init_data = request.headers.get('X-Telegram-Init-Data')
-        
-        if not init_data:
-            return jsonify({'error': 'No auth data provided'}), 401
-        
-        user_data = validate_telegram_data(init_data)
-        if not user_data:
-            return jsonify({'error': 'Invalid auth data'}), 403
-            
-        # Сохраняем ID проверенного пользователя в запрос
-        request.validated_user_id = user_data['id']
-        return f(*args, **kwargs)
-    return decorated_function
-
-# ---------------------
-
 def require_auth(f):
     """Декоратор для проверки аутентификации"""
     def wrapper(*args, **kwargs):
@@ -98,15 +40,10 @@ def require_auth(f):
 
 # ========== API для мини-приложения ==========
 
-@app.route('/api/plans', methods=['GET'])
-def get_plans():
-    return jsonify(database.get_active_plans())
-
 @app.route('/api/user/info', methods=['GET'])
-@require_webapp_auth
 def get_user_info():
     """Получить информацию о пользователе"""
-    telegram_id = request.validated_user_id
+    telegram_id = request.args.get('telegram_id', type=int)
     if not telegram_id:
         return jsonify({'error': 'telegram_id required'}), 400
     
@@ -207,10 +144,9 @@ def apply_promocode():
     return jsonify(result)
 
 @app.route('/api/user/devices', methods=['GET'])
-@require_webapp_auth
 def get_user_devices():
     """Получить список устройств пользователя"""
-    telegram_id = request.validated_user_id
+    telegram_id = request.args.get('telegram_id', type=int)
     if not telegram_id:
         return jsonify({'error': 'telegram_id required'}), 400
     
@@ -263,10 +199,9 @@ def get_user_devices():
         conn.close()
 
 @app.route('/api/user/history', methods=['GET'])
-@require_webapp_auth
 def get_user_history():
     """Получить историю транзакций пользователя"""
-    telegram_id = request.validated_user_id
+    telegram_id = request.args.get('telegram_id', type=int)
     if not telegram_id:
         return jsonify({'error': 'telegram_id required'}), 400
     
@@ -340,41 +275,69 @@ def get_user_history():
         conn.close()
 
 @app.route('/api/subscription/create', methods=['POST'])
-@require_webapp_auth  # <--- Защита
 def create_subscription():
+    """Создать подписку"""
     data = request.json
-    # Берем ID из авторизации, а не из JSON, чтобы нельзя было купить другому за свой счет (или наоборот)
-    auth_tg_id = request.validated_user_id 
-    plan_id = data.get('plan_id')
+    user_id = data.get('user_id')
+    days = data.get('days')
+    plan_type = data.get('type')  # 'vpn' or 'whitelist'
+    whitelist_gb = data.get('whitelist_gb', 0)  # Для whitelist подписки
     
-    # Ищем пользователя по Telegram ID
-    user = database.get_user_by_telegram_id(auth_tg_id)
+    if not user_id or not days:
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    user = database.get_user_by_id(user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
     
-    user_id = user['id']
-
-    # Получаем план из базы
-    plan = database.get_plan_by_id(plan_id)
-    if not plan:
-        return jsonify({'error': 'Invalid plan'}), 400
-        
-    price = plan['price']
-    days = plan['days']
+    # Рассчитываем цену в зависимости от типа подписки
+    if plan_type == 'whitelist':
+        if whitelist_gb < 5 or whitelist_gb > 50:
+            return jsonify({'error': 'Whitelist GB must be between 5 and 50'}), 400
+        price = calculate_whitelist_price(whitelist_gb)
+        # Добавляем VPN если нужно
+        if data.get('add_vpn', False):
+            price += 79
+    else:
+        # VPN подписка - используем фиксированные цены из планов
+        # Для упрощения используем базовую цену, но лучше передавать цену из фронтенда
+        price = data.get('price', days * 3.3)
     
-    # Списание средств
-    if not database.update_user_balance(user_id, -price, ensure_non_negative=True):
+    # Списываем баланс внутри транзакции и не допускаем отрицательного
+    deducted = database.update_user_balance(user_id, -price, ensure_non_negative=True)
+    if not deducted:
         return jsonify({'error': 'Insufficient balance'}), 400
     
-    # Создание подписки
-    result = core.create_user_and_subscription(
-        user['telegram_id'], user.get('username', ''), days
-    )
+    # Создаем подписку
+    if plan_type == 'whitelist':
+        # Для whitelist создаем подписку с лимитом трафика
+        traffic_limit_bytes = int(whitelist_gb * (1024 ** 3))
+        result = core.create_user_and_subscription(
+            user['telegram_id'], user.get('username', ''), days,
+            traffic_limit=traffic_limit_bytes
+        )
+    else:
+        result = core.create_user_and_subscription(
+            user['telegram_id'], user.get('username', ''), days
+        )
     
     if result:
+        # Создаем транзакцию
+        conn = database.get_db_connection()
+        cursor = conn.cursor()
+        description = f"{'Whitelist' if plan_type == 'whitelist' else 'VPN'} подписка ({days} дней)"
+        if plan_type == 'whitelist':
+            description += f" - {whitelist_gb} ГБ"
+        cursor.execute("""
+            INSERT INTO transactions (user_id, type, amount, status, description, payment_method)
+            VALUES (?, 'subscription', ?, 'Success', ?, 'Balance')
+        """, (user_id, -price, description))
+        conn.commit()
+        conn.close()
+        
         return jsonify({'success': True, 'subscription': result})
     
-    # Возврат средств при ошибке
+    # Откат баланса, если создание не удалось
     database.update_user_balance(user_id, price)
     return jsonify({'error': 'Failed to create subscription'}), 500
 
@@ -713,10 +676,9 @@ def get_keys():
 
 
 @app.route('/api/user/referrals', methods=['GET'])
-@require_webapp_auth
 def get_user_referrals():
     """Получить список рефералов пользователя"""
-    telegram_id = request.validated_user_id
+    telegram_id = request.args.get('telegram_id', type=int)
     if not telegram_id:
         return jsonify({'error': 'telegram_id required'}), 400
 
@@ -821,7 +783,4 @@ def get_stats_charts():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('API_PORT', 8000)))
-
-
-
 
