@@ -672,15 +672,19 @@ if [[ -d "/etc/letsencrypt/live/${PANEL_DOMAIN}" ]]; then
     log_success "✔ SSL-сертификаты для ${PANEL_DOMAIN} уже существуют."
 else
     log_info "Получение SSL-сертификатов для ${PANEL_DOMAIN}..."
-    # Проверяем, есть ли уже сертификат для DOMAIN, который можно расширить
+    # Проверяем, есть ли уже сертификат для DOMAIN
     if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]] && sudo certbot certificates 2>/dev/null | grep -q "${DOMAIN}"; then
-        log_info "Расширение существующего сертификата для включения ${PANEL_DOMAIN}..."
-        sudo certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --expand --cert-name "$DOMAIN" || \
-        sudo certbot certonly --webroot -w /var/www/certbot -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
+        log_info "Создание отдельного сертификата для ${PANEL_DOMAIN}..."
+        sudo certbot certonly --webroot -w /var/www/certbot -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --cert-name "${PANEL_DOMAIN}"
     else
         sudo certbot certonly --webroot -w /var/www/certbot -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
     fi
-    log_success "✔ Сертификаты Let's Encrypt для ${PANEL_DOMAIN} успешно получены."
+    
+    if [[ -d "/etc/letsencrypt/live/${PANEL_DOMAIN}" ]]; then
+        log_success "✔ Сертификаты Let's Encrypt для ${PANEL_DOMAIN} успешно получены."
+    else
+        log_warn "⚠ Не удалось получить сертификат для ${PANEL_DOMAIN}. Проверьте DNS записи и повторите попытку."
+    fi
 fi
 
 configure_nginx "$DOMAIN" "$PANEL_DOMAIN" "$NGINX_CONF" "$NGINX_LINK"
