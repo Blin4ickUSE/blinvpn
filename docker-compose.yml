@@ -86,14 +86,15 @@ services:
       - webhook
 
   # Certbot для SSL сертификатов
-  certbot:
-    image: certbot/certbot
-    container_name: blinvpn_certbot
-    volumes:
-      - /etc/letsencrypt:/etc/letsencrypt
-      - ./certbot:/var/www/certbot
-    command: certonly --webroot -w /var/www/certbot --keep-until-expiring --email ${SSL_EMAIL} --agree-tos --no-eff-email -d ${PANEL_DOMAIN} -d ${MINIAPP_DOMAIN} -d ${WEBHOOK_DOMAIN}
+#  certbot:
+#    image: certbot/certbot
+#    container_name: blinvpn_certbot
+#    volumes:
+#      - /etc/letsencrypt:/etc/letsencrypt
+#      - ./certbot:/var/www/certbot
+#    command: certonly --webroot -w /var/www/certbot --keep-until-expiring --email ${SSL_EMAIL} --agree-tos --no-eff-email -d ${PANEL_DOMAIN} -d ${MINIAPP_DOMAIN} -d ${WEBHOOK_DOMAIN}
 
 volumes:
   data:
+
 
