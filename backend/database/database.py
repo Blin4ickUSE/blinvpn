@@ -15,6 +15,11 @@ DB_PATH = os.getenv('DB_PATH', 'data.db')
 
 def get_db_connection():
     """Получить соединение с базой данных (WAL, таймаут)"""
+    # Создаем директорию для базы данных, если её нет
+    db_dir = os.path.dirname(os.path.abspath(DB_PATH))
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
+    
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, isolation_level=None)
     conn.row_factory = sqlite3.Row
     # Настройки для стабильности при параллельных запросах
