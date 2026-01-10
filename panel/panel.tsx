@@ -1627,6 +1627,26 @@ interface TicketsPageProps {
 
 const TicketsPage: React.FC<TicketsPageProps> = ({ tickets, activeTicketId, setActiveTicketId, ticketMsg, setTicketMsg, setSelectedUser, users, onToast }) => {
     const activeTicket = tickets.find(t => t.id === activeTicketId);
+    const [ticketMessages, setTicketMessages] = useState<any[]>([]);
+    
+    // Загружаем сообщения тикета при изменении activeTicketId
+    useEffect(() => {
+        if (activeTicketId) {
+            const loadMessages = async () => {
+                try {
+                    const messages = await apiFetch(`/panel/tickets/${activeTicketId}/messages`);
+                    if (Array.isArray(messages)) {
+                        setTicketMessages(messages);
+                    }
+                } catch (error) {
+                    console.error('Error loading ticket messages:', error);
+                }
+            };
+            loadMessages();
+        } else {
+            setTicketMessages([]);
+        }
+    }, [activeTicketId]);
     
     const handleSendTicketMessage = async (ticketId: number, message: string) => {
         try {
@@ -1638,10 +1658,13 @@ const TicketsPage: React.FC<TicketsPageProps> = ({ tickets, activeTicketId, setA
             if (response.success) {
                 onToast('Тикет', 'Сообщение отправлено', 'success');
                 setTicketMsg('');
-                // Обновляем список тикетов через небольшую задержку
-                setTimeout(() => {
-                    window.location.reload();
-                }, 500);
+                // Обновляем сообщения тикета
+                if (activeTicketId) {
+                    const messages = await apiFetch(`/panel/tickets/${activeTicketId}/messages`);
+                    if (Array.isArray(messages)) {
+                        setTicketMessages(messages);
+                    }
+                }
             } else {
                 onToast('Ошибка', response.error || 'Не удалось отправить сообщение', 'error');
             }
@@ -1676,9 +1699,24 @@ const TicketsPage: React.FC<TicketsPageProps> = ({ tickets, activeTicketId, setA
                           <div className="flex gap-2"><button onClick={() => onToast('Тикет', 'Тикет закрыт', 'success')} className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white" title="Закрыть тикет"><CheckCircle size={20}/></button><button className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-red-400" title="Заблокировать"><Ban size={20}/></button><button className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white"><MoreVertical size={20}/></button></div>
                       </div>
                       <div className="flex-1 p-6 overflow-y-auto space-y-4 bg-gray-950/30">
-                          <div className="flex justify-start"><div className="bg-gray-800 text-gray-200 rounded-2xl rounded-tl-none py-3 px-4 max-w-[70%] text-sm">Здравствуйте! У меня не подключается Германия.</div></div>
-                          <div className="flex justify-end"><div className="bg-blue-600 text-white rounded-2xl rounded-tr-none py-3 px-4 max-w-[70%] text-sm">Добрый день! Какую ошибку выдает приложение?</div></div>
-                          <div className="flex justify-start"><div className="bg-gray-800 text-gray-200 rounded-2xl rounded-tl-none py-3 px-4 max-w-[70%] text-sm">Пишет "Timeout"</div></div>
+                          {ticketMessages.length === 0 ? (
+                              <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                                  <MessageCircle size={48} className="mb-4 opacity-50"/>
+                                  <p>Сообщений пока нет</p>
+                              </div>
+                          ) : (
+                              ticketMessages.map((msg: any) => (
+                                  <div key={msg.id} className={`flex ${msg.isAdmin ? 'justify-end' : 'justify-start'}`}>
+                                      <div className={`rounded-2xl py-3 px-4 max-w-[70%] text-sm ${
+                                          msg.isAdmin 
+                                              ? 'bg-blue-600 text-white rounded-tr-none' 
+                                              : 'bg-gray-800 text-gray-200 rounded-tl-none'
+                                      }`}>
+                                          {msg.text}
+                                      </div>
+                                  </div>
+                              ))
+                          )}
                       </div>
                       <div className="p-4 border-t border-gray-800 bg-gray-900">
                           <div className="flex items-center gap-2"><button className="text-gray-500 hover:text-white p-2"><Paperclip size={20}/></button><input type="text" value={ticketMsg} onChange={e => setTicketMsg(e.target.value)} onKeyPress={e => {if (e.key === 'Enter' && activeTicketId && ticketMsg.trim()) { handleSendTicketMessage(activeTicketId, ticketMsg.trim()); }}} className="flex-1 bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500" placeholder="Написать сообщение..." /><button onClick={async () => {if (activeTicketId && ticketMsg.trim()) { await handleSendTicketMessage(activeTicketId, ticketMsg.trim()); }}} className="bg-blue-600 hover:bg-blue-500 text-white p-3 rounded-xl transition-colors"><Send size={20}/></button></div>
