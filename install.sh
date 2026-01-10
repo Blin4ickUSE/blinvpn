@@ -630,11 +630,39 @@ if command -v ufw >/dev/null 2>&1 && sudo ufw status | grep -q 'Status: active';
     sudo ufw allow 8443/tcp
 fi
 
+# Создаем временную конфигурацию nginx для получения сертификатов
+TEMP_NGINX_CONF="/tmp/blinvpn_temp_nginx.conf"
+sudo tee "$TEMP_NGINX_CONF" >/dev/null <<TEMP_EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN} ${PANEL_DOMAIN};
+    
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+    
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+TEMP_EOF
+
+# Создаем директорию для webroot
+sudo mkdir -p /var/www/certbot
+
+# Временно заменяем конфигурацию nginx
+if [[ -L "$NGINX_LINK" ]]; then
+    sudo rm "$NGINX_LINK"
+fi
+sudo ln -s "$TEMP_NGINX_CONF" "$NGINX_LINK"
+sudo nginx -t && sudo systemctl reload nginx
+
 if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
     log_success "✔ SSL-сертификаты для ${DOMAIN} уже существуют."
 else
     log_info "Получение SSL-сертификатов для ${DOMAIN}..."
-    sudo certbot certonly --standalone -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
+    sudo certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
     log_success "✔ Сертификаты Let's Encrypt для ${DOMAIN} успешно получены."
 fi
 
@@ -642,7 +670,7 @@ if [[ -d "/etc/letsencrypt/live/${PANEL_DOMAIN}" ]]; then
     log_success "✔ SSL-сертификаты для ${PANEL_DOMAIN} уже существуют."
 else
     log_info "Получение SSL-сертификатов для ${PANEL_DOMAIN}..."
-    sudo certbot certonly --standalone -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
+    sudo certbot certonly --webroot -w /var/www/certbot -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
     log_success "✔ Сертификаты Let's Encrypt для ${PANEL_DOMAIN} успешно получены."
 fi
 
