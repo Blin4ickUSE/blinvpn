@@ -214,8 +214,50 @@ async def handle_admin_reply(message: types.Message):
     
     if user_id:
         try:
-            # Отправляем копию сообщения пользователю
-            await message.copy_to(chat_id=user_id)
+            # Получаем telegram_id пользователя
+            user = database.get_user_by_id(user_id)
+            if not user:
+                logger.error(f"Пользователь с ID {user_id} не найден")
+                return
+            
+            telegram_id = user['telegram_id']
+            
+            # Формируем текст сообщения
+            message_text = message.text or message.caption or ''
+            if message.photo:
+                # Если есть фото, отправляем его с подписью
+                await bot.send_photo(
+                    chat_id=telegram_id,
+                    photo=message.photo[-1].file_id,
+                    caption=message_text,
+                    parse_mode='HTML'
+                )
+            elif message.document:
+                # Если есть документ, отправляем его
+                await bot.send_document(
+                    chat_id=telegram_id,
+                    document=message.document.file_id,
+                    caption=message_text,
+                    parse_mode='HTML'
+                )
+            else:
+                # Обычное текстовое сообщение
+                # Пробуем сохранить HTML форматирование, если есть
+                if message.html_text:
+                    parse_mode = 'HTML'
+                    text = message.html_text
+                elif message.text:
+                    parse_mode = None
+                    text = message.text
+                else:
+                    parse_mode = None
+                    text = message_text
+                
+                await bot.send_message(
+                    chat_id=telegram_id,
+                    text=text,
+                    parse_mode=parse_mode
+                )
             
             # Сохраняем сообщение в БД
             conn = database.get_db_connection()
