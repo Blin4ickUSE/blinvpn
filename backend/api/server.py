@@ -544,6 +544,62 @@ def get_tickets():
 
     return jsonify(tickets)
 
+@app.route('/api/panel/tickets/<int:ticket_id>/reply', methods=['POST'])
+@require_auth
+def reply_to_ticket(ticket_id: int):
+    """Ответить на тикет из панели"""
+    data = request.json
+    message_text = data.get('message', '')
+    
+    if not message_text:
+        return jsonify({'success': False, 'error': 'Message is required'}), 400
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Получаем информацию о тикете
+        cursor.execute("""
+            SELECT t.telegram_topic_id, u.telegram_id
+            FROM tickets t
+            JOIN users u ON t.user_id = u.id
+            WHERE t.id = ?
+        """, (ticket_id,))
+        
+        result = cursor.fetchone()
+        if not result:
+            return jsonify({'success': False, 'error': 'Ticket not found'}), 404
+        
+        telegram_id = result['telegram_id']
+        
+        # Отправляем сообщение пользователю через основной бот
+        success = core.send_notification_to_user(telegram_id, message_text)
+        
+        if success:
+            # Сохраняем сообщение в БД
+            cursor.execute("""
+                INSERT INTO ticket_messages (ticket_id, is_admin, message_text)
+                VALUES (?, 1, ?)
+            """, (ticket_id, message_text))
+            
+            # Обновляем тикет
+            cursor.execute("""
+                UPDATE tickets
+                SET last_message = ?, last_message_time = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (message_text, ticket_id))
+            
+            conn.commit()
+            return jsonify({'success': True})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to send message'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error replying to ticket {ticket_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        conn.close()
+
 @app.route('/api/panel/transactions', methods=['GET'])
 @require_auth
 def get_transactions():

@@ -209,8 +209,9 @@ ensure_certbot_nginx() {
 
 configure_nginx() {
     local domain="$1"
-    local nginx_conf="$2"
-    local nginx_link="$3"
+    local panel_domain="$2"
+    local nginx_conf="$3"
+    local nginx_link="$4"
 
     log_info "\nШаг 4: настройка Nginx"
     sudo rm -f /etc/nginx/sites-enabled/default
@@ -282,7 +283,7 @@ http {
 
         # API
         location /api {
-            proxy_pass http://api;
+            proxy_pass http://127.0.0.1:8000;
             proxy_set_header Host \$host;
             proxy_set_header X-Real-IP \$remote_addr;
             proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -291,7 +292,7 @@ http {
 
         # Webhooks
         location /yookassa {
-            proxy_pass http://webhook;
+            proxy_pass http://127.0.0.1:5000;
             proxy_set_header Host \$host;
             proxy_set_header X-Real-IP \$remote_addr;
             proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -299,7 +300,7 @@ http {
         }
 
         location /heleket {
-            proxy_pass http://webhook;
+            proxy_pass http://127.0.0.1:5000;
             proxy_set_header Host \$host;
             proxy_set_header X-Real-IP \$remote_addr;
             proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -307,7 +308,7 @@ http {
         }
 
         location /platega {
-            proxy_pass http://webhook;
+            proxy_pass http://127.0.0.1:5000;
             proxy_set_header Host \$host;
             proxy_set_header X-Real-IP \$remote_addr;
             proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -316,7 +317,7 @@ http {
 
         # Panel
         location /panel {
-            proxy_pass http://panel;
+            proxy_pass http://127.0.0.1:3001;
             proxy_set_header Host \$host;
             proxy_set_header X-Real-IP \$remote_addr;
             proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -325,7 +326,7 @@ http {
 
         # Miniapp
         location / {
-            proxy_pass http://miniapp;
+            proxy_pass http://127.0.0.1:9741;
             proxy_set_header Host \$host;
             proxy_set_header X-Real-IP \$remote_addr;
             proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -337,6 +338,7 @@ NGINX_EOF
     
     # Создаем конфигурацию для хостового nginx
     sudo tee "$nginx_conf" >/dev/null <<EOF
+# Мини-приложение (основной домен)
 server {
     listen 80;
     listen [::]:80;
@@ -388,15 +390,6 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
-    # Panel
-    location /panel {
-        proxy_pass http://127.0.0.1:3001;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-
     # Miniapp
     location / {
         proxy_pass http://127.0.0.1:9741;
@@ -404,6 +397,36 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+
+# Панель управления (отдельный домен)
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${panel_domain};
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${panel_domain};
+
+    ssl_certificate /etc/letsencrypt/live/${panel_domain}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${panel_domain}/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # Panel
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
     }
 }
 EOF
@@ -418,7 +441,8 @@ EOF
 
 create_env_file() {
     local domain="$1"
-    local email="$2"
+    local panel_domain="$2"
+    local email="$3"
     
     log_info "\nЗаполнение переменных окружения:"
     
@@ -478,7 +502,7 @@ PANEL_SECRET=${PANEL_SECRET}
 
 # URLs
 MINIAPP_URL=https://${domain}
-PANEL_URL=https://${domain}/panel
+PANEL_URL=https://${panel_domain}
 WEBHOOK_URL=https://${domain}
 API_URL=https://${domain}/api
 
@@ -493,7 +517,7 @@ DB_PATH=data/data.db
 
 # SSL
 SSL_EMAIL=${email}
-PANEL_DOMAIN=${domain}
+PANEL_DOMAIN=${panel_domain}
 MINIAPP_DOMAIN=${domain}
 WEBHOOK_DOMAIN=${domain}
 EOF
@@ -542,10 +566,17 @@ log_success "✔ Репозиторий BlinVPN готов."
 
 log_info "\nШаг 3: настройка домена и SSL"
 
-prompt "Введите ваш домен (например, my-vpn-shop.com): " USER_DOMAIN_INPUT
+prompt "Введите домен для мини-приложения (например, my-vpn-shop.com): " USER_DOMAIN_INPUT
 DOMAIN=$(sanitize_domain "$USER_DOMAIN_INPUT")
 if [[ -z "$DOMAIN" ]]; then
     log_error "Некорректное доменное имя. Установка прервана."
+    exit 1
+fi
+
+prompt "Введите домен для панели управления (например, panel.my-vpn-shop.com): " USER_PANEL_DOMAIN_INPUT
+PANEL_DOMAIN=$(sanitize_domain "$USER_PANEL_DOMAIN_INPUT")
+if [[ -z "$PANEL_DOMAIN" ]]; then
+    log_error "Некорректное доменное имя для панели. Установка прервана."
     exit 1
 fi
 
@@ -557,6 +588,7 @@ fi
 
 SERVER_IP=$(get_server_ip || true)
 DOMAIN_IP=$(resolve_domain_ip "$DOMAIN" || true)
+PANEL_DOMAIN_IP=$(resolve_domain_ip "$PANEL_DOMAIN" || true)
 
 if [[ -n "$SERVER_IP" ]]; then
     log_info "IP сервера: ${SERVER_IP}"
@@ -570,8 +602,22 @@ else
     log_warn "Не удалось получить IP для домена ${DOMAIN}."
 fi
 
+if [[ -n "$PANEL_DOMAIN_IP" ]]; then
+    log_info "IP домена панели ${PANEL_DOMAIN}: ${PANEL_DOMAIN_IP}"
+else
+    log_warn "Не удалось получить IP для домена панели ${PANEL_DOMAIN}."
+fi
+
 if [[ -n "$SERVER_IP" && -n "$DOMAIN_IP" && "$SERVER_IP" != "$DOMAIN_IP" ]]; then
     log_warn "DNS-запись домена ${DOMAIN} не совпадает с IP этого сервера."
+    if ! confirm "Продолжить установку? (y/n): "; then
+        log_info "Установка прервана пользователем."
+        exit 1
+    fi
+fi
+
+if [[ -n "$SERVER_IP" && -n "$PANEL_DOMAIN_IP" && "$SERVER_IP" != "$PANEL_DOMAIN_IP" ]]; then
+    log_warn "DNS-запись домена панели ${PANEL_DOMAIN} не совпадает с IP этого сервера."
     if ! confirm "Продолжить установку? (y/n): "; then
         log_info "Установка прервана пользователем."
         exit 1
@@ -586,15 +632,58 @@ if command -v ufw >/dev/null 2>&1 && sudo ufw status | grep -q 'Status: active';
     sudo ufw allow 8443/tcp
 fi
 
+# Создаем временную конфигурацию nginx для получения сертификатов
+TEMP_NGINX_CONF="/tmp/blinvpn_temp_nginx.conf"
+sudo tee "$TEMP_NGINX_CONF" >/dev/null <<TEMP_EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN} ${PANEL_DOMAIN};
+    
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+    
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+TEMP_EOF
+
+# Создаем директорию для webroot
+sudo mkdir -p /var/www/certbot
+
+# Временно заменяем конфигурацию nginx
+if [[ -L "$NGINX_LINK" ]]; then
+    sudo rm "$NGINX_LINK"
+fi
+sudo ln -s "$TEMP_NGINX_CONF" "$NGINX_LINK"
+sudo nginx -t && sudo systemctl reload nginx
+
 if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
     log_success "✔ SSL-сертификаты для ${DOMAIN} уже существуют."
 else
     log_info "Получение SSL-сертификатов для ${DOMAIN}..."
-    sudo certbot --nginx -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --redirect
-    log_success "✔ Сертификаты Let's Encrypt успешно получены."
+    sudo certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --expand
+    log_success "✔ Сертификаты Let's Encrypt для ${DOMAIN} успешно получены."
 fi
 
-configure_nginx "$DOMAIN" "$NGINX_CONF" "$NGINX_LINK"
+if [[ -d "/etc/letsencrypt/live/${PANEL_DOMAIN}" ]]; then
+    log_success "✔ SSL-сертификаты для ${PANEL_DOMAIN} уже существуют."
+else
+    log_info "Получение SSL-сертификатов для ${PANEL_DOMAIN}..."
+    # Проверяем, есть ли уже сертификат для DOMAIN, который можно расширить
+    if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]] && sudo certbot certificates 2>/dev/null | grep -q "${DOMAIN}"; then
+        log_info "Расширение существующего сертификата для включения ${PANEL_DOMAIN}..."
+        sudo certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --expand --cert-name "$DOMAIN" || \
+        sudo certbot certonly --webroot -w /var/www/certbot -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
+    else
+        sudo certbot certonly --webroot -w /var/www/certbot -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
+    fi
+    log_success "✔ Сертификаты Let's Encrypt для ${PANEL_DOMAIN} успешно получены."
+fi
+
+configure_nginx "$DOMAIN" "$PANEL_DOMAIN" "$NGINX_CONF" "$NGINX_LINK"
 
 log_info "\nШаг 5: настройка переменных окружения (.env)"
 
@@ -604,11 +693,11 @@ if [[ -f ".env" ]]; then
         log_info "Используется существующий .env файл."
     else
         log_info "Создание нового .env файла..."
-        create_env_file "$DOMAIN" "$EMAIL"
+        create_env_file "$DOMAIN" "$PANEL_DOMAIN" "$EMAIL"
     fi
 else
     log_info "Создание .env файла..."
-    create_env_file "$DOMAIN" "$EMAIL"
+    create_env_file "$DOMAIN" "$PANEL_DOMAIN" "$EMAIL"
 fi
 
 log_info "\nШаг 6: подготовка директорий и запуск Docker-контейнеров"
@@ -631,7 +720,7 @@ ${BOLD}Мини-приложение:${NC}
   ${YELLOW}https://${DOMAIN}${NC}
 
 ${BOLD}Веб‑панель:${NC}
-  ${YELLOW}https://${DOMAIN}/panel${NC}
+  ${YELLOW}https://${PANEL_DOMAIN}${NC}
 
 ${BOLD}API:${NC}
   ${YELLOW}https://${DOMAIN}/api${NC}
