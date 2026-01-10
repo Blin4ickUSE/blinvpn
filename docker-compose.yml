@@ -11,7 +11,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data.db:/app/data.db
+      - ./data:/app/data
     depends_on:
       - webhook
 
@@ -25,7 +25,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data.db:/app/data.db
+      - ./data:/app/data
     depends_on:
       - webhook
 
@@ -41,7 +41,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data.db:/app/data.db
+      - ./data:/app/data
 
   # REST API для панели и мини-приложения
   api:
@@ -53,7 +53,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data.db:/app/data.db
+      - ./data:/app/data
     ports:
       - "${API_PORT:-8000}:8000"
 
@@ -83,21 +83,6 @@ services:
     env_file:
       - .env
     depends_on:
-      - webhook
-
-  # Nginx для проксирования и SSL
-  nginx:
-    image: nginx:alpine
-    container_name: blinvpn_nginx
-    restart: unless-stopped
-    network_mode: "host"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-    depends_on:
-      - miniapp
-      - panel
-      - api
       - webhook
 
   # Certbot для SSL сертификатов
