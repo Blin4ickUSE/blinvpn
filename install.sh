@@ -489,7 +489,7 @@ MINIAPP_PORT=9741
 PANEL_PORT=3001
 
 # Database
-DB_PATH=data.db
+DB_PATH=data/data.db
 
 # SSL
 SSL_EMAIL=${email}
@@ -611,7 +611,11 @@ else
     create_env_file "$DOMAIN" "$EMAIL"
 fi
 
-log_info "\nШаг 6: сборка и запуск Docker-контейнеров"
+log_info "\nШаг 6: подготовка директорий и запуск Docker-контейнеров"
+# Создаем директорию для базы данных
+mkdir -p data
+chmod 755 data
+
 if [[ -n "$(sudo docker-compose ps -q 2>/dev/null)" ]]; then
     sudo docker-compose down
 fi
