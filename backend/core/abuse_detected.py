@@ -3,7 +3,7 @@
 """
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from backend.database import database
 
 logger = logging.getLogger(__name__)
@@ -185,4 +185,5 @@ def update_key_hwid(vpn_key_id: int, hwid: str):
         conn.commit()
     finally:
         conn.close()
+
 
