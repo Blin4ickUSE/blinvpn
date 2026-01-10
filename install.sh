@@ -662,7 +662,7 @@ if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
     log_success "✔ SSL-сертификаты для ${DOMAIN} уже существуют."
 else
     log_info "Получение SSL-сертификатов для ${DOMAIN}..."
-    sudo certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
+    sudo certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --expand
     log_success "✔ Сертификаты Let's Encrypt для ${DOMAIN} успешно получены."
 fi
 
@@ -670,7 +670,14 @@ if [[ -d "/etc/letsencrypt/live/${PANEL_DOMAIN}" ]]; then
     log_success "✔ SSL-сертификаты для ${PANEL_DOMAIN} уже существуют."
 else
     log_info "Получение SSL-сертификатов для ${PANEL_DOMAIN}..."
-    sudo certbot certonly --webroot -w /var/www/certbot -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
+    # Проверяем, есть ли уже сертификат для DOMAIN, который можно расширить
+    if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]] && sudo certbot certificates 2>/dev/null | grep -q "${DOMAIN}"; then
+        log_info "Расширение существующего сертификата для включения ${PANEL_DOMAIN}..."
+        sudo certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --expand --cert-name "$DOMAIN" || \
+        sudo certbot certonly --webroot -w /var/www/certbot -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
+    else
+        sudo certbot certonly --webroot -w /var/www/certbot -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
+    fi
     log_success "✔ Сертификаты Let's Encrypt для ${PANEL_DOMAIN} успешно получены."
 fi
 
