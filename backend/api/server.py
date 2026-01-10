@@ -544,6 +544,42 @@ def get_tickets():
 
     return jsonify(tickets)
 
+@app.route('/api/panel/tickets/<int:ticket_id>/messages', methods=['GET'])
+@require_auth
+def get_ticket_messages(ticket_id: int):
+    """Получить сообщения тикета"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT 
+                tm.id,
+                tm.message_text,
+                tm.is_admin,
+                tm.created_at
+            FROM ticket_messages tm
+            WHERE tm.ticket_id = ?
+            ORDER BY tm.created_at ASC
+        """, (ticket_id,))
+        
+        rows = cursor.fetchall()
+        messages = []
+        for row in rows:
+            messages.append({
+                'id': row['id'],
+                'text': row['message_text'] or '',
+                'isAdmin': bool(row['is_admin']),
+                'created_at': row['created_at']
+            })
+        
+        return jsonify(messages)
+    except Exception as e:
+        logger.error(f"Error getting ticket messages {ticket_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
 @app.route('/api/panel/tickets/<int:ticket_id>/reply', methods=['POST'])
 @require_auth
 def reply_to_ticket(ticket_id: int):
