@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "serve -s dist -l 3001"
+    "start": "serve -s dist"
   },
   "dependencies": {
     "react": "^18.2.0",
