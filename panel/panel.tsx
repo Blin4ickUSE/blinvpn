@@ -1627,6 +1627,30 @@ interface TicketsPageProps {
 
 const TicketsPage: React.FC<TicketsPageProps> = ({ tickets, activeTicketId, setActiveTicketId, ticketMsg, setTicketMsg, setSelectedUser, users, onToast }) => {
     const activeTicket = tickets.find(t => t.id === activeTicketId);
+    
+    const handleSendTicketMessage = async (ticketId: number, message: string) => {
+        try {
+            const response = await apiFetch(`/panel/tickets/${ticketId}/reply`, {
+                method: 'POST',
+                body: JSON.stringify({ message })
+            });
+            
+            if (response.success) {
+                onToast('Тикет', 'Сообщение отправлено', 'success');
+                setTicketMsg('');
+                // Обновляем список тикетов через небольшую задержку
+                setTimeout(() => {
+                    window.location.reload();
+                }, 500);
+            } else {
+                onToast('Ошибка', response.error || 'Не удалось отправить сообщение', 'error');
+            }
+        } catch (error) {
+            console.error('Error sending ticket message:', error);
+            onToast('Ошибка', 'Не удалось отправить сообщение', 'error');
+        }
+    };
+    
     return (
         <div className="h-[calc(100vh-140px)] flex gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="w-1/3 bg-gray-900 border border-gray-800 rounded-2xl flex flex-col overflow-hidden">
@@ -1657,7 +1681,7 @@ const TicketsPage: React.FC<TicketsPageProps> = ({ tickets, activeTicketId, setA
                           <div className="flex justify-start"><div className="bg-gray-800 text-gray-200 rounded-2xl rounded-tl-none py-3 px-4 max-w-[70%] text-sm">Пишет "Timeout"</div></div>
                       </div>
                       <div className="p-4 border-t border-gray-800 bg-gray-900">
-                          <div className="flex items-center gap-2"><button className="text-gray-500 hover:text-white p-2"><Paperclip size={20}/></button><input type="text" value={ticketMsg} onChange={e => setTicketMsg(e.target.value)} className="flex-1 bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500" placeholder="Написать сообщение..." /><button onClick={() => {onToast('Тикет', 'Сообщение отправлено', 'success'); setTicketMsg('');}} className="bg-blue-600 hover:bg-blue-500 text-white p-3 rounded-xl transition-colors"><Send size={20}/></button></div>
+                          <div className="flex items-center gap-2"><button className="text-gray-500 hover:text-white p-2"><Paperclip size={20}/></button><input type="text" value={ticketMsg} onChange={e => setTicketMsg(e.target.value)} onKeyPress={e => {if (e.key === 'Enter' && activeTicketId && ticketMsg.trim()) { handleSendTicketMessage(activeTicketId, ticketMsg.trim()); }}} className="flex-1 bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500" placeholder="Написать сообщение..." /><button onClick={async () => {if (activeTicketId && ticketMsg.trim()) { await handleSendTicketMessage(activeTicketId, ticketMsg.trim()); }}} className="bg-blue-600 hover:bg-blue-500 text-white p-3 rounded-xl transition-colors"><Send size={20}/></button></div>
                       </div>
                     </>
                 ) : (<div className="flex-1 flex flex-col items-center justify-center text-gray-500"><MessageCircle size={48} className="mb-4 opacity-50"/><p>Выберите чат из списка</p></div>)}
