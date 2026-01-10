@@ -25,7 +25,7 @@
 ### Автоматическая установка (Ubuntu/Debian)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/Blin4ickUSE/blinvpn/testedpanel/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/Blin4ickUSE/blinvpn/main/install.sh | sudo bash
 ```
 
 Скрипт автоматически:
@@ -167,6 +167,7 @@ cp data.db data.db.backup
 ## Лицензия
 
 Proprietary - Все права защищены
+
 
 
 
