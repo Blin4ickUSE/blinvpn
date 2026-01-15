@@ -206,9 +206,148 @@ def init_database():
                 sent_count INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'Pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                sent_at TIMESTAMP
+                sent_at TIMESTAMP,
+                button_type TEXT,
+                button_value TEXT,
+                image_url TEXT
             )
         """)
+        
+        # Таблица тарифных планов
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tariff_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                price REAL NOT NULL,
+                duration_days INTEGER NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                sort_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Таблица настроек whitelist bypass
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS whitelist_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subscription_fee REAL DEFAULT 100.0,
+                price_per_gb REAL DEFAULT 15.0,
+                min_gb INTEGER DEFAULT 5,
+                max_gb INTEGER DEFAULT 500,
+                auto_pay_enabled INTEGER DEFAULT 1,
+                auto_pay_threshold_mb INTEGER DEFAULT 100,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Таблица авто-скидок
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS auto_discounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                condition_type TEXT NOT NULL,
+                condition_value TEXT NOT NULL,
+                discount_type TEXT NOT NULL,
+                discount_value REAL NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Таблица публичных страниц
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS public_pages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                page_type TEXT UNIQUE NOT NULL,
+                content TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Таблица настроек системы
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                setting_key TEXT UNIQUE NOT NULL,
+                setting_value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Таблица комиссий платежных систем
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS payment_fees (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                payment_method TEXT UNIQUE NOT NULL,
+                fee_percent REAL DEFAULT 0.0,
+                fee_fixed REAL DEFAULT 0.0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Миграция: добавляем поля в mailings если их нет
+        try:
+            cursor.execute("ALTER TABLE mailings ADD COLUMN button_type TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE mailings ADD COLUMN button_value TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE mailings ADD COLUMN image_url TEXT")
+        except sqlite3.OperationalError:
+            pass
+        
+        # Инициализация дефолтных тарифов VPN
+        cursor.execute("SELECT COUNT(*) FROM tariff_plans WHERE plan_type = 'vpn'")
+        if cursor.fetchone()[0] == 0:
+            default_vpn_plans = [
+                ('vpn', '1 месяц', 99, 30, 1),
+                ('vpn', '3 месяца', 249, 90, 2),
+                ('vpn', '6 месяцев', 449, 180, 3),
+                ('vpn', '1 год', 799, 365, 4),
+                ('vpn', '2 года', 1199, 730, 5),
+            ]
+            cursor.executemany("""
+                INSERT INTO tariff_plans (plan_type, name, price, duration_days, sort_order)
+                VALUES (?, ?, ?, ?, ?)
+            """, default_vpn_plans)
+        
+        # Инициализация настроек whitelist
+        cursor.execute("SELECT COUNT(*) FROM whitelist_settings")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("""
+                INSERT INTO whitelist_settings (subscription_fee, price_per_gb, min_gb, max_gb, auto_pay_enabled, auto_pay_threshold_mb)
+                VALUES (100.0, 15.0, 5, 500, 1, 100)
+            """)
+        
+        # Инициализация публичных страниц
+        cursor.execute("SELECT COUNT(*) FROM public_pages WHERE page_type = 'offer'")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("""
+                INSERT INTO public_pages (page_type, content)
+                VALUES ('offer', '')
+            """)
+        cursor.execute("SELECT COUNT(*) FROM public_pages WHERE page_type = 'privacy'")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("""
+                INSERT INTO public_pages (page_type, content)
+                VALUES ('privacy', '')
+            """)
+        
+        # Инициализация комиссий (по умолчанию 0%)
+        default_payment_methods = ['yookassa', 'heleket', 'platega', 'crypto']
+        for method in default_payment_methods:
+            cursor.execute("SELECT COUNT(*) FROM payment_fees WHERE payment_method = ?", (method,))
+            if cursor.fetchone()[0] == 0:
+                cursor.execute("""
+                    INSERT INTO payment_fees (payment_method, fee_percent, fee_fixed)
+                    VALUES (?, 0.0, 0.0)
+                """, (method,))
         
         # Индексы для оптимизации
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)")
@@ -330,4 +469,3 @@ def hash_hwid(hwid: str) -> str:
 # Инициализация при импорте
 if __name__ != "__main__":
     init_database()
-
