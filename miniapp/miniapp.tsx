@@ -24,9 +24,11 @@ const SUPPORT_URL: string = rawEnvMini.VITE_SUPPORT_URL || rawEnvMini.REACT_APP_
 const BOT_USERNAME_MINI: string = rawEnvMini.VITE_BOT_USERNAME || rawEnvMini.REACT_APP_BOT_USERNAME || 'blnnnbot';
 
 async function miniApiFetch(path: string, options: RequestInit = {}): Promise<any> {
-  const base = API_BASE_URL_MINI.replace(/\/$/, '');
-  const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
-  const res = await fetch(url.startsWith('/api') ? url : `/api${path}`, {
+  // Всегда используем относительный путь /api - nginx проксирует на backend
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  const url = `/api${cleanPath}`;
+  
+  const res = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
