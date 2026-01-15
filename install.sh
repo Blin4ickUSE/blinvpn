@@ -115,14 +115,10 @@ ensure_packages() {
         fi
     done
     if ((${#missing[@]})); then
-        # Настройка debconf для неинтерактивной установки
         export DEBIAN_FRONTEND=noninteractive
         export DEBCONF_NONINTERACTIVE_SEEN=true
-        
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends "${missing[@]}"
-        
-        # Сброс переменных после установки
         unset DEBIAN_FRONTEND
         unset DEBCONF_NONINTERACTIVE_SEEN
     else
@@ -159,10 +155,8 @@ ensure_certbot_nginx() {
 
     if command -v apt-get >/dev/null 2>&1; then
         log_info "Устанавливаю плагин python3-certbot-nginx (apt)..."
-        # Настройка debconf для неинтерактивной установки
         export DEBIAN_FRONTEND=noninteractive
         export DEBCONF_NONINTERACTIVE_SEEN=true
-        
         sudo apt-get update
         if sudo apt-get install -y --no-install-recommends python3-certbot-nginx; then
             if certbot plugins 2>/dev/null | grep -qi 'nginx'; then
@@ -174,22 +168,16 @@ ensure_certbot_nginx() {
         else
             log_warn "Не удалось установить python3-certbot-nginx через apt."
         fi
-        
-        # Сброс переменных
         unset DEBIAN_FRONTEND
         unset DEBCONF_NONINTERACTIVE_SEEN
     fi
 
     log_warn "Пробую установить Certbot (snap) с поддержкой nginx."
     if ! command -v snap >/dev/null 2>&1; then
-        # Настройка debconf для неинтерактивной установки
         export DEBIAN_FRONTEND=noninteractive
         export DEBCONF_NONINTERACTIVE_SEEN=true
-        
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends snapd
-        
-        # Сброс переменных
         unset DEBIAN_FRONTEND
         unset DEBCONF_NONINTERACTIVE_SEEN
     fi
@@ -208,149 +196,35 @@ ensure_certbot_nginx() {
 }
 
 configure_nginx() {
-    local domain="$1"
+    local miniapp_domain="$1"
     local panel_domain="$2"
     local nginx_conf="$3"
     local nginx_link="$4"
 
-    log_info "\nШаг 4: настройка Nginx"
+    log_info "\nНастройка Nginx с SSL и проксированием"
     sudo rm -f /etc/nginx/sites-enabled/default
     
-    # Создаем nginx.conf для Docker контейнера (упрощенная версия, без SSL)
-    cat > nginx.conf <<NGINX_EOF
-events {
-    worker_connections 1024;
-}
-
-http {
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
-
-    log_format main '\$remote_addr - \$remote_user [\$time_local] "\$request" '
-                    '\$status \$body_bytes_sent "\$http_referer" '
-                    '"\$http_user_agent" "\$http_x_forwarded_for"';
-
-    access_log /var/log/nginx/access.log main;
-    error_log /var/log/nginx/error.log;
-
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
-
-    gzip on;
-    gzip_vary on;
-    gzip_proxied any;
-    gzip_comp_level 6;
-    gzip_types text/plain text/css text/xml text/javascript application/json application/javascript application/xml+rss;
-
-    # Upstream для сервисов (через localhost, так как используется host network)
-    upstream miniapp {
-        server 127.0.0.1:9741;
-    }
-
-    upstream panel {
-        server 127.0.0.1:3001;
-    }
-
-    upstream api {
-        server 127.0.0.1:8000;
-    }
-
-    upstream webhook {
-        server 127.0.0.1:5000;
-    }
-
-    # HTTP server (для внутреннего использования в Docker)
-    server {
-        listen 80;
-        listen [::]:80;
-        server_name _;
-
-        # API
-        location /api {
-            proxy_pass http://127.0.0.1:8000;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto \$scheme;
-        }
-
-        # Webhooks
-        location /yookassa {
-            proxy_pass http://127.0.0.1:5000;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto \$scheme;
-        }
-
-        location /heleket {
-            proxy_pass http://127.0.0.1:5000;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto \$scheme;
-        }
-
-        location /platega {
-            proxy_pass http://127.0.0.1:5000;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto \$scheme;
-        }
-
-        # Panel
-        location /panel {
-            proxy_pass http://127.0.0.1:3001;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto \$scheme;
-        }
-
-        # Miniapp
-        location / {
-            proxy_pass http://127.0.0.1:9741;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto \$scheme;
-            proxy_http_version 1.1;
-            proxy_set_header Connection "";
-        }
-    }
-}
-NGINX_EOF
-    
-    # Создаем конфигурацию для хостового nginx (основная конфигурация с SSL)
+    # Создаем конфигурацию для хостового nginx
     sudo tee "$nginx_conf" >/dev/null <<EOF
-# Мини-приложение (основной домен)
-server {
-    listen 80;
-    listen [::]:80;
-    server_name ${domain};
-    
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-    }
-    
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
-}
-
+# Мини-приложение
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
-    server_name ${domain};
+    server_name ${miniapp_domain};
 
-    ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/${miniapp_domain}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${miniapp_domain}/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # Miniapp
+    location / {
+        proxy_pass http://127.0.0.1:9741;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
 
     # API
     location /api {
@@ -359,8 +233,6 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
     }
 
     # Webhooks
@@ -370,8 +242,6 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
     }
 
     location /heleket {
@@ -380,8 +250,6 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
     }
 
     location /platega {
@@ -390,39 +258,10 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-    }
-
-    # Miniapp
-    location / {
-        proxy_pass http://127.0.0.1:9741;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
     }
 }
 
-# Панель управления (отдельный домен)
-server {
-    listen 80;
-    listen [::]:80;
-    server_name ${panel_domain};
-    
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-    }
-    
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
-}
-
+# Панель управления
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
@@ -433,17 +272,22 @@ server {
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
-    # Panel
+    # API - проксируем на backend
+    location /api {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # Panel static files
     location / {
         proxy_pass http://127.0.0.1:3001;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
     }
 }
 EOF
@@ -468,8 +312,8 @@ create_env_file() {
     prompt "Telegram Admin ID: " TELEGRAM_ADMIN_ID
     prompt "Telegram Support Group ID: " TELEGRAM_SUPPORT_GROUP_ID
     
-    prompt "Remnawave API URL (по умолчанию https://api.remnawave.com): " REMWAVE_API_URL_INPUT
-    REMWAVE_API_URL="${REMWAVE_API_URL_INPUT:-https://api.remnawave.com}"
+    prompt "Remnawave API URL (по умолчанию http://127.0.0.1:3000): " REMWAVE_API_URL_INPUT
+    REMWAVE_API_URL="${REMWAVE_API_URL_INPUT:-http://127.0.0.1:3000}"
     prompt "Remnawave API Key: " REMWAVE_API_KEY
     
     prompt "YooKassa Shop ID: " YOOKASSA_SHOP_ID
@@ -488,7 +332,6 @@ create_env_file() {
     prompt "Panel Secret (секретный ключ для доступа к панели): " PANEL_SECRET_INPUT
     PANEL_SECRET="${PANEL_SECRET_INPUT:-$(openssl rand -hex 32)}"
     
-    # Генерируем .env файл
     cat > .env <<EOF
 # Telegram
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
@@ -523,7 +366,7 @@ PANEL_URL=https://${panel_domain}
 WEBHOOK_URL=https://${domain}
 API_URL=https://${domain}/api
 
-# Ports
+# Ports (внутренние, доступны только на localhost)
 API_PORT=8000
 WEBHOOK_PORT=5000
 MINIAPP_PORT=9741
@@ -549,6 +392,7 @@ NGINX_LINK="/etc/nginx/sites-enabled/${PROJECT_DIR}.conf"
 
 log_success "--- Запуск скрипта установки/обновления BlinVPN ---"
 
+# Режим обновления
 if [[ -f "$NGINX_CONF" ]]; then
     log_info "\nОбнаружена существующая конфигурация. Запускается режим обновления."
     if [[ ! -d "$PROJECT_DIR" ]]; then
@@ -566,6 +410,7 @@ if [[ -f "$NGINX_CONF" ]]; then
     exit 0
 fi
 
+# Новая установка
 log_info "\nСуществующая конфигурация не найдена. Запускается новая установка."
 
 ensure_packages
@@ -583,14 +428,14 @@ log_success "✔ Репозиторий BlinVPN готов."
 
 log_info "\nШаг 3: настройка домена и SSL"
 
-prompt "Введите домен для мини-приложения (например, my-vpn-shop.com): " USER_DOMAIN_INPUT
+prompt "Введите домен для мини-приложения (например, app.example.com): " USER_DOMAIN_INPUT
 DOMAIN=$(sanitize_domain "$USER_DOMAIN_INPUT")
 if [[ -z "$DOMAIN" ]]; then
     log_error "Некорректное доменное имя. Установка прервана."
     exit 1
 fi
 
-prompt "Введите домен для панели управления (например, panel.my-vpn-shop.com): " USER_PANEL_DOMAIN_INPUT
+prompt "Введите домен для панели управления (например, panel.example.com): " USER_PANEL_DOMAIN_INPUT
 PANEL_DOMAIN=$(sanitize_domain "$USER_PANEL_DOMAIN_INPUT")
 if [[ -z "$PANEL_DOMAIN" ]]; then
     log_error "Некорректное доменное имя для панели. Установка прервана."
@@ -609,20 +454,14 @@ PANEL_DOMAIN_IP=$(resolve_domain_ip "$PANEL_DOMAIN" || true)
 
 if [[ -n "$SERVER_IP" ]]; then
     log_info "IP сервера: ${SERVER_IP}"
-else
-    log_warn "Не удалось автоматически определить IP сервера."
 fi
 
 if [[ -n "$DOMAIN_IP" ]]; then
     log_info "IP домена ${DOMAIN}: ${DOMAIN_IP}"
-else
-    log_warn "Не удалось получить IP для домена ${DOMAIN}."
 fi
 
 if [[ -n "$PANEL_DOMAIN_IP" ]]; then
     log_info "IP домена панели ${PANEL_DOMAIN}: ${PANEL_DOMAIN_IP}"
-else
-    log_warn "Не удалось получить IP для домена панели ${PANEL_DOMAIN}."
 fi
 
 if [[ -n "$SERVER_IP" && -n "$DOMAIN_IP" && "$SERVER_IP" != "$DOMAIN_IP" ]]; then
@@ -641,45 +480,17 @@ if [[ -n "$SERVER_IP" && -n "$PANEL_DOMAIN_IP" && "$SERVER_IP" != "$PANEL_DOMAIN
     fi
 fi
 
+# Открываем порты в firewall если нужно
 if command -v ufw >/dev/null 2>&1 && sudo ufw status | grep -q 'Status: active'; then
-    log_warn "Обнаружен активный UFW. Открываем порты 80, 443, 1488, 8443."
+    log_warn "Обнаружен активный UFW. Открываем порты 80 и 443."
     sudo ufw allow 80/tcp
     sudo ufw allow 443/tcp
-    sudo ufw allow 1488/tcp
-    sudo ufw allow 8443/tcp
 fi
 
-# Создаем временную базовую конфигурацию nginx для получения сертификатов
-TEMP_NGINX_CONF="/tmp/blinvpn_temp_nginx.conf"
-sudo tee "$TEMP_NGINX_CONF" >/dev/null <<TEMP_EOF
-server {
-    listen 80;
-    listen [::]:80;
-    server_name ${DOMAIN};
-    
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
-}
-server {
-    listen 80;
-    listen [::]:80;
-    server_name ${PANEL_DOMAIN};
-    
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
-}
-TEMP_EOF
+# Получаем SSL сертификаты через certbot --nginx
+# certbot сам создаст базовую nginx конфигурацию и получит сертификаты
+log_info "\nПолучение SSL сертификатов..."
 
-# Временно заменяем конфигурацию nginx
-if [[ -L "$NGINX_LINK" ]]; then
-    sudo rm "$NGINX_LINK"
-fi
-sudo ln -s "$TEMP_NGINX_CONF" "$NGINX_LINK"
-sudo nginx -t && sudo systemctl reload nginx
-
-# Получаем сертификаты через certbot --nginx (как в примере)
 if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
     log_success "✔ SSL-сертификаты для ${DOMAIN} уже существуют."
 else
@@ -693,14 +504,11 @@ if [[ -d "/etc/letsencrypt/live/${PANEL_DOMAIN}" ]]; then
 else
     log_info "Получение SSL-сертификатов для ${PANEL_DOMAIN}..."
     sudo certbot --nginx -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --redirect
-    if [[ -d "/etc/letsencrypt/live/${PANEL_DOMAIN}" ]]; then
-        log_success "✔ Сертификаты Let's Encrypt для ${PANEL_DOMAIN} успешно получены."
-    else
-        log_warn "⚠ Не удалось получить сертификат для ${PANEL_DOMAIN}. Проверьте DNS записи и повторите попытку."
-    fi
+    log_success "✔ Сертификаты Let's Encrypt для ${PANEL_DOMAIN} успешно получены."
 fi
 
-# Теперь создаем правильную конфигурацию nginx с проксированием
+# Теперь настраиваем nginx с проксированием на наши сервисы
+log_info "\nШаг 4: настройка Nginx"
 configure_nginx "$DOMAIN" "$PANEL_DOMAIN" "$NGINX_CONF" "$NGINX_LINK"
 
 log_info "\nШаг 5: настройка переменных окружения (.env)"
@@ -719,7 +527,6 @@ else
 fi
 
 log_info "\nШаг 6: подготовка директорий и запуск Docker-контейнеров"
-# Создаем директорию для базы данных
 mkdir -p data
 chmod 755 data
 
@@ -731,7 +538,7 @@ sudo docker-compose up -d --build
 cat <<SUMMARY
 
 ${GREEN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}
-${GREEN}┃${NC}  🎉 ${BOLD}Установка BlinVPN завершена!${NC} 🎉                ${GREEN}┃${NC}
+${GREEN}┃${NC}  🎉 ${BOLD}Установка BlinVPN завершена!${NC} 🎉                        ${GREEN}┃${NC}
 ${GREEN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}
 
 ${BOLD}Мини-приложение:${NC}
