@@ -216,7 +216,7 @@ configure_nginx() {
     log_info "\nШаг 4: настройка Nginx"
     sudo rm -f /etc/nginx/sites-enabled/default
     
-    # Создаем nginx.conf для Docker контейнера
+    # Создаем nginx.conf для Docker контейнера (упрощенная версия, без SSL)
     cat > nginx.conf <<NGINX_EOF
 events {
     worker_connections 1024;
@@ -262,24 +262,11 @@ http {
         server 127.0.0.1:5000;
     }
 
-    # HTTP -> HTTPS redirect
+    # HTTP server (для внутреннего использования в Docker)
     server {
         listen 80;
         listen [::]:80;
-        server_name ${domain};
-        return 301 https://\$host\$request_uri;
-    }
-
-    # HTTPS server
-    server {
-        listen 443 ssl http2;
-        listen [::]:443 ssl http2;
-        server_name ${domain};
-
-        ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
-        include /etc/letsencrypt/options-ssl-nginx.conf;
-        ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+        server_name _;
 
         # API
         location /api {
@@ -331,19 +318,28 @@ http {
             proxy_set_header X-Real-IP \$remote_addr;
             proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto \$scheme;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
         }
     }
 }
 NGINX_EOF
     
-    # Создаем конфигурацию для хостового nginx
+    # Создаем конфигурацию для хостового nginx (основная конфигурация с SSL)
     sudo tee "$nginx_conf" >/dev/null <<EOF
 # Мини-приложение (основной домен)
 server {
     listen 80;
     listen [::]:80;
     server_name ${domain};
-    return 301 https://\$host\$request_uri;
+    
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+    
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
 }
 
 server {
@@ -363,6 +359,8 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
     }
 
     # Webhooks
@@ -372,6 +370,8 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
     }
 
     location /heleket {
@@ -380,6 +380,8 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
     }
 
     location /platega {
@@ -388,6 +390,8 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
     }
 
     # Miniapp
@@ -397,6 +401,10 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
     }
 }
 
@@ -405,7 +413,14 @@ server {
     listen 80;
     listen [::]:80;
     server_name ${panel_domain};
-    return 301 https://\$host\$request_uri;
+    
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+    
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
 }
 
 server {
@@ -427,6 +442,8 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
     }
 }
 EOF
@@ -632,26 +649,28 @@ if command -v ufw >/dev/null 2>&1 && sudo ufw status | grep -q 'Status: active';
     sudo ufw allow 8443/tcp
 fi
 
-# Создаем временную конфигурацию nginx для получения сертификатов
+# Создаем временную базовую конфигурацию nginx для получения сертификатов
 TEMP_NGINX_CONF="/tmp/blinvpn_temp_nginx.conf"
 sudo tee "$TEMP_NGINX_CONF" >/dev/null <<TEMP_EOF
 server {
     listen 80;
     listen [::]:80;
-    server_name ${DOMAIN} ${PANEL_DOMAIN};
+    server_name ${DOMAIN};
     
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
+    location / {
+        return 301 https://\$host\$request_uri;
     }
+}
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${PANEL_DOMAIN};
     
     location / {
         return 301 https://\$host\$request_uri;
     }
 }
 TEMP_EOF
-
-# Создаем директорию для webroot
-sudo mkdir -p /var/www/certbot
 
 # Временно заменяем конфигурацию nginx
 if [[ -L "$NGINX_LINK" ]]; then
@@ -660,11 +679,12 @@ fi
 sudo ln -s "$TEMP_NGINX_CONF" "$NGINX_LINK"
 sudo nginx -t && sudo systemctl reload nginx
 
+# Получаем сертификаты через certbot --nginx (как в примере)
 if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
     log_success "✔ SSL-сертификаты для ${DOMAIN} уже существуют."
 else
     log_info "Получение SSL-сертификатов для ${DOMAIN}..."
-    sudo certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --expand
+    sudo certbot --nginx -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --redirect
     log_success "✔ Сертификаты Let's Encrypt для ${DOMAIN} успешно получены."
 fi
 
@@ -672,14 +692,7 @@ if [[ -d "/etc/letsencrypt/live/${PANEL_DOMAIN}" ]]; then
     log_success "✔ SSL-сертификаты для ${PANEL_DOMAIN} уже существуют."
 else
     log_info "Получение SSL-сертификатов для ${PANEL_DOMAIN}..."
-    # Проверяем, есть ли уже сертификат для DOMAIN
-    if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]] && sudo certbot certificates 2>/dev/null | grep -q "${DOMAIN}"; then
-        log_info "Создание отдельного сертификата для ${PANEL_DOMAIN}..."
-        sudo certbot certonly --webroot -w /var/www/certbot -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --cert-name "${PANEL_DOMAIN}"
-    else
-        sudo certbot certonly --webroot -w /var/www/certbot -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
-    fi
-    
+    sudo certbot --nginx -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --redirect
     if [[ -d "/etc/letsencrypt/live/${PANEL_DOMAIN}" ]]; then
         log_success "✔ Сертификаты Let's Encrypt для ${PANEL_DOMAIN} успешно получены."
     else
@@ -687,6 +700,7 @@ else
     fi
 fi
 
+# Теперь создаем правильную конфигурацию nginx с проксированием
 configure_nginx "$DOMAIN" "$PANEL_DOMAIN" "$NGINX_CONF" "$NGINX_LINK"
 
 log_info "\nШаг 5: настройка переменных окружения (.env)"
