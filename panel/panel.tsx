@@ -30,20 +30,23 @@ const PANEL_SECRET: string = rawEnv.VITE_PANEL_SECRET || rawEnv.REACT_APP_PANEL_
 const BOT_USERNAME: string = rawEnv.VITE_BOT_USERNAME || rawEnv.REACT_APP_BOT_USERNAME || 'blnnnbot';
 
 async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
-  const url = `${API_BASE_URL.replace(/\/$/, '')}${path}`;
+  // Всегда используем относительный путь /api - nginx проксирует на backend
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  const url = `/api${cleanPath}`;
+  
   const headers: any = {
     'Content-Type': 'application/json',
     ...(options.headers || {}),
   };
 
   // Все panel-* эндпоинты требуют Bearer
-  if (path.startsWith('/panel') || path.startsWith('/api/panel')) {
+  if (cleanPath.startsWith('/panel')) {
     if (PANEL_SECRET) {
       headers['Authorization'] = `Bearer ${PANEL_SECRET}`;
     }
   }
 
-  const res = await fetch(url.startsWith('/api') ? url : `/api${path}`, {
+  const res = await fetch(url, {
     ...options,
     headers,
   });
