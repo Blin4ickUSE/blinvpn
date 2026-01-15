@@ -1353,6 +1353,46 @@ def update_tariff(plan_id: int):
     finally:
         conn.close()
 
+@app.route('/api/panel/tariffs/whitelist', methods=['PUT'])
+@require_auth
+def update_whitelist_tariff():
+    """Обновить настройки whitelist тарифа"""
+    data = request.json
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Обновляем или создаем настройки whitelist
+        cursor.execute("SELECT id FROM whitelist_settings ORDER BY id DESC LIMIT 1")
+        row = cursor.fetchone()
+        
+        if row:
+            settings_id = row['id']
+            cursor.execute("""
+                UPDATE whitelist_settings 
+                SET subscription_fee = ?, price_per_gb = ?, pricing_type = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (
+                data.get('subscription_fee', 100.0),
+                data.get('price_per_gb', 15.0),
+                data.get('pricing_type', 'dynamic'),
+                settings_id
+            ))
+        else:
+            cursor.execute("""
+                INSERT INTO whitelist_settings (subscription_fee, price_per_gb, pricing_type, min_gb, max_gb)
+                VALUES (?, ?, ?, 5, 500)
+            """, (
+                data.get('subscription_fee', 100.0),
+                data.get('price_per_gb', 15.0),
+                data.get('pricing_type', 'dynamic')
+            ))
+        
+        conn.commit()
+        return jsonify({'success': True})
+    finally:
+        conn.close()
+
 @app.route('/api/panel/tariffs/<int:plan_id>', methods=['DELETE'])
 @require_auth
 def delete_tariff(plan_id: int):
