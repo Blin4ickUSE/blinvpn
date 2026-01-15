@@ -4,7 +4,7 @@ import {
   MessageSquare, Server, FileText, Globe, Settings, Menu, X, CheckCircle, 
   AlertCircle, TrendingUp, CreditCard, Search, Filter, ArrowUpRight, 
   ArrowDownLeft, Activity, Calendar, Download, Loader, RefreshCcw, 
-  Hash, Monitor, PieChart, Ban, UserX, UserCheck, Trophy, UserPlus,
+  Hash, Monitor, PieChart, Ban, UserX, UserCheck, Trophy, UserPlus, UserMinus,
   Clock, XCircle, Edit2, Copy, Shield, Smartphone, Zap, Wifi, Database,
   Bell, CheckSquare, Square, ChevronRight, Wallet, Bitcoin, Plus,
   Terminal, Lock, Briefcase, Star, TrendingDown, Send, Image as ImageIcon, MousePointer,
@@ -444,6 +444,12 @@ const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConf
       'SET_DEVICES': { title: 'Лимит устройств', label: 'Кол-во устройств', icon: Smartphone, color: 'text-indigo-400', type: 'number' },
       'MASS_ADD_DAYS': { title: 'Всем добавить дни', label: 'Количество дней', icon: Calendar, color: 'text-blue-500', type: 'number' },
       'MASS_ADD_BALANCE': { title: 'Всем начислить', label: 'Сумма (₽)', icon: DollarSign, color: 'text-green-500', type: 'number' },
+      'MASS_BAN': { title: 'Забанить всех', label: 'Причина', icon: Ban, color: 'text-red-500', type: 'text' },
+      'MASS_UNBAN': { title: 'Разбанить всех', label: '', icon: CheckCircle, color: 'text-green-500', type: 'text' },
+      'MASS_RESET_TRIAL': { title: 'Сбросить пробный период', label: '', icon: RefreshCw, color: 'text-yellow-500', type: 'text' },
+      'MASS_DELETE_KEYS': { title: 'Удалить все ключи', label: '', icon: Trash2, color: 'text-red-500', type: 'text' },
+      'MASS_SET_PARTNER': { title: 'Сделать партнерами', label: 'Процент реферала', icon: UserPlus, color: 'text-indigo-500', type: 'number' },
+      'MASS_REMOVE_PARTNER': { title: 'Убрать партнерство', label: '', icon: UserMinus, color: 'text-gray-500', type: 'text' },
   } as Record<string, ActionConfig>)[type] || { title: 'Действие', label: 'Значение', icon: Settings, color: 'text-white', type: 'text' };
 
   return (
@@ -1395,8 +1401,26 @@ const UsersPage: React.FC<UsersPageProps> = ({ users, userSearch, setUserSearch,
                             <button onClick={() => { setMassActionType('MASS_ADD_DAYS'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
                                 <Calendar size={16} className="mr-2 text-blue-400" /> Добавить дни всем
                             </button>
-                            <button onClick={() => { setMassActionType('MASS_ADD_BALANCE'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center">
+                            <button onClick={() => { setMassActionType('MASS_ADD_BALANCE'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
                                 <DollarSign size={16} className="mr-2 text-green-400" /> Начислить баланс всем
+                            </button>
+                            <button onClick={() => { setMassActionType('MASS_BAN'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
+                                <Ban size={16} className="mr-2 text-red-400" /> Забанить всех
+                            </button>
+                            <button onClick={() => { setMassActionType('MASS_UNBAN'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
+                                <CheckCircle size={16} className="mr-2 text-green-400" /> Разбанить всех
+                            </button>
+                            <button onClick={() => { setMassActionType('MASS_RESET_TRIAL'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
+                                <RefreshCw size={16} className="mr-2 text-yellow-400" /> Сбросить пробный период
+                            </button>
+                            <button onClick={() => { setMassActionType('MASS_DELETE_KEYS'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
+                                <Trash2 size={16} className="mr-2 text-red-400" /> Удалить все ключи
+                            </button>
+                            <button onClick={() => { setMassActionType('MASS_SET_PARTNER'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
+                                <UserPlus size={16} className="mr-2 text-indigo-400" /> Сделать партнерами
+                            </button>
+                            <button onClick={() => { setMassActionType('MASS_REMOVE_PARTNER'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center">
+                                <UserMinus size={16} className="mr-2 text-gray-400" /> Убрать партнерство
                             </button>
                         </div>
                     )}
@@ -1754,34 +1778,12 @@ const TariffsPage: React.FC<TariffsPageProps> = ({ promos, plans, setPlans, onTo
             </div>
 
             {activeTab === 'plans' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {plans.map(plan => (
-                        <div key={plan.id} className="bg-gray-900 border border-gray-800 rounded-2xl p-6 relative group hover:border-gray-700 transition-colors">
-                            {plan.isHit && <div className="absolute top-4 right-4 bg-orange-500/20 text-orange-400 px-2 py-1 rounded-lg text-xs font-bold border border-orange-500/20">ХИТ</div>}
-                            <h3 className="text-xl font-bold text-white mb-1">{plan.name}</h3>
-                            <p className="text-gray-400 text-sm mb-4">{plan.description}</p>
-                            <div className="flex items-end gap-2 mb-6">
-                                <span className="text-3xl font-bold text-white">{plan.price} ₽</span>
-                                {plan.oldPrice && <span className="text-gray-500 line-through mb-1 text-sm">{plan.oldPrice} ₽</span>}
-                            </div>
-                            <div className="space-y-3">
-                                <div><label className="text-xs text-gray-500">Цена (₽)</label><input type="number" defaultValue={plan.price} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono mt-1" /></div>
-                                <div><label className="text-xs text-gray-500">Старая цена (₽)</label><input type="number" defaultValue={plan.oldPrice} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono mt-1" /></div>
-                                <div><label className="text-xs text-gray-500">Дней</label><input type="number" defaultValue={plan.duration} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono mt-1" /></div>
-                            </div>
-                            <button onClick={() => onToast('Успех', `Тариф "${plan.name}" обновлен`, 'success')} className="w-full mt-6 bg-gray-800 hover:bg-blue-600 hover:text-white text-gray-300 py-2.5 rounded-xl font-medium transition-colors">Сохранить</button>
-                        </div>
-                    ))}
-                    <button className="border-2 border-dashed border-gray-800 rounded-2xl p-6 flex flex-col items-center justify-center text-gray-500 hover:border-gray-600 hover:text-gray-300 transition-colors h-full min-h-[350px]">
-                        <Plus size={48} className="mb-4 opacity-50"/>
-                        <span className="font-medium">Добавить тариф</span>
-                    </button>
-                </div>
+                <TariffsPlansPage onToast={onToast} />
             )}
 
             {activeTab === 'promos' && (
                 <>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6"><StatCard title="Активных кодов" value={promos.length} icon={Tag} color="green" /><StatCard title="Использований" value="2,450" icon={Users} color="blue" /><StatCard title="Сумма бонусов" value="142,000 ₽" icon={Gift} color="purple" /></div>
+                <PromocodesStats promos={promos} />
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 mb-6">
                     <h3 className="text-lg font-bold text-gray-200 mb-4 flex items-center">
                         <Plus size={20} className="mr-2 text-blue-500" /> Новый промокод
@@ -1919,8 +1921,301 @@ interface PublicPagesProps {
     onToast: (title: string, msg: string, type: ToastType) => void;
 }
 
+const PromocodesStats: React.FC<{ promos: Promo[] }> = ({ promos }) => {
+    const [stats, setStats] = useState<{ total: number; totalUses: number; activeCount: number } | null>(null);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const data = await apiFetch('/panel/promocodes/stats');
+                if (data) {
+                    setStats(data);
+                }
+            } catch (e) {
+                console.error('Failed to load promocodes stats', e);
+            }
+        })();
+    }, []);
+
+    const totalBonus = promos.reduce((sum, p) => {
+        if (p.type === 'balance') return sum + (Number(p.value) * p.uses);
+        return sum;
+    }, 0);
+
+    return (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <StatCard 
+                title="Активных кодов" 
+                value={stats ? stats.activeCount : promos.length} 
+                icon={Tag} 
+                color="green" 
+            />
+            <StatCard 
+                title="Использований" 
+                value={stats ? stats.totalUses.toLocaleString('ru-RU') : '0'} 
+                icon={Users} 
+                color="blue" 
+            />
+            <StatCard 
+                title="Сумма бонусов" 
+                value={`${totalBonus.toLocaleString('ru-RU')} ₽`} 
+                icon={Gift} 
+                color="purple" 
+            />
+        </div>
+    );
+};
+
+const AutoDiscountsPage: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
+    const [discounts, setDiscounts] = useState<any[]>([]);
+    const [showCreateModal, setShowCreateModal] = useState(false);
+    const [newDiscount, setNewDiscount] = useState({
+        name: '',
+        condition_type: 'payment_amount',
+        condition_value: '',
+        discount_type: 'percent',
+        discount_value: '',
+        is_active: true
+    });
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const data = await apiFetch('/panel/auto-discounts');
+                if (Array.isArray(data)) {
+                    setDiscounts(data);
+                }
+            } catch (e) {
+                console.error('Failed to load auto discounts', e);
+            }
+        })();
+    }, []);
+
+    const handleCreate = async () => {
+        if (!newDiscount.name || !newDiscount.condition_value || !newDiscount.discount_value) {
+            onToast('Ошибка', 'Заполните все поля', 'error');
+            return;
+        }
+        try {
+            await apiFetch('/panel/auto-discounts', {
+                method: 'POST',
+                body: JSON.stringify(newDiscount),
+            });
+            onToast('Успех', 'Правило создано', 'success');
+            setShowCreateModal(false);
+            setNewDiscount({ name: '', condition_type: 'payment_amount', condition_value: '', discount_type: 'percent', discount_value: '', is_active: true });
+            const data = await apiFetch('/panel/auto-discounts');
+            if (Array.isArray(data)) setDiscounts(data);
+        } catch (e: any) {
+            onToast('Ошибка', 'Не удалось создать правило', 'error');
+        }
+    };
+
+    return (
+        <>
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+                <div className="p-4 border-b border-gray-800 flex justify-between items-center">
+                    <h3 className="text-lg font-bold text-white">Автоматические правила</h3>
+                    <button 
+                        onClick={() => setShowCreateModal(true)}
+                        className="text-blue-400 text-sm hover:underline font-medium"
+                    >
+                        + Добавить правило
+                    </button>
+                </div>
+                <table className="w-full text-left">
+                    <thead>
+                        <tr className="bg-gray-800/50 text-gray-400 text-xs uppercase">
+                            <th className="px-6 py-4">Название</th>
+                            <th className="px-6 py-4">Условие</th>
+                            <th className="px-6 py-4">Бонус</th>
+                            <th className="px-6 py-4">Статус</th>
+                            <th className="px-6 py-4 text-right"></th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-800">
+                        {discounts.length === 0 ? (
+                            <tr>
+                                <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
+                                    Нет правил. Создайте первое правило.
+                                </td>
+                            </tr>
+                        ) : (
+                            discounts.map((d) => (
+                                <tr key={d.id}>
+                                    <td className="px-6 py-4 text-white font-medium">{d.name}</td>
+                                    <td className="px-6 py-4 text-gray-400 text-sm">
+                                        {d.condition_type === 'payment_amount' && `Пополнение > ${d.condition_value}₽`}
+                                        {d.condition_type === 'payment_method' && `Оплата через ${d.condition_value}`}
+                                        {d.condition_type === 'plan_type' && `Покупка тарифа "${d.condition_value}"`}
+                                    </td>
+                                    <td className="px-6 py-4 text-green-400 font-bold">
+                                        {d.discount_type === 'percent' ? `+${d.discount_value}%` : `+${d.discount_value}₽`}
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        <span className={`px-2 py-0.5 rounded text-xs border ${
+                                            d.is_active 
+                                                ? 'bg-green-500/10 text-green-400 border-green-500/20' 
+                                                : 'bg-gray-500/10 text-gray-400 border-gray-500/20'
+                                        }`}>
+                                            {d.is_active ? 'Активна' : 'Неактивна'}
+                                        </span>
+                                    </td>
+                                    <td className="px-6 py-4 text-right">
+                                        <button 
+                                            onClick={async () => {
+                                                try {
+                                                    await apiFetch(`/panel/auto-discounts/${d.id}`, { method: 'DELETE' });
+                                                    onToast('Успех', 'Правило удалено', 'success');
+                                                    const data = await apiFetch('/panel/auto-discounts');
+                                                    if (Array.isArray(data)) setDiscounts(data);
+                                                } catch (e) {
+                                                    onToast('Ошибка', 'Не удалось удалить правило', 'error');
+                                                }
+                                            }}
+                                            className="text-red-500 hover:text-red-400"
+                                        >
+                                            <Trash2 size={16} />
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
+            {showCreateModal && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md" onClick={() => setShowCreateModal(false)}>
+                    <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-lg shadow-2xl relative" onClick={e => e.stopPropagation()}>
+                        <div className="p-5 border-b border-gray-800 flex justify-between items-center">
+                            <h3 className="text-xl font-bold text-white">Создать правило</h3>
+                            <button onClick={() => setShowCreateModal(false)} className="text-gray-400 hover:text-white"><X size={24} /></button>
+                        </div>
+                        <div className="p-6 space-y-4">
+                            <div>
+                                <label className="text-sm text-gray-400 mb-1.5 block">Название</label>
+                                <input 
+                                    type="text"
+                                    value={newDiscount.name}
+                                    onChange={e => setNewDiscount({ ...newDiscount, name: e.target.value })}
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white"
+                                    placeholder="Бонус за крипту"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm text-gray-400 mb-1.5 block">Тип условия</label>
+                                <select 
+                                    value={newDiscount.condition_type}
+                                    onChange={e => setNewDiscount({ ...newDiscount, condition_type: e.target.value })}
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white"
+                                >
+                                    <option value="payment_amount">Сумма пополнения</option>
+                                    <option value="payment_method">Способ оплаты</option>
+                                    <option value="plan_type">Тип тарифа</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-sm text-gray-400 mb-1.5 block">Значение условия</label>
+                                <input 
+                                    type="text"
+                                    value={newDiscount.condition_value}
+                                    onChange={e => setNewDiscount({ ...newDiscount, condition_value: e.target.value })}
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white"
+                                    placeholder={newDiscount.condition_type === 'payment_amount' ? '1000' : newDiscount.condition_type === 'payment_method' ? 'crypto' : '1 год'}
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm text-gray-400 mb-1.5 block">Тип бонуса</label>
+                                <select 
+                                    value={newDiscount.discount_type}
+                                    onChange={e => setNewDiscount({ ...newDiscount, discount_type: e.target.value })}
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white"
+                                >
+                                    <option value="percent">Процент (%)</option>
+                                    <option value="fixed">Фиксированная сумма (₽)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-sm text-gray-400 mb-1.5 block">Значение бонуса</label>
+                                <input 
+                                    type="text"
+                                    value={newDiscount.discount_value}
+                                    onChange={e => setNewDiscount({ ...newDiscount, discount_value: e.target.value })}
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white"
+                                    placeholder="10"
+                                />
+                            </div>
+                        </div>
+                        <div className="p-5 border-t border-gray-800">
+                            <button onClick={handleCreate} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold">
+                                Создать правило
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </>
+    );
+};
+
 const PublicPages: React.FC<PublicPagesProps> = ({ onToast }) => {
     const [activeTab, setActiveTab] = useState<'offer' | 'privacy'>('offer');
+    const [content, setContent] = useState('');
+    const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const data = await apiFetch('/panel/public-pages');
+                if (data) {
+                    setContent(data[activeTab]?.content || '');
+                    setLastUpdated(data[activeTab]?.updated_at || null);
+                }
+            } catch (e) {
+                console.error('Failed to load public pages', e);
+            } finally {
+                setLoading(false);
+            }
+        })();
+    }, []);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const data = await apiFetch('/panel/public-pages');
+                if (data && data[activeTab]) {
+                    setContent(data[activeTab].content || '');
+                    setLastUpdated(data[activeTab].updated_at || null);
+                }
+            } catch (e) {
+                console.error('Failed to load public page', e);
+            }
+        })();
+    }, [activeTab]);
+
+    const handleSave = async () => {
+        try {
+            await apiFetch(`/panel/public-pages/${activeTab}`, {
+                method: 'PUT',
+                body: JSON.stringify({ content }),
+            });
+            onToast('Сохранено', 'Документ успешно обновлен и синхронизирован с мини-приложением', 'success');
+            setLastUpdated(new Date().toISOString());
+        } catch (e) {
+            onToast('Ошибка', 'Не удалось сохранить документ', 'error');
+        }
+    };
+
+    if (loading) {
+        return (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-blue-500" size={32} /></div>
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -1936,11 +2231,19 @@ const PublicPages: React.FC<PublicPagesProps> = ({ onToast }) => {
                         {activeTab === 'offer' ? <FileTextIcon size={20} className="mr-2 text-blue-500"/> : <Shield size={20} className="mr-2 text-green-500"/>}
                         {activeTab === 'offer' ? 'Редактор оферты' : 'Редактор политики'}
                     </h3>
-                    <div className="text-xs text-gray-500 flex items-center"><Clock size={12} className="mr-1"/> Последнее сохранение: Сегодня, 12:30</div>
+                    <div className="text-xs text-gray-500 flex items-center">
+                        <Clock size={12} className="mr-1"/> 
+                        Последнее сохранение: {lastUpdated ? new Date(lastUpdated).toLocaleString('ru-RU') : 'Никогда'}
+                    </div>
                 </div>
-                <textarea className="flex-1 w-full bg-gray-950 border border-gray-700 rounded-xl p-6 text-gray-300 font-mono text-sm leading-relaxed focus:outline-none focus:border-blue-500 resize-none mb-4" defaultValue={activeTab === 'offer' ? "# Договор оферты\n\n1. Общие положения..." : "# Политика конфиденциальности\n\n1. Сбор данных..."} />
+                <textarea 
+                    value={content}
+                    onChange={e => setContent(e.target.value)}
+                    className="flex-1 w-full bg-gray-950 border border-gray-700 rounded-xl p-6 text-gray-300 font-mono text-sm leading-relaxed focus:outline-none focus:border-blue-500 resize-none mb-4" 
+                    placeholder={activeTab === 'offer' ? "# Договор оферты\n\n1. Общие положения..." : "# Политика конфиденциальности\n\n1. Сбор данных..."} 
+                />
                 <div className="flex justify-end">
-                    <button onClick={() => onToast('Сохранено', 'Документ успешно обновлен', 'success')} className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-900/20 transition-all flex items-center">
+                    <button onClick={handleSave} className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-900/20 transition-all flex items-center">
                         <FileCheck size={18} className="mr-2" /> Сохранить изменения
                     </button>
                 </div>
@@ -2069,6 +2372,35 @@ interface SettingsPageProps {
 
 const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
     const [activeTab, setActiveTab] = useState<'general' | 'payments' | 'subs' | 'backups'>('general');
+    const [settings, setSettings] = useState<any>({});
+    const [loading, setLoading] = useState(true);
+    
+    useEffect(() => {
+        (async () => {
+            try {
+                const data = await apiFetch('/panel/settings');
+                if (data) {
+                    setSettings(data);
+                }
+            } catch (e) {
+                console.error('Failed to load settings', e);
+            } finally {
+                setLoading(false);
+            }
+        })();
+    }, []);
+
+    const handleSave = async () => {
+        try {
+            await apiFetch('/panel/settings', {
+                method: 'PUT',
+                body: JSON.stringify(settings),
+            });
+            onToast('Успех', 'Настройки сохранены', 'success');
+        } catch (e) {
+            onToast('Ошибка', 'Не удалось сохранить настройки', 'error');
+        }
+    };
     
     // Toggle Switch Component
     const Toggle: React.FC<{ checked: boolean; onChange: (checked: boolean) => void }> = ({ checked, onChange }) => (
@@ -2084,12 +2416,22 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
         </div>
     );
 
-    const Input: React.FC<{ label: string; placeholder: string; type?: string }> = ({ label, placeholder, type="text" }) => (
+    const Input: React.FC<{ label: string; placeholder: string; type?: string; value?: string; onChange?: (v: string) => void }> = ({ label, placeholder, type="text", value, onChange }) => (
         <div>
             <label className="block text-sm font-medium text-gray-400 mb-2">{label}</label>
-            <input type={type} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500 transition-colors" placeholder={placeholder} />
+            <input 
+                type={type} 
+                value={value || ''} 
+                onChange={e => onChange?.(e.target.value)}
+                className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500 transition-colors" 
+                placeholder={placeholder} 
+            />
         </div>
     );
+
+    if (loading) {
+        return <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-blue-500" size={32} /></div>;
+    }
 
     return (
         <div className="flex flex-col lg:flex-row gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -2112,11 +2454,36 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
                 {activeTab === 'general' && (
                     <>
                         <Section title="Главные настройки">
-                            <Input label="Токен бота (Telegram)" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" />
-                            <Input label="ID Администратора" placeholder="123456789" />
-                            <Input label="Токен поддержки" placeholder="Token..." />
-                            <Input label="Сайт мини-приложения" placeholder="https://t.me/yourbot/app" />
-                            <Input label="API ключ Remnawave" placeholder="rem_..." />
+                            <Input 
+                                label="Токен бота (Telegram)" 
+                                placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" 
+                                value={settings.TELEGRAM_BOT_TOKEN || ''}
+                                onChange={v => setSettings({ ...settings, TELEGRAM_BOT_TOKEN: v })}
+                            />
+                            <Input 
+                                label="ID Администратора" 
+                                placeholder="123456789" 
+                                value={settings.TELEGRAM_ADMIN_ID || ''}
+                                onChange={v => setSettings({ ...settings, TELEGRAM_ADMIN_ID: v })}
+                            />
+                            <Input 
+                                label="Токен поддержки" 
+                                placeholder="Token..." 
+                                value={settings.SUPPORT_BOT_TOKEN || ''}
+                                onChange={v => setSettings({ ...settings, SUPPORT_BOT_TOKEN: v })}
+                            />
+                            <Input 
+                                label="Сайт мини-приложения" 
+                                placeholder="https://t.me/yourbot/app" 
+                                value={settings.MINIAPP_URL || ''}
+                                onChange={v => setSettings({ ...settings, MINIAPP_URL: v })}
+                            />
+                            <Input 
+                                label="API ключ Remnawave" 
+                                placeholder="rem_..." 
+                                value={settings.REMWAVE_API_KEY || ''}
+                                onChange={v => setSettings({ ...settings, REMWAVE_API_KEY: v })}
+                            />
                         </Section>
                         <Section title="Обслуживание">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -2152,17 +2519,55 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
                 {activeTab === 'payments' && (
                     <>
                         <Section title="YooKassa">
-                            <Input label="ShopID" placeholder="123456" />
-                            <Input label="SecretKey" placeholder="live_..." type="password" />
+                            <Input 
+                                label="ShopID" 
+                                placeholder="123456" 
+                                value={settings.YOOKASSA_SHOP_ID || ''}
+                                onChange={v => setSettings({ ...settings, YOOKASSA_SHOP_ID: v })}
+                            />
+                            <Input 
+                                label="SecretKey" 
+                                placeholder="live_..." 
+                                type="password" 
+                                value={settings.YOOKASSA_SECRET_KEY || ''}
+                                onChange={v => setSettings({ ...settings, YOOKASSA_SECRET_KEY: v })}
+                            />
                         </Section>
                         <Section title="Platega">
-                            <Input label="Merchant ID" placeholder="1234" />
-                            <Input label="SecretKey" placeholder="key_..." type="password" />
+                            <Input 
+                                label="Merchant ID" 
+                                placeholder="1234" 
+                                value={settings.PLATEGA_MERCHANT_ID || ''}
+                                onChange={v => setSettings({ ...settings, PLATEGA_MERCHANT_ID: v })}
+                            />
+                            <Input 
+                                label="SecretKey" 
+                                placeholder="key_..." 
+                                type="password" 
+                                value={settings.PLATEGA_SECRET_KEY || ''}
+                                onChange={v => setSettings({ ...settings, PLATEGA_SECRET_KEY: v })}
+                            />
                         </Section>
                         <Section title="Heleket">
-                            <Input label="Merchant ID" placeholder="1234" />
-                            <Input label="Heleket API Key" placeholder="api_..." type="password" />
-                            <Input label="Домен" placeholder="https://heleket.com" />
+                            <Input 
+                                label="Merchant ID" 
+                                placeholder="1234" 
+                                value={settings.HELEKET_MERCHANT || ''}
+                                onChange={v => setSettings({ ...settings, HELEKET_MERCHANT: v })}
+                            />
+                            <Input 
+                                label="Heleket API Key" 
+                                placeholder="api_..." 
+                                type="password" 
+                                value={settings.HELEKET_API_KEY || ''}
+                                onChange={v => setSettings({ ...settings, HELEKET_API_KEY: v })}
+                            />
+                            <Input 
+                                label="Домен" 
+                                placeholder="https://heleket.com" 
+                                value={settings.HELEKET_API_URL || ''}
+                                onChange={v => setSettings({ ...settings, HELEKET_API_URL: v })}
+                            />
                         </Section>
                     </>
                 )}
@@ -2202,7 +2607,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
                 )}
 
                 <div className="flex justify-end pt-4">
-                    <button onClick={() => onToast('Настройки', 'Конфигурация успешно сохранена', 'success')} className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg shadow-blue-900/20 transition-all flex items-center">
+                    <button onClick={handleSave} className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg shadow-blue-900/20 transition-all flex items-center">
                         <Save size={20} className="mr-2" /> Сохранить все
                     </button>
                 </div>
