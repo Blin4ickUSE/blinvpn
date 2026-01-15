@@ -126,6 +126,15 @@ async def cmd_start(message: types.Message):
         "Здравствуйте! Напишите ваш вопрос, и мы создадим обращение в службу поддержки."
     )
 
+async def check_topic_exists(topic_id: int) -> bool:
+    """Проверить, существует ли топик в Telegram"""
+    try:
+        # Пробуем получить информацию о топике
+        await bot.get_forum_topic(chat_id=SUPPORT_GROUP_ID, message_thread_id=topic_id)
+        return True
+    except Exception:
+        return False
+
 @dp.message(F.chat.type == 'private')
 async def handle_user_message(message: types.Message):
     """Обработка сообщений от пользователя"""
@@ -145,16 +154,42 @@ async def handle_user_message(message: types.Message):
     
     topic_id = get_topic_id(user_id)
     
-    # Если топик есть, пересылаем сообщение
+    # Если топик есть, проверяем его существование
     if topic_id:
-        try:
-            await message.forward(chat_id=SUPPORT_GROUP_ID, message_thread_id=topic_id)
-            return
-        except Exception as e:
-            logger.warning(f"Не удалось отправить в топик {topic_id}: {e}")
+        topic_exists = await check_topic_exists(topic_id)
+        if topic_exists:
+            try:
+                await message.forward(chat_id=SUPPORT_GROUP_ID, message_thread_id=topic_id)
+                
+                # Сохраняем сообщение в БД
+                conn = database.get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO ticket_messages (ticket_id, user_id, is_admin, message_text)
+                    VALUES ((SELECT id FROM tickets WHERE user_id = ?), ?, 0, ?)
+                """, (user_id, user_id, message.text or ''))
+                cursor.execute("""
+                    UPDATE tickets
+                    SET last_message = ?, last_message_time = CURRENT_TIMESTAMP, unread_count = unread_count + 1
+                    WHERE user_id = ?
+                """, (message.text or '', user_id))
+                conn.commit()
+                conn.close()
+                return
+            except Exception as e:
+                logger.warning(f"Не удалось отправить в топик {topic_id}: {e}")
+                topic_id = None
+        else:
+            # Топик удален, очищаем из БД
+            logger.info(f"Топик {topic_id} не существует, очищаем из БД")
+            conn = database.get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE tickets SET telegram_topic_id = NULL WHERE user_id = ?", (user_id,))
+            conn.commit()
+            conn.close()
             topic_id = None
     
-    # Создаем новый топик
+    # Создаем новый топик только если его нет
     if not topic_id:
         try:
             topic_name = f"{message.from_user.full_name} ({user_id_telegram})"
@@ -200,6 +235,42 @@ async def handle_user_message(message: types.Message):
         except Exception as e:
             logger.error(f"Ошибка при создании топика: {e}")
             await message.answer("Произошла ошибка при создании обращения. Пожалуйста, попробуйте позже.")
+
+@dp.edited_message(F.chat.id == SUPPORT_GROUP_ID, F.message_thread_id)
+async def handle_admin_edit(message: types.Message):
+    """Обработка редактирований сообщений админов"""
+    topic_id = message.message_thread_id
+    user_id = get_user_id_by_topic(topic_id)
+    
+    if user_id:
+        try:
+            user = database.get_user_by_id(user_id)
+            if not user:
+                return
+            
+            telegram_id = user['telegram_id']
+            message_text = message.text or message.caption or ''
+            
+            # Отправляем отредактированное сообщение пользователю
+            await bot.send_message(
+                chat_id=telegram_id,
+                text=f"✏️ <b>Сообщение изменено:</b>\n\n{message_text}",
+                parse_mode='HTML'
+            )
+            
+            # Обновляем в БД
+            conn = database.get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE ticket_messages
+                SET message_text = ?
+                WHERE ticket_id = (SELECT id FROM tickets WHERE telegram_topic_id = ?)
+                  AND created_at = (SELECT MAX(created_at) FROM ticket_messages WHERE ticket_id = (SELECT id FROM tickets WHERE telegram_topic_id = ?))
+            """, (message_text, topic_id, topic_id))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Ошибка при обработке редактирования: {e}")
 
 @dp.message(F.chat.id == SUPPORT_GROUP_ID, F.message_thread_id)
 async def handle_admin_reply(message: types.Message):
