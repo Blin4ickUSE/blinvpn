@@ -288,6 +288,24 @@ def init_database():
             )
         """)
         
+        # Таблица сохраненных способов оплаты для рекуррентных платежей
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS saved_payment_methods (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                payment_provider TEXT NOT NULL,
+                payment_method_id TEXT NOT NULL,
+                payment_method_type TEXT,
+                card_last4 TEXT,
+                card_brand TEXT,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                UNIQUE(user_id, payment_provider, payment_method_id)
+            )
+        """)
+        
         # Миграция: добавляем поля в mailings если их нет
         try:
             cursor.execute("ALTER TABLE mailings ADD COLUMN button_type TEXT")
