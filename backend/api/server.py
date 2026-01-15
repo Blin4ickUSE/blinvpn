@@ -94,15 +94,31 @@ def create_payment():
     return_url = f"{os.getenv('MINIAPP_URL')}/success"
     
     if method == 'yookassa':
+        # Проверяем, нужны ли автоплатежи
+        save_payment_method = data.get('save_payment_method', False)
+        payment_method_id = data.get('payment_method_id')  # Для автоплатежа
+        
+        metadata = {'user_id': str(user_id)}
+        if data.get('subscription_id'):
+            metadata['subscription_id'] = str(data.get('subscription_id'))
+        
         payment = yookassa.yookassa_api.create_payment(
-            amount, f"Пополнение баланса", return_url, user_id
+            amount, f"Пополнение баланса", return_url, user_id, 
+            metadata=metadata,
+            save_payment_method=save_payment_method,
+            payment_method_id=payment_method_id
         )
         if payment:
-            return jsonify({
+            result = {
                 'payment_id': payment['id'],
-                'confirmation_url': payment['confirmation_url'],
+                'confirmation_url': payment.get('confirmation_url'),
                 'status': payment['status']
-            })
+            }
+            # Если способ оплаты сохранен, возвращаем его ID
+            if payment.get('payment_method_saved'):
+                result['payment_method_id'] = payment.get('payment_method_id')
+                result['card_last4'] = payment.get('card_last4')
+            return jsonify(result)
     
     elif method == 'heleket':
         payment = heleket.heleket_api.create_payment(
@@ -274,6 +290,67 @@ def get_user_history():
     finally:
         conn.close()
 
+@app.route('/api/user/payment-methods', methods=['GET'])
+def get_user_payment_methods():
+    """Получить сохраненные способы оплаты пользователя"""
+    telegram_id = request.args.get('telegram_id', type=int)
+    if not telegram_id:
+        return jsonify({'error': 'telegram_id required'}), 400
+    
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, payment_provider, payment_method_id, payment_method_type, 
+                   card_last4, card_brand, created_at
+            FROM saved_payment_methods
+            WHERE user_id = ? AND is_active = 1
+            ORDER BY created_at DESC
+        """, (user['id'],))
+        rows = cursor.fetchall()
+        methods = []
+        for row in rows:
+            methods.append({
+                'id': row['id'],
+                'provider': row['payment_provider'],
+                'payment_method_id': row['payment_method_id'],
+                'type': row['payment_method_type'],
+                'card_last4': row['card_last4'],
+                'card_brand': row['card_brand'],
+                'created_at': row['created_at']
+            })
+        return jsonify(methods)
+    finally:
+        conn.close()
+
+@app.route('/api/user/payment-methods/<int:method_id>', methods=['DELETE'])
+def delete_payment_method(method_id: int):
+    """Удалить сохраненный способ оплаты"""
+    telegram_id = request.args.get('telegram_id', type=int)
+    if not telegram_id:
+        return jsonify({'error': 'telegram_id required'}), 400
+    
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE saved_payment_methods
+            SET is_active = 0
+            WHERE id = ? AND user_id = ?
+        """, (method_id, user['id']))
+        conn.commit()
+        return jsonify({'success': True})
+    finally:
+        conn.close()
+
 @app.route('/api/subscription/create', methods=['POST'])
 def create_subscription():
     """Создать подписку"""
@@ -282,6 +359,8 @@ def create_subscription():
     days = data.get('days')
     plan_type = data.get('type')  # 'vpn' or 'whitelist'
     whitelist_gb = data.get('whitelist_gb', 0)  # Для whitelist подписки
+    use_auto_pay = data.get('use_auto_pay', False)  # Использовать автоплатеж
+    payment_method_id = data.get('payment_method_id')  # ID сохраненного способа оплаты
     
     if not user_id or not days:
         return jsonify({'error': 'Missing required fields'}), 400
@@ -292,18 +371,37 @@ def create_subscription():
     
     # Рассчитываем цену в зависимости от типа подписки
     if plan_type == 'whitelist':
-        if whitelist_gb < 5 or whitelist_gb > 50:
-            return jsonify({'error': 'Whitelist GB must be between 5 and 50'}), 400
+        if whitelist_gb < 5 or whitelist_gb > 500:
+            return jsonify({'error': 'Whitelist GB must be between 5 and 500'}), 400
+        from backend.core.whitelist_billing import calculate_whitelist_price
         price = calculate_whitelist_price(whitelist_gb)
-        # Добавляем VPN если нужно
-        if data.get('add_vpn', False):
-            price += 79
     else:
         # VPN подписка - используем фиксированные цены из планов
-        # Для упрощения используем базовую цену, но лучше передавать цену из фронтенда
         price = data.get('price', days * 3.3)
     
-    # Списываем баланс внутри транзакции и не допускаем отрицательного
+    # Если используется автоплатеж, создаем платеж через YooKassa
+    if use_auto_pay and payment_method_id and plan_type == 'whitelist':
+        # Автоплатеж для whitelist подписки
+        payment = yookassa.yookassa_api.create_payment(
+            price, f"Автоплатеж: Whitelist подписка ({days} дней, {whitelist_gb} ГБ)", 
+            f"{os.getenv('MINIAPP_URL')}/success", user_id,
+            metadata={'user_id': str(user_id), 'subscription_type': 'whitelist', 'days': days, 'whitelist_gb': whitelist_gb},
+            payment_method_id=payment_method_id
+        )
+        if payment and payment.get('status') == 'succeeded':
+            # Платеж успешен, создаем подписку
+            traffic_limit_bytes = int(whitelist_gb * (1024 ** 3))
+            result = core.create_user_and_subscription(
+                user['telegram_id'], user.get('username', ''), days,
+                traffic_limit=traffic_limit_bytes
+            )
+            if result:
+                return jsonify({'success': True, 'subscription': result})
+            return jsonify({'error': 'Failed to create subscription'}), 500
+        else:
+            return jsonify({'error': 'Auto payment failed'}), 400
+    
+    # Обычная покупка через баланс
     deducted = database.update_user_balance(user_id, -price, ensure_non_negative=True)
     if not deducted:
         return jsonify({'error': 'Insufficient balance'}), 400
