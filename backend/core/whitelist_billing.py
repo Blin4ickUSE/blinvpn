@@ -10,51 +10,143 @@ from backend.core import core
 
 logger = logging.getLogger(__name__)
 
-# Цена за ГБ при превышении лимита
-OVER_LIMIT_PRICE_PER_GB = 10.0
+# Цена за ГБ при автоплатежах (когда осталось < 100 МБ)
+AUTO_PAY_PRICE_PER_GB = 15.0
+# Минимальный остаток трафика для автоплатежа (в МБ)
+AUTO_PAY_THRESHOLD_MB = 100
+# Минимальный баланс для автоплатежа
+AUTO_PAY_MIN_BALANCE = 15.0
+# Максимальный отрицательный баланс
+MAX_NEGATIVE_BALANCE = -15.0
 
-def calculate_whitelist_price(gb: int) -> float:
+def calculate_whitelist_price(gb: int, subscription_fee: float = 100.0, price_per_gb: float = 15.0) -> float:
     """
-    Рассчитывает цену за whitelist bypass по прогрессивной системе:
-    5-9 ГБ: 30₽/ГБ
-    10-14 ГБ: 25₽/ГБ
-    15-24 ГБ: 20₽/ГБ
-    25-50 ГБ: 15₽/ГБ
+    Рассчитывает цену за whitelist bypass: абонентская плата (100₽) + 15₽/ГБ
+    Диапазон: 5-500 ГБ
     """
     if gb < 5:
         gb = 5
-    if gb > 50:
-        gb = 50
+    if gb > 500:
+        gb = 500
     
-    total = 0.0
+    return subscription_fee + (gb * price_per_gb)
+
+def check_and_process_auto_payment(user_id: int, vpn_key_id: int) -> Dict[str, Any]:
+    """
+    Проверяет остаток трафика и автоматически списывает 15₽/ГБ если осталось < 100 МБ
+    Баланс может уйти в минус, но не сильнее чем на -15₽
     
-    # 5-9 ГБ: 30₽/ГБ
-    if gb >= 5:
-        tier1 = min(gb, 9) - 4  # ГБ с 5 по 9 (включительно)
-        total += tier1 * 30.0
+    Args:
+        user_id: ID пользователя
+        vpn_key_id: ID VPN ключа
     
-    # 10-14 ГБ: 25₽/ГБ
-    if gb >= 10:
-        tier2 = min(gb, 14) - 9  # ГБ с 10 по 14 (включительно)
-        total += tier2 * 25.0
+    Returns:
+        Dict с результатом обработки
+    """
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
     
-    # 15-24 ГБ: 20₽/ГБ
-    if gb >= 15:
-        tier3 = min(gb, 24) - 14  # ГБ с 15 по 24 (включительно)
-        total += tier3 * 20.0
-    
-    # 25-50 ГБ: 15₽/ГБ
-    if gb >= 25:
-        tier4 = gb - 24  # ГБ с 25 по 50 (включительно)
-        total += tier4 * 15.0
-    
-    return total
+    try:
+        # Получаем информацию о ключе
+        cursor.execute("""
+            SELECT traffic_used, traffic_limit, status
+            FROM vpn_keys
+            WHERE id = ? AND user_id = ?
+        """, (vpn_key_id, user_id))
+        
+        result = cursor.fetchone()
+        if not result:
+            return {'error': 'VPN key not found'}
+        
+        traffic_used_bytes = result[0] or 0
+        traffic_limit_bytes = result[1] or 0
+        key_status = result[2]
+        
+        if traffic_limit_bytes == 0:
+            return {'auto_pay_processed': False, 'reason': 'No traffic limit set'}
+        
+        # Вычисляем остаток в МБ
+        remaining_bytes = traffic_limit_bytes - traffic_used_bytes
+        remaining_mb = remaining_bytes / (1024 ** 2)
+        
+        # Если осталось >= 100 МБ, автоплатеж не нужен
+        if remaining_mb >= AUTO_PAY_THRESHOLD_MB:
+            return {'auto_pay_processed': False, 'remaining_mb': remaining_mb}
+        
+        # Получаем баланс пользователя
+        user = database.get_user_by_id(user_id)
+        if not user:
+            return {'error': 'User not found'}
+        
+        current_balance = user.get('balance', 0)
+        
+        # Проверяем, можем ли списать (баланс >= 15₽ или баланс > -15₽ после списания)
+        charge_amount = AUTO_PAY_PRICE_PER_GB  # 15₽ за 1 ГБ
+        
+        # Проверяем, не уйдет ли баланс ниже -15₽
+        if current_balance - charge_amount < MAX_NEGATIVE_BALANCE:
+            return {
+                'auto_pay_processed': False,
+                'reason': 'Balance would go below -15₽',
+                'current_balance': current_balance,
+                'required': charge_amount
+            }
+        
+        # Проверяем минимальный баланс для автоплатежа
+        if current_balance < AUTO_PAY_MIN_BALANCE and current_balance >= 0:
+            return {
+                'auto_pay_processed': False,
+                'reason': 'Balance below minimum threshold',
+                'current_balance': current_balance,
+                'required': AUTO_PAY_MIN_BALANCE
+            }
+        
+        # Списываем баланс (может уйти в минус до -15₽)
+        new_balance = current_balance - charge_amount
+        cursor.execute("""
+            UPDATE users
+            SET balance = ?
+            WHERE id = ?
+        """, (new_balance, user_id))
+        
+        # Увеличиваем лимит на 1 ГБ
+        new_limit_bytes = traffic_limit_bytes + (1024 ** 3)  # +1 ГБ
+        cursor.execute("""
+            UPDATE vpn_keys
+            SET traffic_limit = ?
+            WHERE id = ?
+        """, (new_limit_bytes, vpn_key_id))
+        
+        # Создаем транзакцию
+        cursor.execute("""
+            INSERT INTO transactions (user_id, type, amount, status, description, payment_method)
+            VALUES (?, 'whitelist_auto_pay', ?, 'Success', ?, 'Balance')
+        """, (user_id, -charge_amount, f'Автоплатеж whitelist: +1 ГБ (остаток был {remaining_mb:.2f} МБ)'))
+        
+        conn.commit()
+        
+        # Уведомляем пользователя
+        core.send_notification_to_user(
+            user['telegram_id'],
+            f"💳 Автоплатеж: добавлено 1 ГБ трафика за {charge_amount}₽. "
+            f"Остаток баланса: {new_balance:.2f}₽"
+        )
+        
+        return {
+            'auto_pay_processed': True,
+            'charged': charge_amount,
+            'new_balance': new_balance,
+            'traffic_added_gb': 1.0,
+            'remaining_mb_before': remaining_mb
+        }
+    finally:
+        conn.close()
 
 def process_whitelist_overage(user_id: int, vpn_key_id: int, traffic_bytes: float, 
                               whitelist_limit_gb: float) -> Dict[str, Any]:
     """
     Обрабатывает превышение лимита whitelist трафика
-    Списывает с баланса по 10₽ за каждый ГБ превышения
+    Теперь используется для автоплатежей: если осталось < 100 МБ, списывает 15₽/ГБ
     
     Args:
         user_id: ID пользователя
@@ -65,104 +157,10 @@ def process_whitelist_overage(user_id: int, vpn_key_id: int, traffic_bytes: floa
     Returns:
         Dict с результатом обработки
     """
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
+    # Проверяем автоплатеж
+    auto_pay_result = check_and_process_auto_payment(user_id, vpn_key_id)
+    if auto_pay_result.get('auto_pay_processed'):
+        return auto_pay_result
     
-    try:
-        # Получаем текущее использование трафика за месяц
-        # Предполагаем, что whitelist лимит хранится в traffic_limit ключа
-        cursor.execute("""
-            SELECT traffic_used, traffic_limit
-            FROM vpn_keys
-            WHERE id = ?
-        """, (vpn_key_id,))
-        
-        result = cursor.fetchone()
-        if not result:
-            return {'error': 'VPN key not found'}
-        
-        current_traffic_bytes = result[0] or 0
-        traffic_limit_bytes = (whitelist_limit_gb * (1024 ** 3)) if whitelist_limit_gb else 0
-        
-        # Конвертируем в ГБ
-        current_traffic_gb = current_traffic_bytes / (1024 ** 3)
-        limit_gb = traffic_limit_bytes / (1024 ** 3) if traffic_limit_bytes > 0 else 0
-        
-        # Новое использование после добавления трафика
-        new_traffic_gb = (current_traffic_bytes + traffic_bytes) / (1024 ** 3)
-        
-        # Если превышен лимит, списываем за превышение
-        if limit_gb > 0 and new_traffic_gb > limit_gb:
-            overage_gb = new_traffic_gb - limit_gb
-            charge_amount = overage_gb * OVER_LIMIT_PRICE_PER_GB
-            
-            # Получаем баланс пользователя
-            user = database.get_user_by_id(user_id)
-            if not user:
-                return {'error': 'User not found'}
-            
-            current_balance = user.get('balance', 0)
-            
-            # Если баланса достаточно, списываем
-            if current_balance >= charge_amount:
-                deducted = database.update_user_balance(user_id, -charge_amount, ensure_non_negative=True)
-                if deducted:
-                    # Создаем транзакцию
-                    cursor.execute("""
-                        INSERT INTO transactions (user_id, type, amount, status, description, payment_method)
-                        VALUES (?, 'whitelist_overage', ?, 'Success', ?, 'Balance')
-                    """, (user_id, -charge_amount, f'Превышение лимита whitelist: {overage_gb:.2f} ГБ'))
-                    conn.commit()
-                    
-                    # Уведомляем пользователя
-                    core.send_notification_to_user(
-                        user['telegram_id'],
-                        f"⚠️ Превышен лимит whitelist на {overage_gb:.2f} ГБ. "
-                        f"Списано {charge_amount:.2f}₽ с баланса (10₽/ГБ). "
-                        f"Остаток баланса: {current_balance - charge_amount:.2f}₽"
-                    )
-                    
-                    return {
-                        'overage_detected': True,
-                        'overage_gb': overage_gb,
-                        'charged': charge_amount,
-                        'new_balance': current_balance - charge_amount
-                    }
-                else:
-                    return {
-                        'overage_detected': True,
-                        'error': 'Failed to deduct balance',
-                        'overage_gb': overage_gb,
-                        'required_balance': charge_amount
-                    }
-            else:
-                # Недостаточно баланса - отключаем пользователя от remnawave
-                # Отключаем ключ
-                cursor.execute("""
-                    UPDATE vpn_keys
-                    SET status = 'Suspended'
-                    WHERE id = ?
-                """, (vpn_key_id,))
-                conn.commit()
-                
-                # Уведомляем пользователя
-                core.send_notification_to_user(
-                    user['telegram_id'],
-                    f"❌ Превышен лимит whitelist на {overage_gb:.2f} ГБ. "
-                    f"Недостаточно средств на балансе ({current_balance:.2f}₽). "
-                    f"Требуется: {charge_amount:.2f}₽. "
-                    f"Доступ приостановлен. Пополните баланс для продолжения работы."
-                )
-                
-                return {
-                    'overage_detected': True,
-                    'suspended': True,
-                    'overage_gb': overage_gb,
-                    'required_balance': charge_amount,
-                    'current_balance': current_balance
-                }
-        
-        return {'overage_detected': False}
-    finally:
-        conn.close()
+    return {'overage_detected': False, 'auto_pay_checked': True}
 
