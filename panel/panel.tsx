@@ -605,8 +605,9 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
     const [isTrial, setIsTrial] = useState(false);
     const [params, setParams] = useState({ days: 30, traffic: 100, devices: 5 });
     const [selectedSquads, setSelectedSquads] = useState<string[]>([]);
+    const [squads, setSquads] = useState<{uuid: string; name: string}[]>([]);
+    const [loadingSquads, setLoadingSquads] = useState(false);
     
-    const squads = ['Gamers', 'Crypto', 'Streaming', 'AdultSafe', 'Developers'];
     const filteredUsers: User[] =
         searchUser && users
             ? users
@@ -617,16 +618,38 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
                   .slice(0, 3)
             : [];
     
-    const handleCreate = () => { 
+    useEffect(() => {
+        (async () => {
+            setLoadingSquads(true);
+            try {
+                const data = await apiFetch('/panel/remnawave/squads');
+                if (Array.isArray(data)) {
+                    setSquads(data);
+                }
+            } catch (e) {
+                console.error('Failed to load squads', e);
+                onToast('Ошибка', 'Не удалось загрузить сквады из Remnawave', 'error');
+            } finally {
+                setLoadingSquads(false);
+            }
+        })();
+    }, []);
+    
+    const handleCreate = async () => { 
         if(!selectedUser) {
             onToast('Ошибка', 'Выберите пользователя', 'error');
             return;
         }
-        onToast('Успех', 'Ключ успешно создан и отправлен', 'success');
-        onClose(); 
+        try {
+            // TODO: Реализовать создание ключа через API с использованием Remnawave
+            onToast('Успех', 'Ключ успешно создан и отправлен', 'success');
+            onClose(); 
+        } catch (e: any) {
+            onToast('Ошибка', 'Не удалось создать ключ', 'error');
+        }
     };
 
-    useEffect(() => { if(isTrial) { setParams({ days: 3, traffic: 5, devices: 1 }); } else { setParams({ days: 30, traffic: 100, devices: 5 }); } }, [isTrial]);
+    useEffect(() => { if(isTrial) { setParams({ days: 1, traffic: 5, devices: 1 }); } else { setParams({ days: 30, traffic: 100, devices: 5 }); } }, [isTrial]);
 
     return (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200" onClick={onClose}>
@@ -672,7 +695,29 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
                     </div>
                     <label className="flex items-center cursor-pointer p-4 bg-gray-800/50 border border-gray-800 rounded-xl hover:border-gray-700 transition-colors"><div className="relative"><input type="checkbox" checked={isTrial} onChange={() => setIsTrial(!isTrial)} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full transition-colors ${isTrial ? 'bg-purple-600' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform ${isTrial ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="font-medium text-white">Пробный период</div><div className="text-xs text-gray-500">Автоматически выставит лимиты</div></div></label>
                     <div className="grid grid-cols-3 gap-4"><div><label className="text-xs text-gray-500 mb-1.5 block">Длительность (дней)</label><input type="number" min="1" value={params.days} onChange={e => setParams({...params, days: parseInt(e.target.value) || 0})} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono"/></div><div><label className="text-xs text-gray-500 mb-1.5 block">Трафик (GB)</label><input type="number" min="1" value={params.traffic} onChange={e => setParams({...params, traffic: parseInt(e.target.value) || 0})} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono"/></div><div><label className="text-xs text-gray-500 mb-1.5 block">Устройства</label><input type="number" min="1" value={params.devices} onChange={e => setParams({...params, devices: parseInt(e.target.value) || 0})} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono"/></div></div>
-                    <div><label className="text-sm font-medium text-gray-400 mb-2 block">Доступные сквады</label><div className="flex flex-wrap gap-2">{squads.map(sq => { const isSelected = selectedSquads.includes(sq); return (<button key={sq} onClick={() => setSelectedSquads(prev => isSelected ? prev.filter(s => s !== sq) : [...prev, sq])} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${isSelected ? 'bg-blue-600/20 border-blue-500 text-blue-400' : 'bg-gray-950 border-gray-800 text-gray-500 hover:border-gray-600'}`}>{sq}</button>) })}</div></div>
+                    <div>
+                        <label className="text-sm font-medium text-gray-400 mb-2 block">Доступные сквады</label>
+                        {loadingSquads ? (
+                            <div className="text-gray-500 text-sm">Загрузка сквадов...</div>
+                        ) : squads.length === 0 ? (
+                            <div className="text-gray-500 text-sm">Нет доступных сквадов</div>
+                        ) : (
+                            <div className="flex flex-wrap gap-2">
+                                {squads.map(sq => { 
+                                    const isSelected = selectedSquads.includes(sq.uuid); 
+                                    return (
+                                        <button 
+                                            key={sq.uuid} 
+                                            onClick={() => setSelectedSquads(prev => isSelected ? prev.filter(s => s !== sq.uuid) : [...prev, sq.uuid])} 
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${isSelected ? 'bg-blue-600/20 border-blue-500 text-blue-400' : 'bg-gray-950 border-gray-800 text-gray-500 hover:border-gray-600'}`}
+                                        >
+                                            {sq.name}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
                 </div>
                 <div className="p-5 border-t border-gray-800"><button onClick={handleCreate} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg shadow-blue-900/20 transition-colors">Создать ключ</button></div>
             </div>
@@ -1130,35 +1175,91 @@ interface FinancePageProps {
   onSelectTransaction: (t: Transaction) => void;
 }
 
-const FinancePage: React.FC<FinancePageProps> = ({ transactions, onSelectTransaction }) => (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4"><div><h2 className="text-2xl font-bold text-white">Финансы</h2><p className="text-gray-400 mt-1">Управление доходами</p></div>
+const FinancePage: React.FC<FinancePageProps> = ({ transactions, onSelectTransaction }) => {
+    const [stats, setStats] = useState<{
+        deposits: number;
+        depositsChange: string;
+        withdrawals: number;
+        withdrawalsChange: string;
+        successfulOps: number;
+    } | null>(null);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const data = await apiFetch('/panel/finance/stats');
+                if (data) {
+                    setStats(data);
+                }
+            } catch (e) {
+                console.error('Failed to load finance stats', e);
+            }
+        })();
+    }, []);
+
+    const fmtMoney = (v: number) =>
+        `${v.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₽`;
+
+    return (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4"><div><h2 className="text-2xl font-bold text-white">Финансы</h2><p className="text-gray-400 mt-1">Управление доходами</p></div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <StatCard 
+                    title="Пополнения" 
+                    value={stats ? fmtMoney(stats.deposits) : '—'} 
+                    change={stats?.depositsChange} 
+                    icon={ArrowUpRight} 
+                    color="green" 
+                />
+                <StatCard 
+                    title="Списания" 
+                    value={stats ? fmtMoney(stats.withdrawals) : '—'} 
+                    subValue="(Расходы)" 
+                    change={stats?.withdrawalsChange} 
+                    icon={ArrowDownLeft} 
+                    color="red" 
+                />
+                <StatCard 
+                    title="Успешные операции" 
+                    value={stats ? stats.successfulOps.toLocaleString('ru-RU') : '—'} 
+                    subValue="операций" 
+                    icon={Activity} 
+                    color="blue" 
+                />
+            </div>
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-sm"><div className="overflow-x-auto"><table className="w-full text-left border-collapse"><thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase tracking-wider"><th className="px-6 py-4">ID</th><th className="px-6 py-4">Пользователь</th><th className="px-6 py-4">Сумма</th><th className="px-6 py-4">Статус</th><th className="px-6 py-4">Дата</th></tr></thead><tbody className="divide-y divide-gray-800">{transactions.map((tx) => (<tr key={tx.id} onClick={() => onSelectTransaction(tx)} className="hover:bg-gray-800/30 cursor-pointer"><td className="px-6 py-4 text-sm text-gray-500">#{tx.id}</td><td className="px-6 py-4 text-sm text-gray-300">{tx.user}</td><td className={`px-6 py-4 text-sm font-bold ${tx.amount > 0 ? 'text-green-400' : 'text-white'}`}>{tx.amount > 0 ? '+' : ''}{tx.amount} ₽</td><td className="px-6 py-4 text-sm text-gray-400">{tx.status}</td><td className="px-6 py-4 text-sm text-gray-500">{tx.date}</td></tr>))}</tbody></table></div></div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6"><StatCard title="Пополнения" value="1,240,500 ₽" change="+12.5%" icon={ArrowUpRight} color="green" /><StatCard title="Списания" value="142,300 ₽" subValue="(Расходы)" change="+2.1%" icon={ArrowDownLeft} color="red" /><StatCard title="Успешные операции" value="14,203" subValue="операций" icon={Activity} color="blue" /></div>
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-sm"><div className="overflow-x-auto"><table className="w-full text-left border-collapse"><thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase tracking-wider"><th className="px-6 py-4">ID</th><th className="px-6 py-4">Пользователь</th><th className="px-6 py-4">Сумма</th><th className="px-6 py-4">Статус</th><th className="px-6 py-4">Дата</th></tr></thead><tbody className="divide-y divide-gray-800">{transactions.map((tx) => (<tr key={tx.id} onClick={() => onSelectTransaction(tx)} className="hover:bg-gray-800/30 cursor-pointer"><td className="px-6 py-4 text-sm text-gray-500">#{tx.id}</td><td className="px-6 py-4 text-sm text-gray-300">{tx.user}</td><td className={`px-6 py-4 text-sm font-bold ${tx.amount > 0 ? 'text-green-400' : 'text-white'}`}>{tx.amount > 0 ? '+' : ''}{tx.amount} ₽</td><td className="px-6 py-4 text-sm text-gray-400">{tx.status}</td><td className="px-6 py-4 text-sm text-gray-500">{tx.date}</td></tr>))}</tbody></table></div></div>
-    </div>
-);
+    );
+};
 
 const StatisticsPage = () => {
-    const revenueData = [15000, 18000, 16500, 22000, 21000, 25000, 30000, 28000, 35000, 38000, 42000, 45000, 43000, 50000, 55000];
-    const userDistData = [
-        { label: 'Активные', value: 400 },
-        { label: 'Ушли', value: 200 },
-        { label: 'Trial', value: 100 },
-        { label: 'Бан', value: 50 },
-        { label: 'Спящие', value: 500 },
-    ];
-    const paymentMethodsData = [
-        { label: 'Card', value: 40 },
-        { label: 'SBP', value: 30 },
-        { label: 'Crypto', value: 20 },
-        { label: 'Other', value: 10 },
-    ];
-    const topReferrers = [
-        { id: 1, name: '@crypto_king', count: 1450, earned: 145000 },
-        { id: 2, name: '@vpn_master', count: 890, earned: 89000 },
-        { id: 3, name: '@traffic_guru', count: 560, earned: 56000 },
-    ];
+    const [stats, setStats] = useState<any>(null);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const data = await apiFetch('/panel/statistics/full');
+                if (data) {
+                    setStats(data);
+                }
+            } catch (e) {
+                console.error('Failed to load statistics', e);
+            }
+        })();
+    }, []);
+
+    const fmtNumber = (v: number) => v.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+    const fmtMoney = (v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M ₽` : `${v.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₽`;
+
+    if (!stats) {
+        return (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <div><h2 className="text-2xl font-bold text-white">Статистика</h2><p className="text-gray-400 mt-1">Детальная аналитика проекта</p></div>
+                <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-blue-500" size={32} /></div>
+            </div>
+        );
+    }
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1166,11 +1267,11 @@ const StatisticsPage = () => {
             
             {/* Core Metrics */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-                <StatCard title="Всего пользователей" value="45,231" change="+12%" icon={Users} color="blue" />
-                <StatCard title="Активных подписок" value="12,040" icon={CheckCircle} color="green" />
-                <StatCard title="Платежей сегодня" value="145" icon={CreditCard} color="indigo" />
-                <StatCard title="Открытых тикетов" value="12" icon={MessageSquare} color="orange" />
-                <StatCard title="Баланс клиентов" value="1.2M ₽" icon={Wallet} color="gray" />
+                <StatCard title="Всего пользователей" value={fmtNumber(stats.totalUsers)} icon={Users} color="blue" />
+                <StatCard title="Активных подписок" value={fmtNumber(stats.activeSubscriptions)} icon={CheckCircle} color="green" />
+                <StatCard title="Платежей сегодня" value={fmtNumber(stats.paymentsToday)} icon={CreditCard} color="indigo" />
+                <StatCard title="Открытых тикетов" value={fmtNumber(stats.openTickets)} icon={MessageSquare} color="orange" />
+                <StatCard title="Баланс клиентов" value={fmtMoney(stats.clientsBalance)} icon={Wallet} color="gray" />
             </div>
 
             {/* Revenue & Quick Metrics */}
@@ -1180,18 +1281,18 @@ const StatisticsPage = () => {
                         <h3 className="text-lg font-bold text-gray-200">Выручка по дням</h3>
                         <select className="bg-gray-800 border-gray-700 text-gray-300 text-sm rounded-lg p-2 focus:ring-blue-500 focus:border-blue-500"><option>За 30 дней</option><option>За неделю</option><option>За год</option></select>
                     </div>
-                    <SmoothAreaChart color="#10b981" label="Выручка (₽)" data={revenueData} height={250} id="revChart" />
+                    <SmoothAreaChart color="#10b981" label="Выручка (₽)" data={stats.revenueData || []} height={250} id="revChart" />
                 </div>
                 <div className="space-y-4">
                     <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 flex flex-col justify-center h-[calc(50%-8px)]">
                         <p className="text-gray-400 text-sm">В среднем в день</p>
-                        <div className="text-2xl font-bold text-white mt-1">42,500 ₽</div>
-                        <div className="text-green-400 text-xs mt-2 flex items-center"><ArrowUpRight size={12} className="mr-1" /> Растет (+5%)</div>
+                        <div className="text-2xl font-bold text-white mt-1">{fmtMoney(stats.avgDaily || 0)}</div>
+                        <div className="text-green-400 text-xs mt-2 flex items-center"><ArrowUpRight size={12} className="mr-1" /> Растет</div>
                     </div>
                     <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 flex flex-col justify-center h-[calc(50%-8px)]">
                         <p className="text-gray-400 text-sm">Лучший день</p>
-                        <div className="text-2xl font-bold text-white mt-1">125,000 ₽</div>
-                        <div className="text-gray-500 text-xs mt-2">12 Октября</div>
+                        <div className="text-2xl font-bold text-white mt-1">{fmtMoney(stats.bestDayValue || 0)}</div>
+                        <div className="text-gray-500 text-xs mt-2">{stats.bestDayDate || ''}</div>
                     </div>
                 </div>
             </div>
@@ -1200,11 +1301,11 @@ const StatisticsPage = () => {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
                     <h3 className="text-lg font-bold text-gray-200 mb-6">Распределение пользователей</h3>
-                    <PieChartComponent data={userDistData} colors={['#3b82f6', '#ef4444', '#a855f7', '#f97316', '#6b7280']} />
+                    <PieChartComponent data={stats.userDistData || []} colors={['#3b82f6', '#ef4444', '#a855f7', '#f97316', '#6b7280']} />
                 </div>
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
                      <h3 className="text-lg font-bold text-gray-200 mb-6">Способы оплаты</h3>
-                     <PieChartComponent data={paymentMethodsData} colors={['#10b981', '#3b82f6', '#f59e0b', '#6b7280']} />
+                     <PieChartComponent data={stats.paymentMethodsData || []} colors={['#10b981', '#3b82f6', '#f59e0b', '#6b7280']} />
                 </div>
             </div>
 
@@ -1213,26 +1314,25 @@ const StatisticsPage = () => {
                  <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
                      <h3 className="text-lg font-bold text-gray-200 mb-4">Подписки</h3>
                      <div className="space-y-4">
-                         <div className="flex justify-between"><span className="text-gray-400">Всего подписок</span><span className="text-white font-bold">12,040</span></div>
-                         <div className="flex justify-between"><span className="text-gray-400">Платные</span><span className="text-green-400 font-bold">8,500</span></div>
-                         <div className="flex justify-between"><span className="text-gray-400">Куплено за неделю</span><span className="text-blue-400 font-bold">+450</span></div>
+                         <div className="flex justify-between"><span className="text-gray-400">Всего подписок</span><span className="text-white font-bold">{fmtNumber(stats.totalSubscriptions)}</span></div>
+                         <div className="flex justify-between"><span className="text-gray-400">Платные</span><span className="text-green-400 font-bold">{fmtNumber(stats.paidSubscriptions)}</span></div>
+                         <div className="flex justify-between"><span className="text-gray-400">Куплено за неделю</span><span className="text-blue-400 font-bold">+{fmtNumber(stats.boughtThisWeek)}</span></div>
                      </div>
                  </div>
                  <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
                      <h3 className="text-lg font-bold text-gray-200 mb-4">Конверсия Trial {'>'} Paid</h3>
                      <div className="flex items-end gap-2 mb-2">
-                         <span className="text-4xl font-bold text-white">18.5%</span>
-                         <span className="text-green-400 text-sm mb-1.5">+2.1%</span>
+                         <span className="text-4xl font-bold text-white">{stats.conversionRate?.toFixed(1) || 0}%</span>
                      </div>
                      <p className="text-xs text-gray-500">Пользователей переходят на платный тариф после пробного периода.</p>
-                     <div className="w-full bg-gray-800 h-2 rounded-full mt-4"><div className="bg-green-500 h-2 rounded-full" style={{width: '18.5%'}}></div></div>
+                     <div className="w-full bg-gray-800 h-2 rounded-full mt-4"><div className="bg-green-500 h-2 rounded-full" style={{width: `${Math.min(stats.conversionRate || 0, 100)}%`}}></div></div>
                  </div>
                  <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
                      <h3 className="text-lg font-bold text-gray-200 mb-4">Рефералы</h3>
                      <div className="space-y-4">
-                         <div className="flex justify-between"><span className="text-gray-400">Всего приглашено</span><span className="text-white font-bold">15,400</span></div>
-                         <div className="flex justify-between"><span className="text-gray-400">Партнеров</span><span className="text-white font-bold">1,200</span></div>
-                         <div className="flex justify-between"><span className="text-gray-400">Выплачено</span><span className="text-white font-bold">450k ₽</span></div>
+                         <div className="flex justify-between"><span className="text-gray-400">Всего приглашено</span><span className="text-white font-bold">{fmtNumber(stats.totalInvited)}</span></div>
+                         <div className="flex justify-between"><span className="text-gray-400">Партнеров</span><span className="text-white font-bold">{fmtNumber(stats.partners)}</span></div>
+                         <div className="flex justify-between"><span className="text-gray-400">Выплачено</span><span className="text-white font-bold">{fmtMoney(stats.totalPaid)}</span></div>
                      </div>
                  </div>
             </div>
@@ -1243,11 +1343,11 @@ const StatisticsPage = () => {
                 <table className="w-full text-left">
                     <thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase"><th className="px-6 py-4">Пользователь</th><th className="px-6 py-4">Пригласил</th><th className="px-6 py-4">Заработал</th></tr></thead>
                     <tbody className="divide-y divide-gray-800">
-                        {topReferrers.map(r => (
+                        {(stats.topReferrers || []).map((r: any) => (
                             <tr key={r.id}>
                                 <td className="px-6 py-4 text-white font-medium flex items-center"><Trophy size={16} className={`mr-2 ${r.id === 1 ? 'text-yellow-400' : r.id === 2 ? 'text-gray-400' : 'text-orange-400'}`}/> {r.name}</td>
                                 <td className="px-6 py-4 text-gray-300">{r.count} чел.</td>
-                                <td className="px-6 py-4 text-green-400 font-bold">{r.earned} ₽</td>
+                                <td className="px-6 py-4 text-green-400 font-bold">{r.earned.toLocaleString('ru-RU')} ₽</td>
                             </tr>
                         ))}
                     </tbody>
@@ -1368,21 +1468,213 @@ interface MailingPageProps {
 }
 
 const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
-    const stats = { totalSent: 154300, delivered: 98.5, clicks: 12400, lastCampaign: "Новогодняя скидка" };
-    const handleSend = () => { onToast('Рассылка', 'Сообщения поставлены в очередь', 'success'); };
-    
+    const [stats, setStats] = useState<{
+        totalSent: number;
+        delivered: number;
+        clicks: number;
+        lastCampaign: string | null;
+        lastCampaignDate: string | null;
+    } | null>(null);
+    const [history, setHistory] = useState<any[]>([]);
+    const [message, setMessage] = useState('');
+    const [buttonType, setButtonType] = useState<string>('');
+    const [buttonValue, setButtonValue] = useState('');
+    const [targetUsers, setTargetUsers] = useState('all');
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const data = await apiFetch('/panel/mailing/stats');
+                if (data) {
+                    setStats(data);
+                }
+            } catch (e) {
+                console.error('Failed to load mailing stats', e);
+            }
+        })();
+
+        (async () => {
+            try {
+                const data = await apiFetch('/panel/mailing/history');
+                if (Array.isArray(data)) {
+                    setHistory(data);
+                }
+            } catch (e) {
+                console.error('Failed to load mailing history', e);
+            }
+        })();
+    }, []);
+
+    const handleSend = async () => {
+        if (!message.trim()) {
+            onToast('Ошибка', 'Введите текст сообщения', 'error');
+            return;
+        }
+        try {
+            const payload: any = {
+                message,
+                target_users: targetUsers,
+                title: message.substring(0, 50)
+            };
+            if (buttonType && buttonValue) {
+                payload.button_type = buttonType;
+                payload.button_value = buttonValue;
+            }
+            await apiFetch('/panel/mailing', {
+                method: 'POST',
+                body: JSON.stringify(payload),
+            });
+            onToast('Рассылка', 'Сообщения поставлены в очередь', 'success');
+            setMessage('');
+            setButtonType('');
+            setButtonValue('');
+            // Обновляем статистику и историю
+            const statsData = await apiFetch('/panel/mailing/stats');
+            if (statsData) setStats(statsData);
+            const historyData = await apiFetch('/panel/mailing/history');
+            if (Array.isArray(historyData)) setHistory(historyData);
+        } catch (e: any) {
+            onToast('Ошибка', 'Не удалось отправить рассылку', 'error');
+        }
+    };
+
+    const buttonTypes = [
+        { value: '', label: 'Без кнопки' },
+        { value: 'external_link', label: 'Сторонняя ссылка' },
+        { value: 'open_miniapp', label: 'Открыть мини-приложение' },
+        { value: 'activate_promo', label: 'Активировать промокод' },
+        { value: 'add_balance', label: 'Добавить баланс' },
+    ];
+
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4"><div><h2 className="text-2xl font-bold text-white">Рассылка</h2><p className="text-gray-400 mt-1">Массовая отправка сообщений пользователям</p></div></div>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6"><StatCard title="Отправлено сообщений" value={stats.totalSent.toLocaleString()} icon={Send} color="blue" /><StatCard title="Доставляемость" value={stats.delivered + '%'} icon={CheckCircle} color="green" /><StatCard title="Переходов" value={stats.clicks.toLocaleString()} icon={MousePointer} color="purple" /><StatCard title="Последняя кампания" value="Promo #12" subValue="Вчера" icon={Clock} color="orange" /></div>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <StatCard 
+                    title="Отправлено сообщений" 
+                    value={stats ? stats.totalSent.toLocaleString('ru-RU') : '—'} 
+                    icon={Send} 
+                    color="blue" 
+                />
+                <StatCard 
+                    title="Доставляемость" 
+                    value={stats ? stats.delivered.toFixed(1) + '%' : '—'} 
+                    icon={CheckCircle} 
+                    color="green" 
+                />
+                <StatCard 
+                    title="Переходов" 
+                    value={stats ? stats.clicks.toLocaleString('ru-RU') : '—'} 
+                    icon={MousePointer} 
+                    color="purple" 
+                />
+                <StatCard 
+                    title="Последняя кампания" 
+                    value={stats?.lastCampaign || '—'} 
+                    subValue={stats?.lastCampaignDate ? new Date(stats.lastCampaignDate).toLocaleDateString('ru-RU') : ''} 
+                    icon={Clock} 
+                    color="orange" 
+                />
+            </div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2 space-y-6">
                     <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
                         <h3 className="text-lg font-bold text-gray-200 mb-4 flex items-center"><Plus size={20} className="mr-2 text-blue-500"/> Новая рассылка</h3>
-                        <div className="space-y-4"><div><label className="text-sm text-gray-400 mb-1.5 block">Текст сообщения</label><textarea className="w-full bg-gray-950 border border-gray-700 rounded-xl p-4 text-white focus:outline-none focus:border-blue-500 h-32 resize-none" placeholder="Введите текст рассылки... Поддерживается Markdown"></textarea></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label className="text-sm text-gray-400 mb-1.5 block">Изображение</label><div className="border-2 border-dashed border-gray-700 rounded-xl h-12 flex items-center justify-center text-gray-500 hover:border-gray-500 hover:text-gray-300 transition-colors cursor-pointer"><ImageIcon size={18} className="mr-2"/> Загрузить фото</div></div><div><label className="text-sm text-gray-400 mb-1.5 block">Кнопки (JSON)</label><input type="text" className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-blue-500" placeholder='[{"text": "Купить", "url": "..."}]' /></div></div><div><label className="text-sm text-gray-400 mb-2 block">Получатели</label><div className="flex flex-wrap gap-2">{['Все пользователи', 'Активные', 'Истекшие', 'Без подписки', 'English Users'].map(filter => (<button key={filter} className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm text-gray-300 border border-gray-700 transition-colors">{filter}</button>))}</div></div><div className="pt-2 flex gap-4"><button onClick={handleSend} className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg shadow-blue-900/20 transition-colors flex justify-center items-center"><Send size={18} className="mr-2" /> Отправить</button><button className="px-6 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl font-medium transition-colors">Предпросмотр</button></div></div>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-sm text-gray-400 mb-1.5 block">Текст сообщения</label>
+                                <textarea 
+                                    value={message}
+                                    onChange={(e) => setMessage(e.target.value)}
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl p-4 text-white focus:outline-none focus:border-blue-500 h-32 resize-none" 
+                                    placeholder="Введите текст рассылки... Поддерживается Markdown"
+                                />
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-sm text-gray-400 mb-1.5 block">Тип кнопки</label>
+                                    <select 
+                                        value={buttonType}
+                                        onChange={(e) => setButtonType(e.target.value)}
+                                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-blue-500"
+                                    >
+                                        {buttonTypes.map(bt => (
+                                            <option key={bt.value} value={bt.value}>{bt.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="text-sm text-gray-400 mb-1.5 block">Значение</label>
+                                    <input 
+                                        type="text" 
+                                        value={buttonValue}
+                                        onChange={(e) => setButtonValue(e.target.value)}
+                                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-blue-500" 
+                                        placeholder={buttonType === 'external_link' ? 'https://example.com' : buttonType === 'activate_promo' ? 'PROMOCODE' : buttonType === 'add_balance' ? '100' : 'Введите значение...'}
+                                        disabled={!buttonType}
+                                    />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="text-sm text-gray-400 mb-2 block">Получатели</label>
+                                <div className="flex flex-wrap gap-2">
+                                    {['all', 'active', 'expired', 'no_subscription'].map(filter => (
+                                        <button 
+                                            key={filter}
+                                            onClick={() => setTargetUsers(filter)}
+                                            className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                                                targetUsers === filter 
+                                                    ? 'bg-blue-600 text-white border-blue-500' 
+                                                    : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700'
+                                            }`}
+                                        >
+                                            {filter === 'all' ? 'Все пользователи' : 
+                                             filter === 'active' ? 'Активные' :
+                                             filter === 'expired' ? 'Истекшие' : 'Без подписки'}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="pt-2 flex gap-4">
+                                <button 
+                                    onClick={handleSend} 
+                                    className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg shadow-blue-900/20 transition-colors flex justify-center items-center"
+                                >
+                                    <Send size={18} className="mr-2" /> Отправить
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden flex flex-col max-h-[600px]"><div className="p-5 border-b border-gray-800"><h3 className="text-lg font-bold text-gray-200">История</h3></div><div className="overflow-y-auto custom-scrollbar flex-1">{[1,2,3,4,5].map((i) => (<div key={i} className="p-4 border-b border-gray-800 hover:bg-gray-800/30 transition-colors"><div className="flex justify-between items-start mb-1"><span className="font-medium text-white line-clamp-1">🔥 Скидка 50% на все тарифы только сегодня!</span><span className="text-xs text-gray-500 whitespace-nowrap ml-2">10.09.25</span></div><div className="flex justify-between items-center mt-2"><span className="text-xs bg-green-500/10 text-green-400 px-2 py-0.5 rounded border border-green-500/20">Отправлено</span><span className="text-xs text-gray-400 flex items-center"><Users size={12} className="mr-1"/> 45,200</span></div></div>))}</div></div>
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden flex flex-col max-h-[600px]">
+                    <div className="p-5 border-b border-gray-800"><h3 className="text-lg font-bold text-gray-200">История</h3></div>
+                    <div className="overflow-y-auto custom-scrollbar flex-1">
+                        {history.length === 0 ? (
+                            <div className="p-4 text-center text-gray-500">Нет рассылок</div>
+                        ) : (
+                            history.map((item) => (
+                                <div key={item.id} className="p-4 border-b border-gray-800 hover:bg-gray-800/30 transition-colors">
+                                    <div className="flex justify-between items-start mb-1">
+                                        <span className="font-medium text-white line-clamp-1">{item.title || 'Без названия'}</span>
+                                        <span className="text-xs text-gray-500 whitespace-nowrap ml-2">{item.date}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center mt-2">
+                                        <span className={`text-xs px-2 py-0.5 rounded border ${
+                                            item.status === 'Completed' 
+                                                ? 'bg-green-500/10 text-green-400 border-green-500/20' 
+                                                : 'bg-gray-500/10 text-gray-400 border-gray-500/20'
+                                        }`}>
+                                            {item.status === 'Completed' ? 'Отправлено' : item.status}
+                                        </span>
+                                        <span className="text-xs text-gray-400 flex items-center">
+                                            <Users size={12} className="mr-1"/> {item.sent_count || 0}
+                                        </span>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
             </div>
         </div>
     );
