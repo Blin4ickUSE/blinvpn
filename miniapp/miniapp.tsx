@@ -234,8 +234,9 @@ const PRIVACY_POLICY_TEXT = `
 **5.1.** Пользователь осознает, что использование сети Интернет связано с рисками. Сервис не несет ответственности за перехват данных, произошедший на устройстве Пользователя или на узлах сети, не контролируемых Сервисом.
 `;
 
-const VPN_PLANS: Plan[] = [
-  { id: 'trial', duration: 'Пробный тариф', price: 0, highlight: true, days: 3, isTrial: true },
+// VPN планы загружаются из API, но оставляем дефолтные для fallback
+const VPN_PLANS_DEFAULT: Plan[] = [
+  { id: 'trial', duration: 'Пробный тариф', price: 0, highlight: true, days: 1, isTrial: true }, // 24 часа = 1 день
   { id: '1m', duration: '1 месяц', price: 99, highlight: false, days: 30 },
   { id: '3m', duration: '3 месяца', price: 249, highlight: false, days: 90 },
   { id: '6m', duration: '6 месяцев', price: 449, highlight: false, days: 180 },
@@ -243,54 +244,26 @@ const VPN_PLANS: Plan[] = [
   { id: '2y', duration: '2 ГОДА', price: 1199, highlight: false, days: 730 },
 ];
 
-const PRESET_AMOUNTS = [100, 250, 500, 1000, 2000, 5000];
+const PRESET_AMOUNTS = [50, 100, 250, 500, 1000, 2000, 5000, 10000, 50000, 100000]; // Минимум 50₽, максимум 100,000₽
 
 /**
- * Рассчитывает цену за whitelist bypass по прогрессивной системе:
- * 5-9 ГБ: 30₽/ГБ
- * 10-14 ГБ: 25₽/ГБ
- * 15-24 ГБ: 20₽/ГБ
- * 25-50 ГБ: 15₽/ГБ
+ * Рассчитывает цену за whitelist bypass: абонентская плата (100₽) + 15₽/ГБ
+ * Диапазон: 5-500 ГБ
  */
-function calculateWhitelistPrice(gb: number): number {
+function calculateWhitelistPrice(gb: number, subscriptionFee: number = 100, pricePerGb: number = 15): number {
   if (gb < 5) gb = 5;
-  if (gb > 50) gb = 50;
+  if (gb > 500) gb = 500;
   
-  let total = 0;
-  
-  // 5-9 ГБ: 30₽/ГБ
-  if (gb >= 5) {
-    const tier1 = Math.min(gb, 9) - 4; // ГБ с 5 по 9 (включительно)
-    total += tier1 * 30;
-  }
-  
-  // 10-14 ГБ: 25₽/ГБ
-  if (gb >= 10) {
-    const tier2 = Math.min(gb, 14) - 9; // ГБ с 10 по 14 (включительно)
-    total += tier2 * 25;
-  }
-  
-  // 15-24 ГБ: 20₽/ГБ
-  if (gb >= 15) {
-    const tier3 = Math.min(gb, 24) - 14; // ГБ с 15 по 24 (включительно)
-    total += tier3 * 20;
-  }
-  
-  // 25-50 ГБ: 15₽/ГБ
-  if (gb >= 25) {
-    const tier4 = gb - 24; // ГБ с 25 по 50 (включительно)
-    total += tier4 * 15;
-  }
-  
-  return total;
+  return subscriptionFee + (gb * pricePerGb);
 }
 
-const PAYMENT_METHODS: PaymentMethod[] = [
+// Платежные методы загружаются из API с комиссиями, но оставляем дефолтные
+const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
   { 
     id: 'card', 
     name: 'Банковская карта | Platega', 
     icon: '💳', 
-    feePercent: 5 
+    feePercent: 0  // Без комиссии по умолчанию
   },
   { 
     id: 'sbp', 
@@ -298,8 +271,8 @@ const PAYMENT_METHODS: PaymentMethod[] = [
     icon: '⚡', 
     feePercent: 0, 
     variants: [
-      { id: 'platega', name: 'Platega | Комиссия 4%', feePercent: 4 },
-      { id: 'yookassa', name: 'YooKassa | Комиссия 5%', feePercent: 5 }
+      { id: 'platega', name: 'Platega', feePercent: 0 },
+      { id: 'yookassa', name: 'YooKassa', feePercent: 0 }
     ]
   },
   { 
@@ -626,6 +599,7 @@ export default function App() {
   const [customAmount, setCustomAmount] = useState('');
   const [selectedMethod, setSelectedMethod] = useState<string | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<string | null>(null);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>(PAYMENT_METHODS_DEFAULT);
   
   // Pending Purchase
   const [pendingAction, setPendingAction] = useState<{ type: string, payload: any } | null>(null);
@@ -993,7 +967,7 @@ export default function App() {
 
   const getPaymentTotal = () => {
     if (!selectedMethod) return topupAmount;
-    const method = PAYMENT_METHODS.find(m => m.id === selectedMethod);
+    const method = paymentMethods.find(m => m.id === selectedMethod);
     if (!method) return topupAmount;
     
     let fee = method.feePercent;
@@ -1165,7 +1139,7 @@ export default function App() {
             {wizardType === 'vpn' ? (
                 <div className="space-y-3">
                     <p className="text-slate-400 text-sm mb-2">Выберите период защиты для <b>{PLATFORMS.find(p => p.id === wizardPlatform)?.name}</b>:</p>
-                    {VPN_PLANS.filter(plan => !plan.isTrial || !isTrialUsed).map(plan => (
+                    {(VPN_PLANS_DEFAULT || []).filter(plan => !plan.isTrial || !isTrialUsed).map(plan => (
                         <div 
                             key={plan.id}
                             onClick={() => { setWizardPlan(plan); setWizardStep(3); }}
@@ -1200,14 +1174,14 @@ export default function App() {
                                 value={whitelistGB}
                                 onChange={(e) => {
                                     let val = Number(e.target.value);
-                                    if (val > 50) val = 50;
+                                    if (val > 500) val = 500;
                                     if (val < 0) val = 0;
                                     setWhitelistGB(val);
                                 }}
                                 onBlur={() => {
                                   let val = whitelistGB;
                                   if(val < 5) val = 5; 
-                                  if(val > 50) val = 50;
+                                  if(val > 500) val = 500;
                                   setWhitelistGB(val);
                                 }}
                                 className="w-20 bg-slate-900 border border-slate-600 rounded-lg p-2 text-right text-white font-bold focus:border-blue-500 outline-none"
@@ -1220,7 +1194,7 @@ export default function App() {
                             <input 
                                 type="range" 
                                 min="5" 
-                                max="50"
+                                max="500"
                                 value={whitelistGB}
                                 onChange={(e) => setWhitelistGB(Number(e.target.value))}
                                 className="absolute w-full h-2 bg-transparent appearance-none cursor-pointer z-20 opacity-0"
@@ -1228,43 +1202,68 @@ export default function App() {
                             <div className="w-full h-2 bg-slate-700 rounded-lg absolute overflow-hidden">
                                 <div 
                                     className="h-full bg-blue-600 rounded-lg" 
-                                    style={{ width: `${((whitelistGB - 5) / 45) * 100}%` }}
+                                    style={{ width: `${((whitelistGB - 5) / 495) * 100}%` }}
                                 ></div>
                             </div>
                             <div 
                                 className="w-6 h-6 bg-white rounded-full shadow-lg absolute pointer-events-none transition-transform"
-                                style={{ left: `calc(${((whitelistGB - 5) / 45) * 100}% - 12px)` }}
+                                style={{ left: `calc(${((whitelistGB - 5) / 495) * 100}% - 12px)` }}
                             ></div>
                         </div>
 
                         <div className="flex justify-between text-xs text-slate-500 mt-2">
                         <span>5 ГБ</span> 
-                        <span>50 ГБ</span>
+                        <span>500 ГБ</span>
                         </div>
                     </div>
 
-                    <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4 flex justify-between items-center">
-                        <div>
-                        <div className="text-slate-400 text-sm">Стоимость</div>
-                        <div className="text-xs text-slate-500">Прогрессивная цена</div>
+                    <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4">
+                        <div className="flex justify-between items-center mb-2">
+                            <div>
+                                <div className="text-slate-400 text-sm">Абонентская плата</div>
+                            </div>
+                            <div className="text-lg font-bold text-white">100 ₽</div>
                         </div>
-                        <div className="text-2xl font-bold text-white">{calculateWhitelistPrice(whitelistGB)} ₽</div>
+                        <div className="flex justify-between items-center mb-2">
+                            <div>
+                                <div className="text-slate-400 text-sm">Трафик ({whitelistGB} ГБ × 15₽)</div>
+                            </div>
+                            <div className="text-lg font-bold text-white">{whitelistGB * 15} ₽</div>
+                        </div>
+                        <div className="border-t border-slate-700 pt-2 flex justify-between items-center">
+                            <div>
+                                <div className="text-slate-300 text-sm font-bold">Итого</div>
+                            </div>
+                            <div className="text-2xl font-bold text-white">{calculateWhitelistPrice(whitelistGB)} ₽</div>
+                        </div>
                     </div>
 
                     <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-6">
                         <div className="text-sm text-slate-400 mb-3 font-bold">Дополнительные функции:</div>
-                        <label className="flex items-center justify-between cursor-pointer">
+                        <label className={`flex items-center justify-between cursor-pointer ${selectedPaymentMethod === 'crypto' ? 'opacity-50 cursor-not-allowed' : ''}`}>
                             <div className="flex items-center gap-3">
                                 <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${addVpnToWhitelist ? 'bg-blue-600 border-blue-600' : 'border-slate-500'}`}>
                                     {addVpnToWhitelist && <CheckCircle size={14} className="text-white" />}
                                 </div>
                                 <div>
-                                    <div className="text-white font-medium">Обычный VPN</div>
-                                    <div className="text-xs text-slate-500 line-through">99 ₽/мес</div>
+                                    <div className="text-white font-medium">Автоплатежи</div>
+                                    <div className="text-xs text-slate-500">Рекуррентные платежи</div>
+                                    {selectedPaymentMethod === 'crypto' && (
+                                        <div className="text-xs text-red-400 mt-1">Недоступно при оплате криптовалютой</div>
+                                    )}
                                 </div>
                             </div>
-                            <div className="text-green-400 font-bold">+79 ₽/мес</div>
-                            <input type="checkbox" className="hidden" checked={addVpnToWhitelist} onChange={() => setAddVpnToWhitelist(!addVpnToWhitelist)} />
+                            <input 
+                                type="checkbox" 
+                                className="hidden" 
+                                checked={addVpnToWhitelist} 
+                                onChange={() => {
+                                    if (selectedPaymentMethod !== 'crypto') {
+                                        setAddVpnToWhitelist(!addVpnToWhitelist);
+                                    }
+                                }}
+                                disabled={selectedPaymentMethod === 'crypto'}
+                            />
                         </label>
                     </div>
 
@@ -1290,30 +1289,37 @@ export default function App() {
                 <div className="text-slate-400 mb-2">Вы подключаете</div>
                 <div className="text-2xl font-bold text-white mb-6">
                     {wizardType === 'vpn' ? wizardPlan?.duration : `Whitelist (${whitelistGB} ГБ)`}
-                    {wizardType !== 'vpn' && addVpnToWhitelist && <div className="text-sm text-blue-400 mt-1">+ VPN</div>}
+                    {wizardType !== 'vpn' && addVpnToWhitelist && <div className="text-sm text-blue-400 mt-1">+ Автоплатежи</div>}
                 </div>
                 
                 <div className="border-t border-slate-700 pt-4 flex justify-between items-center">
                     <span className="text-slate-400">Стоимость:</span>
                     <span className="text-xl font-bold text-white">
-                        {wizardType === 'vpn' ? wizardPlan?.price : (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0))} ₽
+                        {wizardType === 'vpn' ? wizardPlan?.price : calculateWhitelistPrice(whitelistGB)} ₽
                     </span>
+                </div>
+            </div>
+
+            <div className="bg-yellow-500/10 border border-yellow-500/20 p-4 rounded-xl mb-6 flex gap-3 items-start">
+                <AlertTriangle className="text-yellow-500 shrink-0 mt-0.5" size={18} />
+                <div className="text-yellow-400 text-xs leading-relaxed">
+                    <strong>Важно:</strong> 1 подписка может использоваться только на 1 устройстве. При попытке использовать на нескольких устройствах одновременно подписка будет заблокирована.
                 </div>
             </div>
 
             <div className="mt-auto">
                 <div className="flex justify-between items-center mb-4 text-sm">
                     <span className="text-slate-400">Ваш баланс:</span>
-                    <span className={`${balance < (wizardType === 'vpn' ? (wizardPlan?.price || 0) : (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0))) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
+                    <span className={`${balance < (wizardType === 'vpn' ? (wizardPlan?.price || 0) : calculateWhitelistPrice(whitelistGB)) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
                 </div>
 
-                {balance >= (wizardType === 'vpn' ? (wizardPlan?.price || 0) : (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0))) ? (
+                {balance >= (wizardType === 'vpn' ? (wizardPlan?.price || 0) : calculateWhitelistPrice(whitelistGB)) ? (
                     <Button onClick={wizardActivate} variant={wizardType === 'vpn' && wizardPlan?.isTrial ? 'trial' : 'primary'}>
                         {wizardType === 'vpn' && wizardPlan?.isTrial ? 'Активировать бесплатно' : 'Оплатить и подключить'}
                     </Button>
                 ) : (
                     <Button onClick={() => {
-                        const price = wizardType === 'vpn' ? (wizardPlan?.price || 0) : (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0));
+                        const price = wizardType === 'vpn' ? (wizardPlan?.price || 0) : calculateWhitelistPrice(whitelistGB);
                         setPendingAction({
                             type: 'wizard',
                             payload: { wizardType, wizardPlan, whitelistGB, addVpnToWhitelist, price, name: wizardType === 'vpn' ? `VPN (${wizardPlan?.duration})` : `Whitelist (${whitelistGB} ГБ)` }
@@ -1322,7 +1328,7 @@ export default function App() {
                         setTopupStep(1); 
                         setView('topup');
                     }}>
-                        Пополнить на {(wizardType === 'vpn' ? (wizardPlan?.price || 0) : (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0))) - balance} ₽
+                        Пополнить на {(wizardType === 'vpn' ? (wizardPlan?.price || 0) : calculateWhitelistPrice(whitelistGB)) - balance} ₽
                     </Button>
                 )}
             </div>
@@ -1497,8 +1503,18 @@ export default function App() {
           
           <div className="mt-6 mb-4">
             <Button 
-              disabled={!topupAmount || topupAmount <= 0}
-              onClick={() => setTopupStep(2)}
+              disabled={!topupAmount || topupAmount < 50 || topupAmount > 100000}
+              onClick={() => {
+                if (topupAmount < 50) {
+                  alert('Минимальная сумма пополнения: 50₽');
+                  return;
+                }
+                if (topupAmount > 100000) {
+                  alert('Максимальная сумма пополнения: 100,000₽');
+                  return;
+                }
+                setTopupStep(2);
+              }}
             >
               Далее <ArrowRight size={18} />
             </Button>
@@ -1518,7 +1534,7 @@ export default function App() {
                   <div className="flex justify-between items-center text-sm">
                      <span className="text-slate-400">Комиссия ({
                         (() => {
-                            const method = PAYMENT_METHODS.find(m => m.id === selectedMethod);
+                            const method = paymentMethods.find(m => m.id === selectedMethod);
                             if (method?.variants && selectedVariant) {
                                 return method.variants.find(v => v.id === selectedVariant)?.feePercent;
                             }
@@ -1539,7 +1555,7 @@ export default function App() {
                 </div>
              </div>
 
-            {PAYMENT_METHODS.map(method => (
+            {paymentMethods.map(method => (
               <div key={method.id} className="relative">
                   <button
                     onClick={() => { 
@@ -2001,12 +2017,12 @@ export default function App() {
         <label className="text-xs text-slate-500 mb-2 block uppercase font-bold tracking-wider">Ваша ссылка</label>
         <div className="flex gap-2">
           <div className="bg-slate-900 flex-1 p-3 rounded-lg text-slate-300 font-mono text-sm truncate">
-            {telegramId ? `https://t.me/${BOT_USERNAME_MINI}?start=ref=${telegramId}` : 'Загрузка...'}
+            {telegramId ? `https://t.me/${BOT_USERNAME_MINI}/app?startapp=${telegramId}` : 'Загрузка...'}
           </div>
           <button
             onClick={() => {
               if (telegramId) {
-                handleCopy(`https://t.me/${BOT_USERNAME_MINI}?start=ref=${telegramId}`);
+                handleCopy(`https://t.me/${BOT_USERNAME_MINI}/app?startapp=${telegramId}`);
               }
             }}
             className="bg-blue-600 px-4 rounded-lg text-white hover:bg-blue-500"
