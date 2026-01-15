@@ -873,6 +873,60 @@ def get_stats_charts():
     finally:
         conn.close()
 
+
+@app.route('/api/panel/stats/summary', methods=['GET'])
+@require_auth
+def get_stats_summary():
+    """
+    Сводные метрики для дашборда:
+    - total_users: всего пользователей
+    - active_keys: активных ключей
+    - monthly_revenue: сумма депозитов за текущий месяц
+    - open_tickets: открытых тикетов
+    """
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    from datetime import datetime
+
+    try:
+        # Всего пользователей
+        cursor.execute("SELECT COUNT(*) AS cnt FROM users")
+        total_users = cursor.fetchone()["cnt"] or 0
+
+        # Активные ключи
+        cursor.execute("SELECT COUNT(*) AS cnt FROM vpn_keys WHERE status = 'Active'")
+        active_keys = cursor.fetchone()["cnt"] or 0
+
+        # Доход за текущий месяц (по депозитам)
+        now = datetime.utcnow()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        cursor.execute(
+            """
+            SELECT COALESCE(SUM(amount), 0) AS total
+            FROM transactions
+            WHERE type = 'deposit'
+              AND created_at >= ?
+              AND status = 'Success'
+            """,
+            (month_start.isoformat(),),
+        )
+        monthly_revenue = float(cursor.fetchone()["total"] or 0)
+
+        # Открытые тикеты
+        cursor.execute("SELECT COUNT(*) AS cnt FROM tickets WHERE status = 'Open'")
+        open_tickets = cursor.fetchone()["cnt"] or 0
+
+        return jsonify(
+            {
+                "total_users": total_users,
+                "active_keys": active_keys,
+                "monthly_revenue": monthly_revenue,
+                "open_tickets": open_tickets,
+            }
+        )
+    finally:
+        conn.close()
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('API_PORT', 8000)))
 
