@@ -610,7 +610,9 @@ export default function App() {
   const [wizardPlan, setWizardPlan] = useState<Plan | null>(null);
   const [wizardType, setWizardType] = useState<'vpn' | 'whitelist'>('vpn'); 
   const [whitelistGB, setWhitelistGB] = useState(10); 
-  const [addVpnToWhitelist, setAddVpnToWhitelist] = useState(false);
+  const [useAutoPay, setUseAutoPay] = useState(false);
+  const [savedPaymentMethods, setSavedPaymentMethods] = useState<any[]>([]);
+  const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<string | null>(null);
 
   // Buy Device State (Legacy for whitelist tab)
   const [buyTab, setBuyTab] = useState<'vpn' | 'whitelist'>('vpn'); 
@@ -852,23 +854,20 @@ export default function App() {
   const buyWhitelist = () => {
     let finalGB = whitelistGB;
     if (finalGB < 5) finalGB = 5;
-    else if (finalGB > 50) finalGB = 50;
+    else if (finalGB > 500) finalGB = 500;
 
     if (finalGB !== whitelistGB) setWhitelistGB(finalGB);
 
     let price = calculateWhitelistPrice(finalGB);
     let name = `Whitelist (${finalGB} ГБ)`;
     
-    if (addVpnToWhitelist) {
-        price += 79;
-        name += " + VPN";
-    }
+    // Автоплатежи не добавляют цену, они просто сохраняют способ оплаты
 
     if (balance < price) {
       if(window.confirm(`Недостаточно средств. Стоимость: ${price} ₽. Ваш баланс: ${balance} ₽. Пополнить баланс?`)) {
         setPendingAction({
             type: 'legacy_whitelist',
-            payload: { whitelistGB: finalGB, addVpnToWhitelist, price, name } 
+            payload: { whitelistGB: finalGB, useAutoPay, selectedPaymentMethodId, price, name } 
         });
         setTopupAmount(price - balance);
         setTopupStep(1); 
@@ -912,17 +911,13 @@ export default function App() {
     } else {
         price = calculateWhitelistPrice(whitelistGB);
         name = `Whitelist (${whitelistGB} ГБ)`;
-        if (addVpnToWhitelist) {
-            price += 79;
-            name += " + VPN";
-        }
     }
 
     if (balance < price) {
       if(window.confirm(`Недостаточно средств. Пополнить баланс на ${price - balance} ₽?`)) {
         setPendingAction({
             type: 'wizard',
-            payload: { wizardType, wizardPlan, whitelistGB, addVpnToWhitelist, price, name }
+            payload: { wizardType, wizardPlan, whitelistGB, useAutoPay, selectedPaymentMethodId, price, name }
         });
         setTopupAmount(price - balance);
         setTopupStep(1); 
@@ -936,6 +931,37 @@ export default function App() {
       alert('Пользователь не загружен, попробуйте позже');
       return;
     }
+    // Если используется автоплатеж для whitelist, создаем платеж с сохраненным способом оплаты
+    if (wizardType === 'whitelist' && useAutoPay && selectedPaymentMethodId) {
+      miniApiFetch('/subscription/create', {
+        method: 'POST',
+        body: JSON.stringify({
+          user_id: userId,
+          days: 30,
+          type: 'whitelist',
+          whitelist_gb: whitelistGB,
+          use_auto_pay: true,
+          payment_method_id: selectedPaymentMethodId,
+          price: price,
+        }),
+      }).then(() => {
+        setBalance(prev => prev - price);
+        const newDevice = { 
+          id: Date.now(), 
+          name: name, 
+          type: wizardPlatform, 
+          added: new Date().toLocaleDateString('ru-RU') 
+        };
+        setDevices(prev => [...prev, newDevice]);
+        addHistoryItem('buy_dev', name, -price);
+        setWizardStep(4);
+      }).catch(e => {
+        console.error('Failed to create subscription with auto pay', e);
+        alert('Ошибка создания подписки с автоплатежом');
+      });
+      return;
+    }
+    
     miniApiFetch('/subscription/create', {
       method: 'POST',
       body: JSON.stringify({
@@ -943,7 +969,6 @@ export default function App() {
         days: wizardType === 'vpn' ? wizardPlan?.days : 30,
         type: wizardType,
         whitelist_gb: wizardType === 'whitelist' ? whitelistGB : undefined,
-        add_vpn: wizardType === 'whitelist' ? addVpnToWhitelist : false,
         price: price,
       }),
     })
@@ -1239,32 +1264,84 @@ export default function App() {
                     </div>
 
                     <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-6">
-                        <div className="text-sm text-slate-400 mb-3 font-bold">Дополнительные функции:</div>
-                        <label className={`flex items-center justify-between cursor-pointer ${selectedPaymentMethod === 'crypto' ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                            <div className="flex items-center gap-3">
-                                <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${addVpnToWhitelist ? 'bg-blue-600 border-blue-600' : 'border-slate-500'}`}>
-                                    {addVpnToWhitelist && <CheckCircle size={14} className="text-white" />}
-                                </div>
-                                <div>
-                                    <div className="text-white font-medium">Автоплатежи</div>
-                                    <div className="text-xs text-slate-500">Рекуррентные платежи</div>
-                                    {selectedPaymentMethod === 'crypto' && (
-                                        <div className="text-xs text-red-400 mt-1">Недоступно при оплате криптовалютой</div>
-                                    )}
-                                </div>
+                        <div className="text-sm text-slate-400 mb-3 font-bold">Автоплатежи:</div>
+                        {selectedPaymentMethod === 'crypto' ? (
+                            <div className="text-xs text-red-400 p-2 bg-red-500/10 rounded-lg border border-red-500/20">
+                                Автоплатежи недоступны при оплате криптовалютой
                             </div>
-                            <input 
-                                type="checkbox" 
-                                className="hidden" 
-                                checked={addVpnToWhitelist} 
-                                onChange={() => {
-                                    if (selectedPaymentMethod !== 'crypto') {
-                                        setAddVpnToWhitelist(!addVpnToWhitelist);
-                                    }
-                                }}
-                                disabled={selectedPaymentMethod === 'crypto'}
-                            />
-                        </label>
+                        ) : (
+                            <>
+                                {savedPaymentMethods.length > 0 && (
+                                    <div className="mb-3 space-y-2">
+                                        {savedPaymentMethods.map((method) => (
+                                            <div key={method.id} className="flex items-center justify-between p-3 bg-slate-900 rounded-lg border border-slate-700">
+                                                <div className="flex items-center gap-3">
+                                                    <input
+                                                        type="radio"
+                                                        name="saved_payment"
+                                                        checked={selectedPaymentMethodId === method.payment_method_id}
+                                                        onChange={() => {
+                                                            setSelectedPaymentMethodId(method.payment_method_id);
+                                                            setUseAutoPay(true);
+                                                        }}
+                                                        className="w-4 h-4 text-blue-600"
+                                                    />
+                                                    <div>
+                                                        <div className="text-white font-medium">
+                                                            {method.card_brand || 'Карта'} *{method.card_last4 || '****'}
+                                                        </div>
+                                                        <div className="text-xs text-slate-500">Сохраненная карта</div>
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    onClick={async (e) => {
+                                                        e.stopPropagation();
+                                                        if (window.confirm('Удалить сохраненную карту?')) {
+                                                            try {
+                                                                await miniApiFetch(`/user/payment-methods/${method.id}?telegram_id=${telegramId}`, {
+                                                                    method: 'DELETE'
+                                                                });
+                                                                setSavedPaymentMethods(prev => prev.filter(m => m.id !== method.id));
+                                                                if (selectedPaymentMethodId === method.payment_method_id) {
+                                                                    setSelectedPaymentMethodId(null);
+                                                                    setUseAutoPay(false);
+                                                                }
+                                                            } catch (e) {
+                                                                console.error('Failed to delete payment method', e);
+                                                            }
+                                                        }
+                                                    }}
+                                                    className="text-red-400 hover:text-red-300 p-1"
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                <label className="flex items-center justify-between cursor-pointer">
+                                    <div className="flex items-center gap-3">
+                                        <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${useAutoPay && !selectedPaymentMethodId ? 'bg-blue-600 border-blue-600' : 'border-slate-500'}`}>
+                                            {useAutoPay && !selectedPaymentMethodId && <CheckCircle size={14} className="text-white" />}
+                                        </div>
+                                        <div>
+                                            <div className="text-white font-medium">Сохранить карту для автоплатежей</div>
+                                            <div className="text-xs text-slate-500">При следующей оплате карта будет сохранена</div>
+                                        </div>
+                                    </div>
+                                    <input 
+                                        type="checkbox" 
+                                        className="hidden" 
+                                        checked={useAutoPay && !selectedPaymentMethodId} 
+                                        onChange={() => {
+                                            if (!selectedPaymentMethodId) {
+                                                setUseAutoPay(!useAutoPay);
+                                            }
+                                        }}
+                                    />
+                                </label>
+                            </>
+                        )}
                     </div>
 
                     <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
@@ -1289,7 +1366,7 @@ export default function App() {
                 <div className="text-slate-400 mb-2">Вы подключаете</div>
                 <div className="text-2xl font-bold text-white mb-6">
                     {wizardType === 'vpn' ? wizardPlan?.duration : `Whitelist (${whitelistGB} ГБ)`}
-                    {wizardType !== 'vpn' && addVpnToWhitelist && <div className="text-sm text-blue-400 mt-1">+ Автоплатежи</div>}
+                    {wizardType !== 'vpn' && useAutoPay && <div className="text-sm text-blue-400 mt-1">+ Автоплатежи</div>}
                 </div>
                 
                 <div className="border-t border-slate-700 pt-4 flex justify-between items-center">
@@ -1322,7 +1399,7 @@ export default function App() {
                         const price = wizardType === 'vpn' ? (wizardPlan?.price || 0) : calculateWhitelistPrice(whitelistGB);
                         setPendingAction({
                             type: 'wizard',
-                            payload: { wizardType, wizardPlan, whitelistGB, addVpnToWhitelist, price, name: wizardType === 'vpn' ? `VPN (${wizardPlan?.duration})` : `Whitelist (${whitelistGB} ГБ)` }
+                            payload: { wizardType, wizardPlan, whitelistGB, useAutoPay, selectedPaymentMethodId, price, name: wizardType === 'vpn' ? `VPN (${wizardPlan?.duration})` : `Whitelist (${whitelistGB} ГБ)` }
                         });
                         setTopupAmount(price - balance);
                         setTopupStep(1); 
@@ -1618,6 +1695,9 @@ export default function App() {
                   if (selectedMethod === 'crypto') methodKey = 'heleket';
                   if (selectedMethod === 'sbp' && selectedVariant === 'platega') methodKey = 'platega';
 
+                  // Проверяем, нужно ли сохранить способ оплаты (только для YooKassa, не для крипты)
+                  const savePaymentMethod = selectedMethod !== 'crypto' && useAutoPay && !selectedPaymentMethodId;
+                  
                   const res = await miniApiFetch('/payment/create', {
                     method: 'POST',
                     body: JSON.stringify({
@@ -1625,8 +1705,18 @@ export default function App() {
                       amount: total,
                       method: methodKey,
                       provider: selectedVariant,
+                      save_payment_method: savePaymentMethod
                     }),
                   });
+
+                  // Если способ оплаты сохранен, обновляем список
+                  if (res.payment_method_id && res.payment_method_saved) {
+                    // Перезагружаем список сохраненных способов оплаты
+                    const methods = await miniApiFetch(`/user/payment-methods?telegram_id=${telegramId}`);
+                    if (Array.isArray(methods)) {
+                      setSavedPaymentMethods(methods);
+                    }
+                  }
 
                   const payUrl = res.confirmation_url || res.payment_url;
                   if (payUrl) {
@@ -1692,14 +1782,14 @@ export default function App() {
                     value={whitelistGB}
                     onChange={(e) => {
                         let val = Number(e.target.value);
-                        if (val > 50) val = 50;
+                        if (val > 500) val = 500;
                         if (val < 0) val = 0;
                         setWhitelistGB(val);
                     }}
                     onBlur={() => {
                       let val = whitelistGB;
                       if (val < 5) val = 5;
-                      if (val > 50) val = 50;
+                      if (val > 500) val = 500;
                       setWhitelistGB(val);
                     }}
                     className="w-20 bg-slate-900 border border-slate-600 rounded-lg p-2 text-right text-white font-bold focus:border-blue-500 outline-none"
@@ -1712,7 +1802,7 @@ export default function App() {
                 <input 
                     type="range" 
                     min="5" 
-                    max="50" 
+                    max="500" 
                     value={whitelistGB}
                     onChange={(e) => setWhitelistGB(Number(e.target.value))}
                     className="absolute w-full h-2 bg-transparent appearance-none cursor-pointer z-20 opacity-0"
@@ -1720,18 +1810,18 @@ export default function App() {
                 <div className="w-full h-2 bg-slate-700 rounded-lg absolute overflow-hidden">
                     <div 
                         className="h-full bg-blue-600 rounded-lg" 
-                        style={{ width: `${((whitelistGB - 5) / 45) * 100}%` }}
+                        style={{ width: `${((whitelistGB - 5) / 495) * 100}%` }}
                     ></div>
                 </div>
                 <div 
                     className="w-6 h-6 bg-white rounded-full shadow-lg absolute pointer-events-none transition-transform"
-                    style={{ left: `calc(${((whitelistGB - 5) / 45) * 100}% - 12px)` }}
+                    style={{ left: `calc(${((whitelistGB - 5) / 495) * 100}% - 12px)` }}
                 ></div>
             </div>
 
             <div className="flex justify-between text-xs text-slate-500 mt-2">
               <span>5 ГБ</span>
-              <span>50 ГБ</span>
+              <span>500 ГБ</span>
             </div>
           </div>
 
@@ -1744,20 +1834,29 @@ export default function App() {
           </div>
 
           <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-6">
-             <div className="text-sm text-slate-400 mb-3 font-bold">Дополнительные функции:</div>
-             <label className="flex items-center justify-between cursor-pointer">
-                <div className="flex items-center gap-3">
-                    <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${addVpnToWhitelist ? 'bg-blue-600 border-blue-600' : 'border-slate-500'}`}>
-                        {addVpnToWhitelist && <CheckCircle size={14} className="text-white" />}
-                    </div>
-                    <div>
-                        <div className="text-white font-medium">Обычный VPN</div>
-                        <div className="text-xs text-slate-500 line-through">99 ₽/мес</div>
-                    </div>
-                </div>
-                <div className="text-green-400 font-bold">+79 ₽/мес</div>
-                <input type="checkbox" className="hidden" checked={addVpnToWhitelist} onChange={() => setAddVpnToWhitelist(!addVpnToWhitelist)} />
-             </label>
+             <div className="text-sm text-slate-400 mb-3 font-bold">Автоплатежи:</div>
+             {selectedPaymentMethod === 'crypto' ? (
+                 <div className="text-xs text-red-400 p-2 bg-red-500/10 rounded-lg border border-red-500/20">
+                     Автоплатежи недоступны при оплате криптовалютой
+                 </div>
+             ) : (
+                 <label className="flex items-center justify-between cursor-pointer">
+                     <div className="flex items-center gap-3">
+                         <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${useAutoPay && !selectedPaymentMethodId ? 'bg-blue-600 border-blue-600' : 'border-slate-500'}`}>
+                             {useAutoPay && !selectedPaymentMethodId && <CheckCircle size={14} className="text-white" />}
+                         </div>
+                         <div>
+                             <div className="text-white font-medium">Сохранить карту для автоплатежей</div>
+                             <div className="text-xs text-slate-500">Рекуррентные платежи</div>
+                         </div>
+                     </div>
+                     <input type="checkbox" className="hidden" checked={useAutoPay && !selectedPaymentMethodId} onChange={() => {
+                         if (!selectedPaymentMethodId) {
+                             setUseAutoPay(!useAutoPay);
+                         }
+                     }} />
+                 </label>
+             )}
           </div>
 
           <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
@@ -1770,19 +1869,19 @@ export default function App() {
           <div className="mt-auto pb-4 pt-4 border-t border-slate-800">
              <div className="flex justify-between items-center mb-4 text-sm">
                <span className="text-slate-400">Ваш баланс:</span>
-               <span className={`${balance < (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0)) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
+               <span className={`${balance < calculateWhitelistPrice(whitelistGB) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
              </div>
              <Button 
                 onClick={buyWhitelist}
-                variant={balance < (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0)) ? "secondary" : "primary"}
+                variant={balance < calculateWhitelistPrice(whitelistGB) ? "secondary" : "primary"}
              >
-                {balance < (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0))
+                {balance < calculateWhitelistPrice(whitelistGB)
                     ? "Недостаточно средств" 
-                    : `Купить за ${calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0)} ₽`
+                    : `Купить за ${calculateWhitelistPrice(whitelistGB)} ₽`
                 }
              </Button>
-             {balance < (calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0)) && (
-               <button onClick={() => { setTopupAmount((calculateWhitelistPrice(whitelistGB) + (addVpnToWhitelist ? 79 : 0)) - balance); setTopupStep(1); setView('topup'); }} className="w-full mt-3 text-blue-500 text-sm font-medium hover:underline">
+             {balance < calculateWhitelistPrice(whitelistGB) && (
+               <button onClick={() => { setTopupAmount(calculateWhitelistPrice(whitelistGB) - balance); setTopupStep(1); setView('topup'); }} className="w-full mt-3 text-blue-500 text-sm font-medium hover:underline">
                  Пополнить баланс
                </button>
              )}
