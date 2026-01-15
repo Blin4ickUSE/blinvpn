@@ -27,7 +27,37 @@ def yookassa_webhook():
             metadata = object_data.get('metadata', {})
             user_id = metadata.get('user_id')
             
+            # Проверяем, сохранен ли способ оплаты для рекуррентных платежей
+            payment_method = object_data.get('payment_method', {})
+            payment_method_id = payment_method.get('id')
+            payment_method_saved = payment_method.get('saved', False)
+            
             if user_id:
+                # Сохраняем способ оплаты, если он был сохранен
+                if payment_method_saved and payment_method_id:
+                    conn = database.get_db_connection()
+                    cursor = conn.cursor()
+                    try:
+                        card_info = payment_method.get('card', {})
+                        cursor.execute("""
+                            INSERT OR REPLACE INTO saved_payment_methods 
+                            (user_id, payment_provider, payment_method_id, payment_method_type, 
+                             card_last4, card_brand, is_active)
+                            VALUES (?, 'YooKassa', ?, ?, ?, ?, 1)
+                        """, (
+                            int(user_id),
+                            payment_method_id,
+                            payment_method.get('type', 'bank_card'),
+                            card_info.get('last4'),
+                            card_info.get('card_type')
+                        ))
+                        conn.commit()
+                        logger.info(f"Сохранен способ оплаты {payment_method_id} для пользователя {user_id}")
+                    except Exception as e:
+                        logger.error(f"Ошибка сохранения способа оплаты: {e}")
+                    finally:
+                        conn.close()
+                
                 # Обновляем баланс пользователя
                 database.update_user_balance(int(user_id), amount)
                 
@@ -44,7 +74,10 @@ def yookassa_webhook():
                 # Уведомление в бот
                 user = database.get_user_by_id(int(user_id))
                 if user:
-                    core.send_notification_to_user(user['telegram_id'], f"Баланс пополнен на {amount}₽ через YooKassa")
+                    msg = f"Баланс пополнен на {amount}₽ через YooKassa"
+                    if payment_method_saved:
+                        msg += "\n💳 Способ оплаты сохранен для автоплатежей"
+                    core.send_notification_to_user(user['telegram_id'], msg)
         
         return jsonify({'status': 'ok'}), 200
     except Exception as e:
@@ -125,4 +158,3 @@ def platega_webhook():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('WEBHOOK_PORT', 5000)))
-
