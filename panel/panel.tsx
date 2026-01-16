@@ -292,9 +292,10 @@ interface SmoothAreaChartProps {
     label: string;
     height?: number;
     id?: string;
+    labels?: string[]; // Даты для отображения в tooltip
 }
 
-const SmoothAreaChart: React.FC<SmoothAreaChartProps> = ({ color, data, label, height = 200, id }) => {
+const SmoothAreaChart: React.FC<SmoothAreaChartProps> = ({ color, data, label, height = 200, id, labels = [] }) => {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const uniqueId = id || Math.random().toString(36).substr(2, 9);
   
@@ -349,7 +350,8 @@ const SmoothAreaChart: React.FC<SmoothAreaChartProps> = ({ color, data, label, h
           className="absolute -top-10 transform -translate-x-1/2 bg-gray-800 text-white text-xs py-1.5 px-3 rounded-lg shadow-xl border border-gray-700 whitespace-nowrap z-20 pointer-events-none transition-all duration-75"
           style={{ left: `${points[activeIndex].x}%` }}
         >
-            <span className="font-bold">{points[activeIndex].val}</span>
+            {labels[activeIndex] && <span className="text-gray-400 mr-2">{labels[activeIndex]}</span>}
+            <span className="font-bold">{points[activeIndex].val.toLocaleString('ru-RU')}</span>
             <span className="text-gray-400 ml-1">{label}</span>
         </div>
       )}
@@ -470,6 +472,8 @@ const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConf
       'REDUCE_SUB': { title: 'Уменьшить срок', label: 'Количество дней', icon: Clock, color: 'text-orange-400', type: 'number' },
       'SET_TRAFFIC': { title: 'Лимит трафика', label: 'Макс. трафик (GB)', icon: Database, color: 'text-purple-400', type: 'number' },
       'SET_DEVICES': { title: 'Лимит устройств', label: 'Кол-во устройств', icon: Smartphone, color: 'text-indigo-400', type: 'number' },
+      'BAN': { title: 'Заблокировать', label: 'Причина бана', icon: Ban, color: 'text-red-400', type: 'text' },
+      'UNBAN': { title: 'Разблокировать', label: '', icon: CheckCircle, color: 'text-green-400', type: 'text' },
       'MASS_ADD_DAYS': { title: 'Всем добавить дни', label: 'Количество дней', icon: Calendar, color: 'text-blue-500', type: 'number' },
       'MASS_ADD_BALANCE': { title: 'Всем начислить', label: 'Сумма (₽)', icon: DollarSign, color: 'text-green-500', type: 'number' },
       'MASS_BAN': { title: 'Забанить всех', label: 'Причина', icon: Ban, color: 'text-red-500', type: 'text' },
@@ -773,9 +777,31 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
   const devicesPercent = (user.devices / user.maxDevices) * 100;
 
   const handleAction = (type: string) => setActiveAction(type);
-  const confirmAction = (value: string, notify: boolean) => { 
-      onToast('Успешно', `Действие выполнено. Значение: ${value}`, 'success');
+  const confirmAction = async (value: string, notify: boolean) => { 
+      try {
+        await apiFetch(`/panel/users/${user.id}/action`, {
+          method: 'POST',
+          body: JSON.stringify({ action: activeAction, value, notify })
+        });
+        onToast('Успешно', `Действие выполнено`, 'success');
+      } catch (e) {
+        onToast('Ошибка', 'Не удалось выполнить действие', 'error');
+      }
       setActiveAction(null); 
+  };
+  
+  const handleNotify = async () => {
+    const message = prompt('Введите сообщение для отправки пользователю:');
+    if (!message) return;
+    try {
+      await apiFetch(`/panel/users/${user.id}/action`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'NOTIFY', value: message, notify: true })
+      });
+      onToast('Успешно', 'Уведомление отправлено', 'success');
+    } catch (e) {
+      onToast('Ошибка', 'Не удалось отправить уведомление', 'error');
+    }
   };
 
   return (
@@ -829,6 +855,24 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
                     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                          <h3 className="text-lg font-bold text-gray-200 flex items-center mb-4"><Edit2 size={18} className="mr-2 text-gray-400"/> Редактирование профиля</h3>
                          <div className="space-y-3"><div><label className="text-xs text-gray-500 block mb-1">Username</label><input type="text" defaultValue={user.username} className="w-full bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 focus:ring-1 focus:ring-blue-500 outline-none" /></div><div><label className="text-xs text-gray-500 block mb-1">Имя</label><input type="text" defaultValue={user.name} className="w-full bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 focus:ring-1 focus:ring-blue-500 outline-none" /></div><div className="flex gap-4 pt-2"><label className="flex items-center text-sm text-gray-300 cursor-pointer"><input type="checkbox" defaultChecked={user.firstDeposit} className="form-checkbox bg-gray-800 border-gray-700 rounded text-blue-500 mr-2"/>Первое пополнение</label><label className="flex items-center text-sm text-gray-300 cursor-pointer"><input type="checkbox" defaultChecked={user.wasPaid} className="form-checkbox bg-gray-800 border-gray-700 rounded text-blue-500 mr-2"/>Была подписка</label></div><button onClick={() => onToast('Успех', 'Данные пользователя сохранены', 'success')} className="w-full mt-4 bg-blue-600 hover:bg-blue-500 text-white py-2 rounded-lg text-sm font-bold transition-colors shadow-lg shadow-blue-900/20">Сохранить изменения</button></div>
+                    </div>
+                    {/* Действия с пользователем */}
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                         <h3 className="text-lg font-bold text-gray-200 flex items-center mb-4"><Bell size={18} className="mr-2 text-yellow-400"/> Действия</h3>
+                         <div className="grid grid-cols-1 gap-3">
+                           <button onClick={handleNotify} className="bg-yellow-600/10 hover:bg-yellow-600/20 text-yellow-400 border border-yellow-600/20 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-center">
+                             <Bell size={16} className="mr-2" /> Уведомить пользователя
+                           </button>
+                           {user.status !== 'Banned' ? (
+                             <button onClick={() => handleAction('BAN')} className="bg-red-600/10 hover:bg-red-600/20 text-red-400 border border-red-600/20 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-center">
+                               <Ban size={16} className="mr-2" /> Заблокировать
+                             </button>
+                           ) : (
+                             <button onClick={() => handleAction('UNBAN')} className="bg-green-600/10 hover:bg-green-600/20 text-green-400 border border-green-600/20 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-center">
+                               <CheckCircle size={16} className="mr-2" /> Разблокировать
+                             </button>
+                           )}
+                         </div>
                     </div>
                 </div>
             </div>
@@ -1008,6 +1052,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [promos, setPromos] = useState<Promo[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [totalRevenue, setTotalRevenue] = useState<number>(0);
   
   // UI States
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
@@ -1188,6 +1233,16 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             { id: 3, name: '1 Год', price: 1500, oldPrice: 2400, duration: 365, isHit: false, description: 'Максимальная выгода' },
           ]);
         }
+        
+        // Загрузка общей выручки для хедера
+        try {
+          const summaryData = await apiFetch('/panel/stats/summary');
+          if (!cancelled && summaryData) {
+            setTotalRevenue(summaryData.total_revenue || summaryData.monthly_revenue || 0);
+          }
+        } catch (e) {
+          console.error('Failed to load revenue stats', e);
+        }
       } catch (e) {
         console.error('Initial panel data load failed', e);
         if (!cancelled) {
@@ -1222,7 +1277,18 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       {selectedUser && (<UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} onToast={addToast} />)}
       {isCreateKeyOpen && (<CreateKeyModal onClose={() => setIsCreateKeyOpen(false)} users={users} onToast={addToast} />)}
       {editingKey && (<KeyEditModal keyItem={editingKey} onClose={() => setEditingKey(null)} onSave={handleUpdateKey} onDelete={handleDeleteKey} />)}
-      {massActionType && <UserActionModal type={massActionType} onClose={() => setMassActionType(null)} onConfirm={(val) => { addToast('Массовое действие', `Задача запущена. Параметр: ${val}`, 'success'); setMassActionType(null); }} />}
+      {massActionType && <UserActionModal type={massActionType} onClose={() => setMassActionType(null)} onConfirm={async (val, notify) => { 
+        try {
+          await apiFetch('/panel/users/mass-action', {
+            method: 'POST',
+            body: JSON.stringify({ action: massActionType, value: val, notify })
+          });
+          addToast('Массовое действие', 'Задача успешно выполнена', 'success'); 
+        } catch (e) {
+          addToast('Ошибка', 'Не удалось выполнить действие', 'error');
+        }
+        setMassActionType(null); 
+      }} />}
 
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-gray-900 border-r border-gray-800 transform transition-transform duration-300 ease-in-out ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 overflow-y-auto custom-scrollbar`}>
         <div className="p-6 border-b border-gray-800 hidden md:block"><h1 className="text-2xl font-bold text-blue-500 tracking-wider">BlinVPN</h1><p className="text-xs text-gray-500 mt-1">Admin Panel v3.2</p></div>
@@ -1246,7 +1312,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <div className="bg-gray-900/50 backdrop-blur-md border-b border-gray-800 sticky top-0 z-30 px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3 md:gap-4"><button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="md:hidden text-gray-300 hover:text-white p-1">{isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}</button><div className="relative group cursor-pointer"><div className="flex items-center space-x-2 bg-green-500/10 border border-green-500/20 px-3 py-1.5 rounded-full"><div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div><span className="text-green-400 text-sm font-medium">Работает</span></div></div></div>
           <div className="flex items-center gap-3">
-            <div className="flex items-center bg-blue-600/10 border border-blue-500/20 px-3 py-1.5 rounded-lg hover:bg-blue-600/20 transition-colors cursor-pointer"><DollarSign size={16} className="text-blue-400 mr-2" /><div className="text-lg font-bold text-blue-400 leading-none">1,240,500 ₽</div></div>
+            <div className="flex items-center bg-blue-600/10 border border-blue-500/20 px-3 py-1.5 rounded-lg hover:bg-blue-600/20 transition-colors cursor-pointer"><DollarSign size={16} className="text-blue-400 mr-2" /><div className="text-lg font-bold text-blue-400 leading-none">{totalRevenue.toLocaleString('ru-RU')} ₽</div></div>
             <button onClick={onLogout} className="flex items-center bg-red-600/10 border border-red-500/20 px-3 py-1.5 rounded-lg hover:bg-red-600/20 transition-colors text-red-400 text-sm font-medium"><Lock size={14} className="mr-1.5" />Выход</button>
           </div>
         </div>
@@ -1348,14 +1414,14 @@ const Dashboard = () => {
                         <h3 className="text-lg font-semibold text-gray-200 flex items-center"><TrendingUp className="w-5 h-5 mr-2 text-blue-500" />Динамика новых пользователей</h3>
                         <span className="text-xs font-medium text-green-400 bg-green-500/10 px-2 py-1 rounded">{labels.at(-1) || ''}</span>
                     </div>
-                    <SmoothAreaChart color="#3b82f6" label="Пользователей" data={usersData} id="chart1" />
+                    <SmoothAreaChart color="#3b82f6" label="Пользователей" data={usersData} id="chart1" labels={labels} />
                 </div>
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-sm">
                     <div className="flex justify-between items-center mb-6">
                         <h3 className="text-lg font-semibold text-gray-200 flex items-center"><Key className="w-5 h-5 mr-2 text-purple-500" />Новые ключи</h3>
                         <span className="text-xs font-medium text-purple-400 bg-purple-500/10 px-2 py-1 rounded">{labels.at(-1) || ''}</span>
                     </div>
-                    <SmoothAreaChart color="#a855f7" label="Ключей" data={keysData} id="chart2" />
+                    <SmoothAreaChart color="#a855f7" label="Ключей" data={keysData} id="chart2" labels={labels} />
                 </div>
             </div>
         </div>
@@ -1473,7 +1539,7 @@ const StatisticsPage = () => {
                         <h3 className="text-lg font-bold text-gray-200">Выручка по дням</h3>
                         <select className="bg-gray-800 border-gray-700 text-gray-300 text-sm rounded-lg p-2 focus:ring-blue-500 focus:border-blue-500"><option>За 30 дней</option><option>За неделю</option><option>За год</option></select>
                     </div>
-                    <SmoothAreaChart color="#10b981" label="Выручка (₽)" data={stats.revenueData || []} height={250} id="revChart" />
+                    <SmoothAreaChart color="#10b981" label="Выручка (₽)" data={stats.revenueData || []} height={250} id="revChart" labels={stats.revenueLabels || []} />
                 </div>
                 <div className="space-y-4">
                     <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 flex flex-col justify-center h-[calc(50%-8px)]">
@@ -2107,6 +2173,224 @@ interface PublicPagesProps {
     onToast: (title: string, msg: string, type: ToastType) => void;
 }
 
+// Компонент для страницы тарифных планов
+const TariffsPlansPage: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
+    const [plans, setPlans] = useState<any[]>([]);
+    const [whitelistSettings, setWhitelistSettings] = useState<any>({});
+    const [loading, setLoading] = useState(true);
+    const [editingPlan, setEditingPlan] = useState<any | null>(null);
+
+    useEffect(() => {
+        loadData();
+    }, []);
+
+    const loadData = async () => {
+        setLoading(true);
+        try {
+            const [plansRes, whitelistRes] = await Promise.all([
+                apiFetch('/panel/tariffs'),
+                apiFetch('/panel/whitelist/settings')
+            ]);
+            if (Array.isArray(plansRes)) setPlans(plansRes);
+            if (whitelistRes) setWhitelistSettings(whitelistRes);
+        } catch (e) {
+            console.error('Failed to load tariffs', e);
+        }
+        setLoading(false);
+    };
+
+    const handleSavePlan = async (plan: any) => {
+        try {
+            if (plan.id) {
+                await apiFetch(`/panel/tariffs/${plan.id}`, {
+                    method: 'PUT',
+                    body: JSON.stringify(plan)
+                });
+            } else {
+                await apiFetch('/panel/tariffs', {
+                    method: 'POST',
+                    body: JSON.stringify(plan)
+                });
+            }
+            onToast('Успех', 'Тариф сохранен', 'success');
+            loadData();
+            setEditingPlan(null);
+        } catch (e) {
+            onToast('Ошибка', 'Не удалось сохранить тариф', 'error');
+        }
+    };
+
+    const handleDeletePlan = async (id: number) => {
+        if (!confirm('Удалить тариф?')) return;
+        try {
+            await apiFetch(`/panel/tariffs/${id}`, { method: 'DELETE' });
+            onToast('Успех', 'Тариф удален', 'success');
+            loadData();
+        } catch (e) {
+            onToast('Ошибка', 'Не удалось удалить тариф', 'error');
+        }
+    };
+
+    const handleSaveWhitelist = async () => {
+        try {
+            await apiFetch('/panel/whitelist/settings', {
+                method: 'PUT',
+                body: JSON.stringify(whitelistSettings)
+            });
+            onToast('Успех', 'Настройки whitelist сохранены', 'success');
+        } catch (e) {
+            onToast('Ошибка', 'Не удалось сохранить настройки', 'error');
+        }
+    };
+
+    if (loading) {
+        return <div className="flex justify-center py-10"><Loader className="animate-spin text-blue-500" size={32} /></div>;
+    }
+
+    return (
+        <div className="space-y-6">
+            {/* VPN тарифы */}
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-lg font-bold text-white flex items-center">
+                        <Zap size={20} className="mr-2 text-blue-500" /> VPN Тарифы
+                    </h3>
+                    <button 
+                        onClick={() => setEditingPlan({ plan_type: 'vpn', name: '', price: 0, duration_days: 30 })}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium flex items-center"
+                    >
+                        <Plus size={16} className="mr-1" /> Добавить
+                    </button>
+                </div>
+                <div className="grid gap-4">
+                    {plans.filter(p => p.plan_type === 'vpn').map(plan => (
+                        <div key={plan.id} className="bg-gray-800 border border-gray-700 rounded-xl p-4 flex justify-between items-center">
+                            <div>
+                                <div className="font-bold text-white">{plan.name}</div>
+                                <div className="text-sm text-gray-400">{plan.duration_days} дней</div>
+                            </div>
+                            <div className="flex items-center gap-4">
+                                <div className="text-xl font-bold text-blue-400">{plan.price} ₽</div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setEditingPlan(plan)} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg"><Edit2 size={16} className="text-gray-300" /></button>
+                                    <button onClick={() => handleDeletePlan(plan.id)} className="p-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg"><Trash2 size={16} className="text-red-400" /></button>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                    {plans.filter(p => p.plan_type === 'vpn').length === 0 && (
+                        <div className="text-center text-gray-500 py-8">Нет VPN тарифов</div>
+                    )}
+                </div>
+            </div>
+
+            {/* Whitelist настройки */}
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                <h3 className="text-lg font-bold text-white flex items-center mb-6">
+                    <Shield size={20} className="mr-2 text-purple-500" /> Whitelist Bypass
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label className="text-sm text-gray-400 block mb-2">Абонентская плата (₽)</label>
+                        <input
+                            type="number"
+                            value={whitelistSettings.subscription_fee || 100}
+                            onChange={e => setWhitelistSettings({ ...whitelistSettings, subscription_fee: Number(e.target.value) })}
+                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-sm text-gray-400 block mb-2">Цена за ГБ (₽)</label>
+                        <input
+                            type="number"
+                            value={whitelistSettings.price_per_gb || 15}
+                            onChange={e => setWhitelistSettings({ ...whitelistSettings, price_per_gb: Number(e.target.value) })}
+                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-sm text-gray-400 block mb-2">Мин. ГБ</label>
+                        <input
+                            type="number"
+                            value={whitelistSettings.min_gb || 5}
+                            onChange={e => setWhitelistSettings({ ...whitelistSettings, min_gb: Number(e.target.value) })}
+                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-sm text-gray-400 block mb-2">Макс. ГБ</label>
+                        <input
+                            type="number"
+                            value={whitelistSettings.max_gb || 500}
+                            onChange={e => setWhitelistSettings({ ...whitelistSettings, max_gb: Number(e.target.value) })}
+                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
+                        />
+                    </div>
+                </div>
+                <button 
+                    onClick={handleSaveWhitelist}
+                    className="mt-4 px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-medium"
+                >
+                    Сохранить настройки Whitelist
+                </button>
+            </div>
+
+            {/* Модальное окно редактирования */}
+            {editingPlan && (
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+                    <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md">
+                        <h3 className="text-xl font-bold text-white mb-6">{editingPlan.id ? 'Редактировать' : 'Новый'} тариф</h3>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-sm text-gray-400 block mb-2">Название</label>
+                                <input
+                                    type="text"
+                                    value={editingPlan.name}
+                                    onChange={e => setEditingPlan({ ...editingPlan, name: e.target.value })}
+                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
+                                    placeholder="1 месяц"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm text-gray-400 block mb-2">Цена (₽)</label>
+                                <input
+                                    type="number"
+                                    value={editingPlan.price}
+                                    onChange={e => setEditingPlan({ ...editingPlan, price: Number(e.target.value) })}
+                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm text-gray-400 block mb-2">Длительность (дней)</label>
+                                <input
+                                    type="number"
+                                    value={editingPlan.duration_days}
+                                    onChange={e => setEditingPlan({ ...editingPlan, duration_days: Number(e.target.value) })}
+                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
+                                />
+                            </div>
+                        </div>
+                        <div className="flex gap-3 mt-6">
+                            <button 
+                                onClick={() => setEditingPlan(null)}
+                                className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg"
+                            >
+                                Отмена
+                            </button>
+                            <button 
+                                onClick={() => handleSavePlan(editingPlan)}
+                                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg"
+                            >
+                                Сохранить
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
 const PromocodesStats: React.FC<{ promos: Promo[] }> = ({ promos }) => {
     const [stats, setStats] = useState<{ total: number; totalUses: number; activeCount: number } | null>(null);
 
@@ -2552,6 +2836,210 @@ const TicketsPage: React.FC<TicketsPageProps> = ({ tickets, activeTicketId, setA
     );
 };
 
+// Компонент настроек подписок с загрузкой сквадов из Remnawave
+const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
+    const [squads, setSquads] = useState<any[]>([]);
+    const [selectedSquads, setSelectedSquads] = useState<string[]>([]);
+    const [trialEnabled, setTrialEnabled] = useState(true);
+    const [trialHours, setTrialHours] = useState('24');
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        loadData();
+    }, []);
+
+    const loadData = async () => {
+        setLoading(true);
+        try {
+            const squadsData = await apiFetch('/panel/remnawave/squads');
+            if (Array.isArray(squadsData)) {
+                setSquads(squadsData);
+            }
+        } catch (e) {
+            console.error('Failed to load squads from Remnawave:', e);
+            onToast('Предупреждение', 'Не удалось загрузить сквады из Remnawave', 'info');
+        }
+        setLoading(false);
+    };
+
+    const toggleSquad = (uuid: string) => {
+        setSelectedSquads(prev => 
+            prev.includes(uuid) ? prev.filter(s => s !== uuid) : [...prev, uuid]
+        );
+    };
+
+    return (
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 mb-6">
+            <h3 className="text-lg font-bold text-white mb-6 border-b border-gray-800 pb-4">Пробный период</h3>
+            <div className="space-y-6">
+                <div className="flex justify-between items-center p-4 bg-gray-950 rounded-xl border border-gray-800">
+                    <span className="text-gray-300 font-medium">Включить пробный период</span>
+                    <button onClick={() => setTrialEnabled(!trialEnabled)} className={`w-12 h-6 rounded-full p-1 transition-colors relative ${trialEnabled ? 'bg-blue-600' : 'bg-gray-700'}`}>
+                        <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${trialEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                    </button>
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-2">Длительность (часов)</label>
+                    <input 
+                        type="number" 
+                        value={trialHours}
+                        onChange={e => setTrialHours(e.target.value)}
+                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500 transition-colors" 
+                        placeholder="24" 
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-2">Доступные сквады для триала</label>
+                    {loading ? (
+                        <div className="flex items-center justify-center py-4">
+                            <Loader className="animate-spin text-blue-500" size={20} />
+                            <span className="ml-2 text-gray-400">Загрузка сквадов из Remnawave...</span>
+                        </div>
+                    ) : squads.length === 0 ? (
+                        <div className="p-4 bg-yellow-900/20 border border-yellow-500/30 rounded-xl text-yellow-400 text-sm">
+                            Сквады не найдены. Проверьте подключение к Remnawave.
+                            <button onClick={loadData} className="ml-2 underline hover:no-underline">Повторить</button>
+                        </div>
+                    ) : (
+                        <div className="flex flex-wrap gap-3">
+                            {squads.map(sq => (
+                                <label 
+                                    key={sq.uuid} 
+                                    className={`flex items-center space-x-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                                        selectedSquads.includes(sq.uuid) 
+                                            ? 'bg-blue-600/20 border-blue-500' 
+                                            : 'bg-gray-950 border-gray-700 hover:border-gray-600'
+                                    }`}
+                                    onClick={() => toggleSquad(sq.uuid)}
+                                >
+                                    <input 
+                                        type="checkbox" 
+                                        checked={selectedSquads.includes(sq.uuid)}
+                                        onChange={() => {}}
+                                        className="rounded bg-gray-800 border-gray-600 text-blue-500" 
+                                    />
+                                    <span className="text-sm text-gray-300">{sq.name}</span>
+                                    <span className="text-xs text-gray-500">({sq.members_count || 0})</span>
+                                </label>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Компонент настроек резервного копирования
+const BackupSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
+    const [backupEnabled, setBackupEnabled] = useState(false);
+    const [backupInterval, setBackupInterval] = useState('12');
+    const [lastBackup, setLastBackup] = useState<string | null>(null);
+    const [creating, setCreating] = useState(false);
+
+    useEffect(() => {
+        loadBackupStatus();
+    }, []);
+
+    const loadBackupStatus = async () => {
+        try {
+            const data = await apiFetch('/panel/backups/status');
+            if (data) {
+                setBackupEnabled(data.enabled || false);
+                setBackupInterval(data.interval_hours?.toString() || '12');
+                setLastBackup(data.last_backup || null);
+            }
+        } catch (e) {
+            console.error('Failed to load backup status', e);
+        }
+    };
+
+    const handleCreateBackup = async () => {
+        setCreating(true);
+        try {
+            await apiFetch('/panel/backups/create', { method: 'POST' });
+            onToast('Успех', 'Резервная копия создана и отправлена администратору', 'success');
+            loadBackupStatus();
+        } catch (e) {
+            onToast('Ошибка', 'Не удалось создать резервную копию', 'error');
+        }
+        setCreating(false);
+    };
+
+    const handleSaveSettings = async () => {
+        try {
+            await apiFetch('/panel/backups/settings', {
+                method: 'PUT',
+                body: JSON.stringify({ enabled: backupEnabled, interval_hours: parseInt(backupInterval) })
+            });
+            onToast('Успех', 'Настройки бекапов сохранены', 'success');
+        } catch (e) {
+            onToast('Ошибка', 'Не удалось сохранить настройки', 'error');
+        }
+    };
+
+    return (
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 mb-6">
+            <h3 className="text-lg font-bold text-white mb-6 border-b border-gray-800 pb-4">Резервное копирование</h3>
+            <div className="space-y-6">
+                <div className="flex justify-between items-center p-4 bg-gray-950 rounded-xl border border-gray-800">
+                    <div>
+                        <span className="text-gray-300 font-medium">Автоматическое резервное копирование</span>
+                        <p className="text-xs text-gray-500 mt-1">Бекапы будут создаваться автоматически и отправляться администратору</p>
+                    </div>
+                    <button onClick={() => setBackupEnabled(!backupEnabled)} className={`w-12 h-6 rounded-full p-1 transition-colors relative ${backupEnabled ? 'bg-blue-600' : 'bg-gray-700'}`}>
+                        <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${backupEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                    </button>
+                </div>
+                
+                <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-2">Частота создания бэкапов (в часах)</label>
+                    <input 
+                        type="number" 
+                        value={backupInterval}
+                        onChange={e => setBackupInterval(e.target.value)}
+                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500 transition-colors" 
+                        placeholder="12" 
+                    />
+                </div>
+
+                {lastBackup && (
+                    <div className="p-3 bg-gray-950 rounded-xl border border-gray-800">
+                        <span className="text-gray-500 text-sm">Последний бекап: </span>
+                        <span className="text-white text-sm">{new Date(lastBackup).toLocaleString('ru-RU')}</span>
+                    </div>
+                )}
+
+                <div className="p-4 bg-blue-900/20 border border-blue-500/30 rounded-xl flex items-start">
+                    <Cloud className="text-blue-400 mr-3 mt-0.5" size={20} />
+                    <div>
+                        <h4 className="text-blue-400 font-bold text-sm">Важно</h4>
+                        <p className="text-blue-300/80 text-xs mt-1">Бэкапы будут отправляться в личные сообщения администратору в виде архива базы данных.</p>
+                    </div>
+                </div>
+
+                <div className="flex gap-3">
+                    <button 
+                        onClick={handleCreateBackup}
+                        disabled={creating}
+                        className="flex-1 px-4 py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 text-white rounded-xl font-medium transition-colors flex items-center justify-center"
+                    >
+                        {creating ? <Loader className="animate-spin mr-2" size={18} /> : <Download size={18} className="mr-2" />}
+                        Создать бекап сейчас
+                    </button>
+                    <button 
+                        onClick={handleSaveSettings}
+                        className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-colors flex items-center justify-center"
+                    >
+                        <Save size={18} className="mr-2" />
+                        Сохранить настройки
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 interface SettingsPageProps {
     onToast: (title: string, msg: string, type: ToastType) => void;
 }
@@ -2671,33 +3159,19 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
                                 onChange={v => setSettings({ ...settings, REMWAVE_API_KEY: v })}
                             />
                         </Section>
-                        <Section title="Обслуживание">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="flex justify-between items-center p-4 bg-gray-950 rounded-xl border border-gray-800">
-                                    <span className="text-gray-300 font-medium">Тех. работы Бота</span>
-                                    <Toggle checked={false} onChange={() => {}} />
-                                </div>
-                                <div className="flex justify-between items-center p-4 bg-gray-950 rounded-xl border border-gray-800">
-                                    <span className="text-gray-300 font-medium">Тех. работы Мини-аппа</span>
-                                    <Toggle checked={false} onChange={() => {}} />
-                                </div>
-                                <div className="flex justify-between items-center p-4 bg-gray-950 rounded-xl border border-gray-800 col-span-1 md:col-span-2">
-                                    <div className="flex-1 mr-4">
-                                        <div className="flex justify-between mb-2">
-                                            <span className="text-gray-300 font-medium">Тех. работы Локаций</span>
-                                            <Toggle checked={true} onChange={() => {}} />
-                                        </div>
-                                        <select className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"><option>Все ноды</option><option>Germany #1</option><option>USA #2</option></select>
-                                    </div>
-                                </div>
-                                <div className="flex justify-between items-center p-4 bg-gray-950 rounded-xl border border-gray-800">
-                                    <span className="text-gray-300 font-medium">Статус-страница</span>
-                                    <Toggle checked={true} onChange={() => {}} />
-                                </div>
-                            </div>
-                        </Section>
-                        <Section title="Дополнительно">
-                            <Input label="Часовой пояс (UTC)" placeholder="+3" type="number" />
+                        <Section title="Remnawave">
+                            <Input 
+                                label="URL панели Remnawave" 
+                                placeholder="https://admka.blann.ru" 
+                                value={settings.REMWAVE_PANEL_URL || ''}
+                                onChange={v => setSettings({ ...settings, REMWAVE_PANEL_URL: v })}
+                            />
+                            <Input 
+                                label="ID группы поддержки" 
+                                placeholder="-1001234567890" 
+                                value={settings.TELEGRAM_SUPPORT_GROUP_ID || ''}
+                                onChange={v => setSettings({ ...settings, TELEGRAM_SUPPORT_GROUP_ID: v })}
+                            />
                         </Section>
                     </>
                 )}
@@ -2759,37 +3233,11 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
                 )}
 
                 {activeTab === 'subs' && (
-                    <Section title="Пробный период">
-                         <div className="flex justify-between items-center p-4 bg-gray-950 rounded-xl border border-gray-800 mb-6">
-                            <span className="text-gray-300 font-medium">Включить пробный период</span>
-                            <Toggle checked={true} onChange={() => {}} />
-                        </div>
-                        <Input label="Длительность (часов)" placeholder="24" type="number" />
-                        <div className="mt-4">
-                            <label className="block text-sm font-medium text-gray-400 mb-2">Доступные сквады для триала</label>
-                            <div className="flex flex-wrap gap-3">
-                                {['Gamers', 'Crypto', 'Streaming', 'AdultSafe'].map(sq => (
-                                    <label key={sq} className="flex items-center space-x-2 bg-gray-950 px-3 py-2 rounded-lg border border-gray-700 cursor-pointer hover:border-blue-500">
-                                        <input type="checkbox" className="rounded bg-gray-800 border-gray-600 text-blue-500" />
-                                        <span className="text-sm text-gray-300">{sq}</span>
-                                    </label>
-                                ))}
-                            </div>
-                        </div>
-                    </Section>
+                    <SubscriptionSettingsTab onToast={onToast} />
                 )}
 
                 {activeTab === 'backups' && (
-                    <Section title="Резервное копирование">
-                        <Input label="Частота создания бэкапов (в часах)" placeholder="12" type="number" />
-                        <div className="p-4 bg-blue-900/20 border border-blue-500/30 rounded-xl flex items-start mt-4">
-                             <Cloud className="text-blue-400 mr-3 mt-0.5" size={20} />
-                             <div>
-                                 <h4 className="text-blue-400 font-bold text-sm">Важно</h4>
-                                 <p className="text-blue-300/80 text-xs mt-1">Бэкапы будут отправляться в личные сообщения администратору в виде архива базы данных.</p>
-                             </div>
-                        </div>
-                    </Section>
+                    <BackupSettingsTab onToast={onToast} />
                 )}
 
                 <div className="flex justify-end pt-4">
