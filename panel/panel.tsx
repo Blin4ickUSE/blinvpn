@@ -26,8 +26,27 @@ const rawEnv: any =
   {};
 
 const API_BASE_URL: string = rawEnv.VITE_API_URL || rawEnv.REACT_APP_API_URL || '/api';
-const PANEL_SECRET: string = rawEnv.VITE_PANEL_SECRET || rawEnv.REACT_APP_PANEL_SECRET || '';
 const BOT_USERNAME: string = rawEnv.VITE_BOT_USERNAME || rawEnv.REACT_APP_BOT_USERNAME || 'blnnnbot';
+
+// Получаем секрет из localStorage (сохраняется при входе)
+function getPanelSecret(): string {
+  if (typeof window !== 'undefined') {
+    return localStorage.getItem('panel_secret') || '';
+  }
+  return '';
+}
+
+function setPanelSecret(secret: string): void {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('panel_secret', secret);
+  }
+}
+
+function clearPanelSecret(): void {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('panel_secret');
+  }
+}
 
 async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
   // Всегда используем относительный путь /api - nginx проксирует на backend
@@ -41,8 +60,9 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
 
   // Все panel-* эндпоинты требуют Bearer
   if (cleanPath.startsWith('/panel')) {
-    if (PANEL_SECRET) {
-      headers['Authorization'] = `Bearer ${PANEL_SECRET}`;
+    const secret = getPanelSecret();
+    if (secret) {
+      headers['Authorization'] = `Bearer ${secret}`;
     }
   }
 
@@ -52,6 +72,11 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
   });
 
   if (!res.ok) {
+    // Если 401 - сбрасываем авторизацию
+    if (res.status === 401) {
+      clearPanelSecret();
+      window.location.reload();
+    }
     const text = await res.text();
     throw new Error(text || `Request failed with status ${res.status}`);
   }
@@ -813,10 +838,165 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
 };
 
 // ==========================================
-// 5. MAIN COMPONENT APP
+// 5. LOGIN FORM COMPONENT
+// ==========================================
+
+function LoginForm({ onLogin }: { onLogin: (secret: string) => void }) {
+  const [secret, setSecret] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      // Проверяем секрет, делая тестовый запрос
+      const res = await fetch('/api/panel/stats/summary', {
+        headers: {
+          'Authorization': `Bearer ${secret}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (res.status === 401) {
+        setError('Неверный секретный ключ');
+        setLoading(false);
+        return;
+      }
+
+      if (res.ok) {
+        setPanelSecret(secret);
+        onLogin(secret);
+      } else {
+        setError('Ошибка подключения к серверу');
+      }
+    } catch (err) {
+      setError('Ошибка подключения к серверу');
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
+      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 w-full max-w-md shadow-2xl">
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <Lock size={32} className="text-white" />
+          </div>
+          <h1 className="text-2xl font-bold text-white">BlinVPN Panel</h1>
+          <p className="text-gray-400 mt-2">Введите секретный ключ для входа</p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-2">
+              Секретный ключ (PANEL_SECRET)
+            </label>
+            <input
+              type="password"
+              value={secret}
+              onChange={(e) => setSecret(e.target.value)}
+              className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+              placeholder="Введите ключ из .env файла"
+              required
+            />
+          </div>
+
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg text-sm">
+              {error}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading || !secret}
+            className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-blue-900/30"
+          >
+            {loading ? (
+              <span className="flex items-center justify-center">
+                <Loader size={20} className="animate-spin mr-2" />
+                Проверка...
+              </span>
+            ) : (
+              'Войти'
+            )}
+          </button>
+        </form>
+
+        <p className="text-gray-500 text-xs text-center mt-6">
+          Секретный ключ находится в файле .env<br/>
+          переменная PANEL_SECRET
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// 6. MAIN COMPONENT APP
 // ==========================================
 
 export default function App() {
+  // Auth State
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+
+  // Check auth on mount
+  useEffect(() => {
+    const secret = getPanelSecret();
+    if (!secret) {
+      setIsAuthenticated(false);
+      return;
+    }
+
+    // Verify the secret
+    fetch('/api/panel/stats/summary', {
+      headers: {
+        'Authorization': `Bearer ${secret}`,
+        'Content-Type': 'application/json'
+      }
+    }).then(res => {
+      if (res.ok) {
+        setIsAuthenticated(true);
+      } else {
+        clearPanelSecret();
+        setIsAuthenticated(false);
+      }
+    }).catch(() => {
+      setIsAuthenticated(false);
+    });
+  }, []);
+
+  const handleLogin = (secret: string) => {
+    setIsAuthenticated(true);
+  };
+
+  const handleLogout = () => {
+    clearPanelSecret();
+    setIsAuthenticated(false);
+  };
+
+  // Show loading while checking auth
+  if (isAuthenticated === null) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <Loader size={40} className="animate-spin text-blue-500" />
+      </div>
+    );
+  }
+
+  // Show login form if not authenticated
+  if (!isAuthenticated) {
+    return <LoginForm onLogin={handleLogin} />;
+  }
+
+  // Authenticated - show main app
+  return <AuthenticatedApp onLogout={handleLogout} />;
+}
+
+function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [activePage, setActivePage] = useState("Главная страница");
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -1065,7 +1245,10 @@ export default function App() {
       <main className="md:ml-64 min-h-screen transition-all duration-300">
         <div className="bg-gray-900/50 backdrop-blur-md border-b border-gray-800 sticky top-0 z-30 px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3 md:gap-4"><button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="md:hidden text-gray-300 hover:text-white p-1">{isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}</button><div className="relative group cursor-pointer"><div className="flex items-center space-x-2 bg-green-500/10 border border-green-500/20 px-3 py-1.5 rounded-full"><div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div><span className="text-green-400 text-sm font-medium">Работает</span></div></div></div>
-          <div className="flex items-center bg-blue-600/10 border border-blue-500/20 px-3 py-1.5 rounded-lg hover:bg-blue-600/20 transition-colors cursor-pointer"><DollarSign size={16} className="text-blue-400 mr-2" /><div className="text-lg font-bold text-blue-400 leading-none">1,240,500 ₽</div></div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center bg-blue-600/10 border border-blue-500/20 px-3 py-1.5 rounded-lg hover:bg-blue-600/20 transition-colors cursor-pointer"><DollarSign size={16} className="text-blue-400 mr-2" /><div className="text-lg font-bold text-blue-400 leading-none">1,240,500 ₽</div></div>
+            <button onClick={onLogout} className="flex items-center bg-red-600/10 border border-red-500/20 px-3 py-1.5 rounded-lg hover:bg-red-600/20 transition-colors text-red-400 text-sm font-medium"><Lock size={14} className="mr-1.5" />Выход</button>
+          </div>
         </div>
 
         <div className="p-4 md:p-6">
