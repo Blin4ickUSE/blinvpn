@@ -113,7 +113,7 @@ def sanitize_username(username: str, telegram_id: int) -> str:
 
 def create_user_and_subscription(telegram_id: int, username: str, days: int, 
                                  referred_by: int = None, traffic_limit: int = None,
-                                 squad_uuids: list = None) -> Optional[Dict]:
+                                 squad_uuids: list = None, plan_type: str = 'vpn') -> Optional[Dict]:
     """Создать пользователя и подписку"""
     try:
         # Создаем пользователя в БД
@@ -122,9 +122,9 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         # Санитизируем username для Remnawave
         safe_username = sanitize_username(username, telegram_id)
         
-        # Получаем сквады по умолчанию, если не указаны явно
+        # Получаем сквады по умолчанию для типа подписки, если не указаны явно
         if squad_uuids is None:
-            squad_uuids = database.get_default_squads()
+            squad_uuids = database.get_default_squads(plan_type)
         
         # Сначала проверяем существует ли пользователь в Remnawave по telegram_id
         existing_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
@@ -215,18 +215,43 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         cursor.execute("SELECT id FROM vpn_keys WHERE user_id = ? AND key_uuid = ?", (user_id, user_uuid))
         existing_key = cursor.fetchone()
         
+        vpn_key_id = None
         if existing_key:
             # Обновляем существующий ключ
+            vpn_key_id = existing_key['id']
             cursor.execute("""
                 UPDATE vpn_keys SET status = 'Active', expiry_date = ?, traffic_limit = ?, key_config = ?
                 WHERE id = ?
-            """, (expiry_date, traffic_limit, subscription_url, existing_key['id']))
+            """, (expiry_date, traffic_limit, subscription_url, vpn_key_id))
         else:
             # Создаем новый ключ
             cursor.execute("""
                 INSERT INTO vpn_keys (user_id, key_uuid, key_config, status, expiry_date, devices_limit, traffic_limit)
                 VALUES (?, ?, ?, 'Active', ?, 1, ?)
             """, (user_id, user_uuid, subscription_url, expiry_date, traffic_limit))
+            vpn_key_id = cursor.lastrowid
+        
+        # Создаем или обновляем устройство для отображения в приложении
+        device_name = f"{'Whitelist' if plan_type == 'whitelist' else 'VPN'} подписка"
+        cursor.execute("""
+            SELECT id FROM devices WHERE user_id = ? AND vpn_key_id = ?
+        """, (user_id, vpn_key_id))
+        existing_device = cursor.fetchone()
+        
+        device_id = None
+        if existing_device:
+            device_id = existing_device['id']
+            cursor.execute("""
+                UPDATE devices SET is_active = 1, name = ?
+                WHERE id = ?
+            """, (device_name, device_id))
+        else:
+            cursor.execute("""
+                INSERT INTO devices (user_id, name, platform, vpn_key_id, is_active, added_date)
+                VALUES (?, ?, 'universal', ?, 1, CURRENT_TIMESTAMP)
+            """, (user_id, device_name, vpn_key_id))
+            device_id = cursor.lastrowid
+        
         conn.commit()
         conn.close()
         
