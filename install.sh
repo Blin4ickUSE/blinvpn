@@ -84,13 +84,6 @@ resolve_domain_ip() {
             return 0
         fi
     fi
-    if command -v ping >/dev/null 2>&1; then
-        ip=$(ping -4 -c1 -W1 "$domain" 2>/dev/null | sed -n 's/.*(\([0-9.]*\)).*/\1/p' | head -n1)
-        if [[ $ip =~ $ipv4_re ]]; then
-            echo "$ip"
-            return 0
-        fi
-    fi
     return 1
 }
 
@@ -165,8 +158,6 @@ ensure_certbot_nginx() {
                 unset DEBCONF_NONINTERACTIVE_SEEN
                 return
             fi
-        else
-            log_warn "Не удалось установить python3-certbot-nginx через apt."
         fi
         unset DEBIAN_FRONTEND
         unset DEBCONF_NONINTERACTIVE_SEEN
@@ -175,11 +166,9 @@ ensure_certbot_nginx() {
     log_warn "Пробую установить Certbot (snap) с поддержкой nginx."
     if ! command -v snap >/dev/null 2>&1; then
         export DEBIAN_FRONTEND=noninteractive
-        export DEBCONF_NONINTERACTIVE_SEEN=true
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends snapd
         unset DEBIAN_FRONTEND
-        unset DEBCONF_NONINTERACTIVE_SEEN
     fi
     sudo snap install core || true
     sudo snap refresh core || true
@@ -191,33 +180,30 @@ ensure_certbot_nginx() {
         return
     fi
 
-    log_error "Плагин nginx для Certbot недоступен. Невозможно продолжить выпуск сертификата с параметром --nginx."
+    log_error "Плагин nginx для Certbot недоступен."
     exit 1
 }
 
 configure_nginx() {
     local miniapp_domain="$1"
     local panel_domain="$2"
-    local nginx_conf="$3"
-    local nginx_link="$4"
+    local ssl_port="$3"
+    local nginx_conf="$4"
+    local nginx_link="$5"
 
-    log_info "\nНастройка Nginx с SSL и проксированием"
+    log_info "\nНастройка Nginx с SSL на порту ${ssl_port}"
     sudo rm -f /etc/nginx/sites-enabled/default
     
-    # Создаем конфигурацию для хостового nginx
     sudo tee "$nginx_conf" >/dev/null <<EOF
 # Мини-приложение
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen ${ssl_port} ssl http2;
+    listen [::]:${ssl_port} ssl http2;
     server_name ${miniapp_domain};
 
     ssl_certificate /etc/letsencrypt/live/${miniapp_domain}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${miniapp_domain}/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
-    # Miniapp
     location / {
         proxy_pass http://127.0.0.1:9741;
         proxy_set_header Host \$host;
@@ -226,7 +212,6 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
-    # API
     location /api {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host \$host;
@@ -235,7 +220,6 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
-    # Webhooks
     location /yookassa {
         proxy_pass http://127.0.0.1:5000;
         proxy_set_header Host \$host;
@@ -263,16 +247,13 @@ server {
 
 # Панель управления
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen ${ssl_port} ssl http2;
+    listen [::]:${ssl_port} ssl http2;
     server_name ${panel_domain};
 
     ssl_certificate /etc/letsencrypt/live/${panel_domain}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${panel_domain}/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
-    # API - проксируем на backend
     location /api {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host \$host;
@@ -281,7 +262,6 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
-    # Panel static files
     location / {
         proxy_pass http://127.0.0.1:3001;
         proxy_set_header Host \$host;
@@ -292,9 +272,8 @@ server {
 }
 EOF
 
-    if [[ ! -L "$nginx_link" ]]; then
-        sudo ln -s "$nginx_conf" "$nginx_link"
-    fi
+    sudo rm -f "$nginx_link"
+    sudo ln -s "$nginx_conf" "$nginx_link"
     sudo nginx -t
     sudo systemctl reload nginx
     log_success "✔ Конфигурация Nginx обновлена."
@@ -304,73 +283,75 @@ create_env_file() {
     local domain="$1"
     local panel_domain="$2"
     local email="$3"
+    local ssl_port="$4"
     
     log_info "\nЗаполнение переменных окружения:"
     
+    # Telegram боты (обязательно)
     prompt "Telegram Bot Token (основной бот): " TELEGRAM_BOT_TOKEN
-    prompt "Telegram Support Bot Token: " SUPPORT_BOT_TOKEN
+    prompt "Telegram Support Bot Token (ДОЛЖЕН отличаться от основного!): " SUPPORT_BOT_TOKEN
     prompt "Telegram Admin ID: " TELEGRAM_ADMIN_ID
-    prompt "Telegram Support Group ID: " TELEGRAM_SUPPORT_GROUP_ID
+    prompt "Telegram Support Group ID (группа с форумом): " TELEGRAM_SUPPORT_GROUP_ID
     
-    prompt "Remnawave API URL (по умолчанию http://127.0.0.1:3000): " REMWAVE_API_URL_INPUT
-    REMWAVE_API_URL="${REMWAVE_API_URL_INPUT:-http://127.0.0.1:3000}"
-    prompt "Remnawave API Key: " REMWAVE_API_KEY
+    # Remnawave (панель управления VPN)
+    log_info "\n${CYAN}Remnawave - панель управления VPN:${NC}"
+    prompt "URL панели Remnawave (например https://panel.example.com): " REMWAVE_PANEL_URL_INPUT
+    REMWAVE_PANEL_URL="${REMWAVE_PANEL_URL_INPUT:-http://localhost:3000}"
+    prompt "API Token из панели Remnawave: " REMWAVE_API_KEY
     
-    prompt "YooKassa Shop ID: " YOOKASSA_SHOP_ID
-    prompt "YooKassa Secret Key: " YOOKASSA_SECRET_KEY
+    # Panel Secret - генерируем автоматически
+    PANEL_SECRET=$(openssl rand -hex 32)
+    log_info "Секретный ключ панели сгенерирован автоматически."
     
-    prompt "Heleket API URL (по умолчанию https://api.heleket.com): " HELEKET_API_URL_INPUT
-    HELEKET_API_URL="${HELEKET_API_URL_INPUT:-https://api.heleket.com}"
-    prompt "Heleket Merchant: " HELEKET_MERCHANT
-    prompt "Heleket API Key: " HELEKET_API_KEY
-    
-    prompt "Platega API URL (по умолчанию https://api.platega.com): " PLATEGA_API_URL_INPUT
-    PLATEGA_API_URL="${PLATEGA_API_URL_INPUT:-https://api.platega.com}"
-    prompt "Platega Merchant ID: " PLATEGA_MERCHANT_ID
-    prompt "Platega Secret Key: " PLATEGA_SECRET_KEY
-    
-    prompt "Panel Secret (секретный ключ для доступа к панели): " PANEL_SECRET_INPUT
-    PANEL_SECRET="${PANEL_SECRET_INPUT:-$(openssl rand -hex 32)}"
+    # Формируем URL с портом если не 443
+    local port_suffix=""
+    if [[ "$ssl_port" != "443" ]]; then
+        port_suffix=":${ssl_port}"
+    fi
     
     cat > .env <<EOF
-# Telegram
+# ===== Telegram =====
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
 SUPPORT_BOT_TOKEN=${SUPPORT_BOT_TOKEN}
 TELEGRAM_ADMIN_ID=${TELEGRAM_ADMIN_ID}
 TELEGRAM_SUPPORT_GROUP_ID=${TELEGRAM_SUPPORT_GROUP_ID}
 
-# Remnawave
-REMWAVE_API_URL=${REMWAVE_API_URL}
+# ===== Remnawave (панель управления VPN) =====
+# URL и API токен вашей Remnawave панели
+REMWAVE_PANEL_URL=${REMWAVE_PANEL_URL}
 REMWAVE_API_KEY=${REMWAVE_API_KEY}
 
+# ===== Платежные системы =====
+# Настраиваются в панели управления BlinVPN (${panel_domain}${port_suffix})
 # YooKassa
-YOOKASSA_SHOP_ID=${YOOKASSA_SHOP_ID}
-YOOKASSA_SECRET_KEY=${YOOKASSA_SECRET_KEY}
+YOOKASSA_SHOP_ID=
+YOOKASSA_SECRET_KEY=
 
-# Heleket
-HELEKET_API_URL=${HELEKET_API_URL}
-HELEKET_MERCHANT=${HELEKET_MERCHANT}
-HELEKET_API_KEY=${HELEKET_API_KEY}
+# Heleket (криптоплатежи)
+HELEKET_API_URL=https://api.heleket.com
+HELEKET_MERCHANT=
+HELEKET_API_KEY=
 
-# Platega
-PLATEGA_API_URL=${PLATEGA_API_URL}
-PLATEGA_MERCHANT_ID=${PLATEGA_MERCHANT_ID}
-PLATEGA_SECRET_KEY=${PLATEGA_SECRET_KEY}
+# Platega (альтернативные платежи)
+PLATEGA_API_URL=https://api.platega.com
+PLATEGA_MERCHANT_ID=
+PLATEGA_SECRET_KEY=
 
-# Panel
+# ===== Системные настройки =====
 PANEL_SECRET=${PANEL_SECRET}
 
 # URLs
-MINIAPP_URL=https://${domain}
-PANEL_URL=https://${panel_domain}
-WEBHOOK_URL=https://${domain}
-API_URL=https://${domain}/api
+MINIAPP_URL=https://${domain}${port_suffix}
+PANEL_URL=https://${panel_domain}${port_suffix}
+WEBHOOK_URL=https://${domain}${port_suffix}
+API_URL=https://${domain}${port_suffix}/api
 
-# Ports (внутренние, доступны только на localhost)
+# Ports (внутренние)
 API_PORT=8000
 WEBHOOK_PORT=5000
 MINIAPP_PORT=9741
 PANEL_PORT=3001
+SSL_PORT=${ssl_port}
 
 # Database
 DB_PATH=data/data.db
@@ -383,12 +364,17 @@ WEBHOOK_DOMAIN=${domain}
 EOF
 
     log_success "✔ Файл .env создан."
+    log_warn "\n⚠️  Платежные системы (YooKassa, Heleket, Platega) настраиваются"
+    log_warn "   в панели управления: https://${panel_domain}${port_suffix}"
 }
 
 REPO_URL="https://github.com/Blin4ickUSE/blinvpn.git"
 PROJECT_DIR="blinvpn"
 NGINX_CONF="/etc/nginx/sites-available/${PROJECT_DIR}.conf"
 NGINX_LINK="/etc/nginx/sites-enabled/${PROJECT_DIR}.conf"
+
+# Порт для SSL (8443 чтобы не конфликтовать с другими сервисами на 443)
+SSL_PORT=8443
 
 log_success "--- Запуск скрипта установки/обновления BlinVPN ---"
 
@@ -448,6 +434,9 @@ if [[ -z "$EMAIL" ]]; then
     exit 1
 fi
 
+prompt "SSL порт (по умолчанию 8443, введите 443 если порт свободен): " SSL_PORT_INPUT
+SSL_PORT="${SSL_PORT_INPUT:-8443}"
+
 SERVER_IP=$(get_server_ip || true)
 DOMAIN_IP=$(resolve_domain_ip "$DOMAIN" || true)
 PANEL_DOMAIN_IP=$(resolve_domain_ip "$PANEL_DOMAIN" || true)
@@ -467,7 +456,6 @@ fi
 if [[ -n "$SERVER_IP" && -n "$DOMAIN_IP" && "$SERVER_IP" != "$DOMAIN_IP" ]]; then
     log_warn "DNS-запись домена ${DOMAIN} не совпадает с IP этого сервера."
     if ! confirm "Продолжить установку? (y/n): "; then
-        log_info "Установка прервана пользователем."
         exit 1
     fi
 fi
@@ -475,27 +463,59 @@ fi
 if [[ -n "$SERVER_IP" && -n "$PANEL_DOMAIN_IP" && "$SERVER_IP" != "$PANEL_DOMAIN_IP" ]]; then
     log_warn "DNS-запись домена панели ${PANEL_DOMAIN} не совпадает с IP этого сервера."
     if ! confirm "Продолжить установку? (y/n): "; then
-        log_info "Установка прервана пользователем."
         exit 1
     fi
 fi
 
-# Открываем порты в firewall если нужно
+# Открываем порты в firewall
 if command -v ufw >/dev/null 2>&1 && sudo ufw status | grep -q 'Status: active'; then
-    log_warn "Обнаружен активный UFW. Открываем порты 80 и 443."
+    log_warn "Обнаружен активный UFW. Открываем порты 80 и ${SSL_PORT}."
     sudo ufw allow 80/tcp
-    sudo ufw allow 443/tcp
+    sudo ufw allow ${SSL_PORT}/tcp
 fi
 
-# Получаем SSL сертификаты через certbot --nginx
-# certbot сам создаст базовую nginx конфигурацию и получит сертификаты
+# Получаем SSL сертификаты
 log_info "\nПолучение SSL сертификатов..."
+
+# Создаем временную конфигурацию для получения сертификатов
+TEMP_CONF="/tmp/blinvpn_certbot.conf"
+sudo tee "$TEMP_CONF" >/dev/null <<EOF
+server {
+    listen 80;
+    server_name ${DOMAIN};
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+    location / {
+        return 301 https://\$host:${SSL_PORT}\$request_uri;
+    }
+}
+server {
+    listen 80;
+    server_name ${PANEL_DOMAIN};
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+    location / {
+        return 301 https://\$host:${SSL_PORT}\$request_uri;
+    }
+}
+EOF
+
+# Убираем старые конфиги и ставим временный
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo rm -f "$NGINX_LINK"
+sudo ln -sf "$TEMP_CONF" "$NGINX_LINK"
+sudo nginx -t && sudo systemctl reload nginx
+
+# Создаем директорию для webroot
+sudo mkdir -p /var/www/html/.well-known/acme-challenge
 
 if [[ -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
     log_success "✔ SSL-сертификаты для ${DOMAIN} уже существуют."
 else
     log_info "Получение SSL-сертификатов для ${DOMAIN}..."
-    sudo certbot --nginx -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --redirect
+    sudo certbot certonly --webroot -w /var/www/html -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
     log_success "✔ Сертификаты Let's Encrypt для ${DOMAIN} успешно получены."
 fi
 
@@ -503,13 +523,16 @@ if [[ -d "/etc/letsencrypt/live/${PANEL_DOMAIN}" ]]; then
     log_success "✔ SSL-сертификаты для ${PANEL_DOMAIN} уже существуют."
 else
     log_info "Получение SSL-сертификатов для ${PANEL_DOMAIN}..."
-    sudo certbot --nginx -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --redirect
+    sudo certbot certonly --webroot -w /var/www/html -d "$PANEL_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
     log_success "✔ Сертификаты Let's Encrypt для ${PANEL_DOMAIN} успешно получены."
 fi
 
-# Теперь настраиваем nginx с проксированием на наши сервисы
+# Удаляем временную конфигурацию
+sudo rm -f "$TEMP_CONF"
+
+# Настраиваем финальную конфигурацию nginx
 log_info "\nШаг 4: настройка Nginx"
-configure_nginx "$DOMAIN" "$PANEL_DOMAIN" "$NGINX_CONF" "$NGINX_LINK"
+configure_nginx "$DOMAIN" "$PANEL_DOMAIN" "$SSL_PORT" "$NGINX_CONF" "$NGINX_LINK"
 
 log_info "\nШаг 5: настройка переменных окружения (.env)"
 
@@ -518,12 +541,10 @@ if [[ -f ".env" ]]; then
     if ! confirm "Перезаписать существующий .env? (y/n): "; then
         log_info "Используется существующий .env файл."
     else
-        log_info "Создание нового .env файла..."
-        create_env_file "$DOMAIN" "$PANEL_DOMAIN" "$EMAIL"
+        create_env_file "$DOMAIN" "$PANEL_DOMAIN" "$EMAIL" "$SSL_PORT"
     fi
 else
-    log_info "Создание .env файла..."
-    create_env_file "$DOMAIN" "$PANEL_DOMAIN" "$EMAIL"
+    create_env_file "$DOMAIN" "$PANEL_DOMAIN" "$EMAIL" "$SSL_PORT"
 fi
 
 log_info "\nШаг 6: подготовка директорий и запуск Docker-контейнеров"
@@ -535,6 +556,12 @@ if [[ -n "$(sudo docker-compose ps -q 2>/dev/null)" ]]; then
 fi
 sudo docker-compose up -d --build
 
+# Формируем URL с портом для вывода
+PORT_SUFFIX=""
+if [[ "$SSL_PORT" != "443" ]]; then
+    PORT_SUFFIX=":${SSL_PORT}"
+fi
+
 cat <<SUMMARY
 
 ${GREEN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}
@@ -542,19 +569,22 @@ ${GREEN}┃${NC}  🎉 ${BOLD}Установка BlinVPN завершена!${NC
 ${GREEN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}
 
 ${BOLD}Мини-приложение:${NC}
-  ${YELLOW}https://${DOMAIN}${NC}
+  ${YELLOW}https://${DOMAIN}${PORT_SUFFIX}${NC}
 
 ${BOLD}Веб‑панель:${NC}
-  ${YELLOW}https://${PANEL_DOMAIN}${NC}
+  ${YELLOW}https://${PANEL_DOMAIN}${PORT_SUFFIX}${NC}
 
 ${BOLD}API:${NC}
-  ${YELLOW}https://${DOMAIN}/api${NC}
+  ${YELLOW}https://${DOMAIN}${PORT_SUFFIX}/api${NC}
 
 ${BOLD}Webhooks:${NC}
-  YooKassa: ${YELLOW}https://${DOMAIN}/yookassa${NC}
-  Heleket:  ${YELLOW}https://${DOMAIN}/heleket${NC}
-  Platega:  ${YELLOW}https://${DOMAIN}/platega${NC}
+  YooKassa: ${YELLOW}https://${DOMAIN}${PORT_SUFFIX}/yookassa${NC}
+  Heleket:  ${YELLOW}https://${DOMAIN}${PORT_SUFFIX}/heleket${NC}
+  Platega:  ${YELLOW}https://${DOMAIN}${PORT_SUFFIX}/platega${NC}
 
-${YELLOW}⚠️  Проверьте настройки в файле .env перед использованием.${NC}
+${YELLOW}⚠️  Не забудьте обновить Web App URL в BotFather:${NC}
+${CYAN}   https://${DOMAIN}${PORT_SUFFIX}${NC}
+
+${YELLOW}⚠️  Проверьте настройки в файле .env${NC}
 
 SUMMARY
