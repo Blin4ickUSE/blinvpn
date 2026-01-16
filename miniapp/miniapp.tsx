@@ -563,6 +563,7 @@ export default function App() {
   const [userId, setUserId] = useState<number | null>(null);
   const [telegramId, setTelegramId] = useState<number | null>(null);
   const [username, setUsername] = useState<string>('User');
+  const [userPhotoUrl, setUserPhotoUrl] = useState<string | null>(null);
   
   // Data
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -576,6 +577,10 @@ export default function App() {
   // Legal Docs Modal
   const [docModalOpen, setDocModalOpen] = useState(false);
   const [docContent, setDocContent] = useState<{ title: string, text: string } | null>(null);
+  const [publicPages, setPublicPages] = useState<{ offer: string, privacy: string }>({
+    offer: OFFER_AGREEMENT_TEXT,
+    privacy: PRIVACY_POLICY_TEXT
+  });
 
   const [currentDevice, setCurrentDevice] = useState<Device | null>(null);
   const [newName, setNewName] = useState('');
@@ -645,6 +650,11 @@ export default function App() {
       tgId = Number(tgUser.id);
       tgUsername = tgUser.username || tgUser.first_name || '';
       
+      // Получаем URL аватарки пользователя из Telegram WebApp
+      if (tgUser.photo_url) {
+        setUserPhotoUrl(tgUser.photo_url);
+      }
+      
       // Уведомляем Telegram что приложение готово
       win.Telegram.WebApp.ready();
       win.Telegram.WebApp.expand();
@@ -702,6 +712,19 @@ export default function App() {
         const historyData = await miniApiFetch(`/user/history?telegram_id=${tgId}`);
         if (Array.isArray(historyData)) {
           setHistory(historyData);
+        }
+
+        // Публичные страницы (оферта и политика)
+        try {
+          const publicPagesData = await miniApiFetch('/public-pages');
+          if (publicPagesData) {
+            setPublicPages({
+              offer: publicPagesData.offer?.content || OFFER_AGREEMENT_TEXT,
+              privacy: publicPagesData.privacy?.content || PRIVACY_POLICY_TEXT
+            });
+          }
+        } catch (e) {
+          console.error('Failed to load public pages, using defaults', e);
         }
       } catch (err) {
         console.error('Ошибка загрузки данных:', err);
@@ -764,6 +787,88 @@ export default function App() {
     }
   };
 
+  const refreshUserData = async () => {
+    if (!telegramId) return;
+    try {
+      const userData = await miniApiFetch(`/user/info?telegram_id=${telegramId}`);
+      if (userData) {
+        setBalance(userData.balance || 0);
+        setUserId(userData.id);
+        setUsername(userData.username || `User_${telegramId}`);
+        setIsTrialUsed(userData.trial_used === 1 || userData.trial_used === true);
+        setReferrals({
+          count: userData.referrals_count || 0,
+          earned: userData.referral_earned || userData.partner_balance || 0,
+        });
+      }
+    } catch (e) {
+      console.error('Failed to refresh user data', e);
+    }
+  };
+
+  const refreshAll = async () => {
+    await Promise.all([
+      refreshUserData(),
+      refreshDevices(),
+    ]);
+  };
+
+  // Получить Happ зашифрованную ссылку
+  const getHappEncryptedLink = async (subscriptionUrl: string): Promise<string | null> => {
+    try {
+      // Используем Happ Crypto API для шифрования ссылки
+      const response = await fetch('https://crypto.happ.su/api.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: subscriptionUrl })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        // API возвращает зашифрованную ссылку (happ://crypt1/, happ://crypt2/, etc.)
+        if (data && (data.link || data.url)) {
+          return data.link || data.url;
+        }
+      }
+      return null;
+    } catch (e) {
+      console.error('Failed to get Happ encrypted link', e);
+      return null;
+    }
+  };
+
+  // Открыть Happ с зашифрованной ссылкой
+  const openHappWithSubscription = async (deviceId?: number) => {
+    let subscriptionUrl: string | null = null;
+    
+    // Получаем URL подписки из deviceKeys
+    if (deviceId && deviceKeys.has(deviceId)) {
+      subscriptionUrl = deviceKeys.get(deviceId) || null;
+    } else {
+      // Пробуем найти активное устройство
+      const activeDevice = devices.find(d => deviceKeys.has(d.id));
+      if (activeDevice) {
+        subscriptionUrl = deviceKeys.get(activeDevice.id) || null;
+      }
+    }
+    
+    if (!subscriptionUrl) {
+      alert('У вас нет активных подписок. Сначала создайте подписку.');
+      return;
+    }
+    
+    // Получаем зашифрованную ссылку
+    const encryptedLink = await getHappEncryptedLink(subscriptionUrl);
+    if (encryptedLink) {
+      // Открываем зашифрованную ссылку (откроется приложение Happ)
+      window.open(encryptedLink, '_blank');
+    } else {
+      // Fallback - просто копируем ключ
+      handleCopy(subscriptionUrl);
+      alert('Не удалось зашифровать ссылку. Ключ скопирован в буфер обмена.');
+    }
+  };
+
   const handleCopy = (text: string, deviceId?: number) => {
     try {
       // Если передан deviceId, пытаемся получить реальный ключ из deviceKeys
@@ -811,10 +916,27 @@ export default function App() {
     setDeleteModalOpen(true);
   };
 
-  const confirmDeleteDevice = () => {
-    if (!currentDevice) return;
-    setDevices(prev => prev.filter(d => d.id !== currentDevice.id));
-    addHistoryItem('device_del', `Удалено устройство: ${currentDevice.name}`, 0);
+  const confirmDeleteDevice = async () => {
+    if (!currentDevice || !telegramId) return;
+    
+    try {
+      // Удаляем на сервере
+      await miniApiFetch(`/user/devices/${currentDevice.id}?telegram_id=${telegramId}`, {
+        method: 'DELETE'
+      });
+      
+      // Обновляем локально
+      setDevices(prev => prev.filter(d => d.id !== currentDevice.id));
+      setDeviceKeys(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(currentDevice.id);
+        return newMap;
+      });
+      addHistoryItem('device_del', `Удалено устройство: ${currentDevice.name}`, 0);
+    } catch (e) {
+      console.error('Failed to delete device', e);
+    }
+    
     setDeleteModalOpen(false);
     setCurrentDevice(null);
   };
@@ -961,16 +1083,11 @@ export default function App() {
           price: price,
         }),
       }).then(() => {
-        setBalance(prev => prev - price);
-        const newDevice = { 
-          id: Date.now(), 
-          name: name, 
-          type: wizardPlatform, 
-          added: new Date().toLocaleDateString('ru-RU') 
-        };
-        setDevices(prev => [...prev, newDevice]);
         addHistoryItem('buy_dev', name, -price);
-        setWizardStep(4);
+        // Обновляем все данные с сервера для актуальности
+        refreshAll().then(() => {
+          setWizardStep(4);
+        });
       }).catch(e => {
         console.error('Failed to create subscription with auto pay', e);
         alert('Ошибка создания подписки с автоплатежом');
@@ -990,10 +1107,9 @@ export default function App() {
     })
       .then((res) => {
         if (res && res.success) {
-          setBalance(prev => prev - price);
           addHistoryItem('buy_dev', `Подключение: ${name}`, -price);
-          // Обновляем устройства и ключи, чтобы копирование работало сразу
-          refreshDevices().then(() => {
+          // Обновляем все данные с сервера для актуальности
+          refreshAll().then(() => {
             setWizardStep(4);
           });
         } else {
@@ -1029,9 +1145,17 @@ export default function App() {
     <div className="space-y-6 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex justify-between items-center py-2">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-full flex items-center justify-center font-bold text-lg text-white shadow-lg shadow-blue-500/20">
-            M
-          </div>
+          {userPhotoUrl ? (
+            <img 
+              src={userPhotoUrl} 
+              alt={username} 
+              className="w-10 h-10 rounded-full object-cover shadow-lg shadow-blue-500/20"
+            />
+          ) : (
+            <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-full flex items-center justify-center font-bold text-lg text-white shadow-lg shadow-blue-500/20">
+              {username.charAt(0).toUpperCase()}
+            </div>
+          )}
           <div>
             <div className="text-xs text-slate-400 font-medium">Добро пожаловать</div>
             <div className="font-bold text-slate-100">{username}</div>
@@ -1117,8 +1241,8 @@ export default function App() {
          <div className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">О проекте</div>
          <div className="flex flex-wrap justify-center gap-x-5 gap-y-2 text-xs font-medium text-slate-400">
             <button onClick={() => window.open('https://t.me/blinvpn', '_blank')} className="hover:text-blue-400 transition-colors">Наш канал</button>
-            <button onClick={() => openDoc("Договор оферты", OFFER_AGREEMENT_TEXT)} className="hover:text-blue-400 transition-colors">Договор оферты</button>
-            <button onClick={() => openDoc("Политика конфиденциальности", PRIVACY_POLICY_TEXT)} className="hover:text-blue-400 transition-colors">Политика конфиденциальности</button>
+            <button onClick={() => openDoc("Договор оферты", publicPages.offer)} className="hover:text-blue-400 transition-colors">Договор оферты</button>
+            <button onClick={() => openDoc("Политика конфиденциальности", publicPages.privacy)} className="hover:text-blue-400 transition-colors">Политика конфиденциальности</button>
          </div>
       </Card>
     </div>
@@ -1281,13 +1405,8 @@ export default function App() {
 
                     <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-6">
                         <div className="text-sm text-slate-400 mb-3 font-bold">Автоплатежи:</div>
-                        {selectedPaymentMethod === 'crypto' ? (
-                            <div className="text-xs text-red-400 p-2 bg-red-500/10 rounded-lg border border-red-500/20">
-                                Автоплатежи недоступны при оплате криптовалютой
-                            </div>
-                        ) : (
-                            <>
-                                {savedPaymentMethods.length > 0 && (
+                        <>
+                            {savedPaymentMethods.length > 0 && (
                                     <div className="mb-3 space-y-2">
                                         {savedPaymentMethods.map((method) => (
                                             <div key={method.id} className="flex items-center justify-between p-3 bg-slate-900 rounded-lg border border-slate-700">
@@ -1356,8 +1475,7 @@ export default function App() {
                                         }}
                                     />
                                 </label>
-                            </>
-                        )}
+                        </>
                     </div>
 
                     <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
@@ -1460,10 +1578,9 @@ export default function App() {
                                             alert('У вас нет активных устройств с ключами. Сначала создайте подписку.');
                                         }
                                     } else if (action.type === 'trigger_add') {
-                                        // Для iOS/Android - открываем инструкцию или создаем подписку
+                                        // Для iOS/Android - открываем Happ с зашифрованной ссылкой
                                         if (wizardPlatform === 'ios' || wizardPlatform === 'android') {
-                                            // Показываем инструкцию по добавлению подписки
-                                            alert('Для добавления подписки:\n1. Откройте приложение Happ\n2. Нажмите кнопку "+"\n3. Выберите "Добавить подписку"\n4. Отсканируйте QR-код или введите ключ вручную');
+                                            openHappWithSubscription();
                                         }
                                     } else if (action.url) {
                                         window.open(action.url, '_blank');
@@ -1851,28 +1968,22 @@ export default function App() {
 
           <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-6">
              <div className="text-sm text-slate-400 mb-3 font-bold">Автоплатежи:</div>
-             {selectedPaymentMethod === 'crypto' ? (
-                 <div className="text-xs text-red-400 p-2 bg-red-500/10 rounded-lg border border-red-500/20">
-                     Автоплатежи недоступны при оплате криптовалютой
-                 </div>
-             ) : (
-                 <label className="flex items-center justify-between cursor-pointer">
-                     <div className="flex items-center gap-3">
-                         <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${useAutoPay && !selectedPaymentMethodId ? 'bg-blue-600 border-blue-600' : 'border-slate-500'}`}>
-                             {useAutoPay && !selectedPaymentMethodId && <CheckCircle size={14} className="text-white" />}
-                         </div>
-                         <div>
-                             <div className="text-white font-medium">Сохранить карту для автоплатежей</div>
-                             <div className="text-xs text-slate-500">Рекуррентные платежи</div>
-                         </div>
+             <label className="flex items-center justify-between cursor-pointer">
+                 <div className="flex items-center gap-3">
+                     <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${useAutoPay && !selectedPaymentMethodId ? 'bg-blue-600 border-blue-600' : 'border-slate-500'}`}>
+                         {useAutoPay && !selectedPaymentMethodId && <CheckCircle size={14} className="text-white" />}
                      </div>
-                     <input type="checkbox" className="hidden" checked={useAutoPay && !selectedPaymentMethodId} onChange={() => {
-                         if (!selectedPaymentMethodId) {
-                             setUseAutoPay(!useAutoPay);
-                         }
-                     }} />
-                 </label>
-             )}
+                     <div>
+                         <div className="text-white font-medium">Сохранить карту для автоплатежей</div>
+                         <div className="text-xs text-slate-500">Рекуррентные платежи</div>
+                     </div>
+                 </div>
+                 <input type="checkbox" className="hidden" checked={useAutoPay && !selectedPaymentMethodId} onChange={() => {
+                     if (!selectedPaymentMethodId) {
+                         setUseAutoPay(!useAutoPay);
+                     }
+                 }} />
+             </label>
           </div>
 
           <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
@@ -1917,14 +2028,12 @@ export default function App() {
       <p className="text-slate-400 mb-8 max-w-xs">
         Перейдите по ссылке оплаты и завершите платеж. После успешного зачисления баланс обновится автоматически.
       </p>
-      <Button onClick={() => {
-        if (telegramId) {
-          miniApiFetch(`/user/info?telegram_id=${telegramId}`)
-            .then(data => {
-              setBalance(data.balance ?? balance);
-              addHistoryItem('deposit', 'Пополнение баланса', (data.balance ?? 0) - balance);
-            })
-            .catch(e => console.error(e));
+      <Button onClick={async () => {
+        const oldBalance = balance;
+        await refreshUserData();
+        // Если баланс изменился - добавляем в историю
+        if (balance !== oldBalance) {
+          addHistoryItem('deposit', 'Пополнение баланса', balance - oldBalance);
         }
         setView('home');
       }}>
@@ -1943,10 +2052,12 @@ export default function App() {
       </div>
       <h2 className="text-3xl font-bold text-white mb-2">Успешно!</h2>
       <p className="text-slate-400 mb-8">Баланс пополнен на {topupAmount} ₽.</p>
-      <Button onClick={() => {
+      <Button onClick={async () => {
         setTopupAmount(0);
         setSelectedMethod(null);
         setTopupStep(1);
+        // Обновляем данные пользователя с сервера
+        await refreshUserData();
         setView('home');
       }}>
         Вернуться в кабинет
@@ -2013,9 +2124,9 @@ export default function App() {
                         } else if (action.type === 'nav_ios') {
                           setActivePlatform('ios');
                         } else if (action.type === 'trigger_add') {
-                          // Для iOS/Android - показываем инструкцию
+                          // Для iOS/Android - открываем Happ с зашифрованной ссылкой
                           if (activePlatform === 'ios' || activePlatform === 'android') {
-                            alert('Для добавления подписки:\n1. Откройте приложение Happ\n2. Нажмите кнопку "+"\n3. Выберите "Добавить подписку"\n4. Отсканируйте QR-код или введите ключ вручную');
+                            openHappWithSubscription();
                           }
                         } else if (action.url) {
                           window.open(action.url, '_blank');
@@ -2132,12 +2243,12 @@ export default function App() {
         <label className="text-xs text-slate-500 mb-2 block uppercase font-bold tracking-wider">Ваша ссылка</label>
         <div className="flex gap-2">
           <div className="bg-slate-900 flex-1 p-3 rounded-lg text-slate-300 font-mono text-sm truncate">
-            {telegramId ? `https://t.me/${BOT_USERNAME_MINI}/app?startapp=${telegramId}` : 'Загрузка...'}
+            {telegramId ? `https://t.me/${BOT_USERNAME_MINI}/?startapp=${telegramId}` : 'Загрузка...'}
           </div>
           <button
             onClick={() => {
               if (telegramId) {
-                handleCopy(`https://t.me/${BOT_USERNAME_MINI}/app?startapp=${telegramId}`);
+                handleCopy(`https://t.me/${BOT_USERNAME_MINI}/?startapp=${telegramId}`);
               }
             }}
             className="bg-blue-600 px-4 rounded-lg text-white hover:bg-blue-500"
@@ -2150,30 +2261,38 @@ export default function App() {
       <div>
         <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3 px-1">Приглашенные пользователи</h3>
         <div className="space-y-2 pb-6">
-          {referralList.map(user => (
-            <button 
-               key={user.id} 
-               onClick={() => { setSelectedReferral(user); setView('referral_detail'); }}
-               className="w-full bg-slate-800/50 border border-slate-800 p-3 rounded-xl flex justify-between items-center hover:bg-slate-800 transition-colors"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-slate-400">
-                  <User size={14} />
+          {referralList.length === 0 ? (
+            <div className="text-center py-8 bg-slate-800/30 rounded-xl border border-slate-800">
+              <UserPlus size={32} className="text-slate-600 mx-auto mb-3" />
+              <p className="text-slate-500 text-sm">У вас пока нет рефералов</p>
+              <p className="text-slate-600 text-xs mt-1">Поделитесь ссылкой выше, чтобы приглашать друзей</p>
+            </div>
+          ) : (
+            referralList.map(user => (
+              <button 
+                 key={user.id} 
+                 onClick={() => { setSelectedReferral(user); setView('referral_detail'); }}
+                 className="w-full bg-slate-800/50 border border-slate-800 p-3 rounded-xl flex justify-between items-center hover:bg-slate-800 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-slate-400">
+                    <User size={14} />
+                  </div>
+                  <div className="text-left">
+                    <div className="text-sm font-bold text-slate-200">{user.name}</div>
+                    <div className="text-[10px] text-slate-500">{user.date}</div>
+                  </div>
                 </div>
-                <div className="text-left">
-                  <div className="text-sm font-bold text-slate-200">{user.name}</div>
-                  <div className="text-[10px] text-slate-500">{user.date}</div>
+                <div className="flex items-center gap-2">
+                   <div className="text-right">
+                     <div className="text-xs text-slate-500">Доход</div>
+                     <div className="text-sm font-bold text-green-500">+{user.myProfit} ₽</div>
+                   </div>
+                   <ChevronRight size={16} className="text-slate-600" />
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                 <div className="text-right">
-                   <div className="text-xs text-slate-500">Доход</div>
-                   <div className="text-sm font-bold text-green-500">+{user.myProfit} ₽</div>
-                 </div>
-                 <ChevronRight size={16} className="text-slate-600" />
-              </div>
-            </button>
-          ))}
+              </button>
+            ))
+          )}
         </div>
       </div>
     </div>
@@ -2434,4 +2553,3 @@ export default function App() {
     </div>
   );
 }
-
