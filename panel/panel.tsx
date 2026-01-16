@@ -2849,7 +2849,8 @@ const TicketsPage: React.FC<TicketsPageProps> = ({ tickets, activeTicketId, setA
 // Компонент настроек подписок с загрузкой сквадов из Remnawave
 const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
     const [squads, setSquads] = useState<any[]>([]);
-    const [selectedSquads, setSelectedSquads] = useState<string[]>([]);
+    const [vpnSquads, setVpnSquads] = useState<string[]>([]);
+    const [whitelistSquads, setWhitelistSquads] = useState<string[]>([]);
     const [trialEnabled, setTrialEnabled] = useState(true);
     const [trialHours, setTrialHours] = useState('24');
     const [loading, setLoading] = useState(true);
@@ -2870,8 +2871,13 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
             
             // Загружаем сохраненные сквады по умолчанию
             const defaultSquadsData = await apiFetch('/panel/default-squads');
-            if (defaultSquadsData && Array.isArray(defaultSquadsData.squads)) {
-                setSelectedSquads(defaultSquadsData.squads);
+            if (defaultSquadsData) {
+                if (Array.isArray(defaultSquadsData.vpn_squads)) {
+                    setVpnSquads(defaultSquadsData.vpn_squads);
+                }
+                if (Array.isArray(defaultSquadsData.whitelist_squads)) {
+                    setWhitelistSquads(defaultSquadsData.whitelist_squads);
+                }
             }
         } catch (e) {
             console.error('Failed to load squads:', e);
@@ -2880,24 +2886,15 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
         setLoading(false);
     };
 
-    const toggleSquad = async (uuid: string) => {
-        const newSelection = selectedSquads.includes(uuid) 
-            ? selectedSquads.filter(s => s !== uuid) 
-            : [...selectedSquads, uuid];
-        
-        setSelectedSquads(newSelection);
-        
-        // Автоматически сохраняем при изменении
-        try {
-            await apiFetch('/panel/default-squads', {
-                method: 'PUT',
-                body: JSON.stringify({ squads: newSelection })
-            });
-        } catch (e) {
-            console.error('Failed to save default squads:', e);
-            // Откатываем изменение при ошибке
-            setSelectedSquads(selectedSquads);
-            onToast('Ошибка', 'Не удалось сохранить сквады', 'error');
+    const toggleSquad = (uuid: string, type: 'vpn' | 'whitelist') => {
+        if (type === 'vpn') {
+            setVpnSquads(prev => 
+                prev.includes(uuid) ? prev.filter(s => s !== uuid) : [...prev, uuid]
+            );
+        } else {
+            setWhitelistSquads(prev => 
+                prev.includes(uuid) ? prev.filter(s => s !== uuid) : [...prev, uuid]
+            );
         }
     };
 
@@ -2906,7 +2903,10 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
         try {
             await apiFetch('/panel/default-squads', {
                 method: 'PUT',
-                body: JSON.stringify({ squads: selectedSquads })
+                body: JSON.stringify({ 
+                    vpn_squads: vpnSquads,
+                    whitelist_squads: whitelistSquads
+                })
             });
             onToast('Успешно', 'Сквады по умолчанию сохранены', 'success');
         } catch (e) {
@@ -2915,6 +2915,54 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
         }
         setSaving(false);
     };
+
+    const SquadSelector = ({ title, description, selectedSquads, type, color }: { 
+        title: string, description: string, selectedSquads: string[], type: 'vpn' | 'whitelist', color: string 
+    }) => (
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+            <h3 className="text-lg font-bold text-white mb-2">{title}</h3>
+            <p className="text-sm text-gray-400 mb-4">{description}</p>
+            {loading ? (
+                <div className="flex items-center justify-center py-4">
+                    <Loader className="animate-spin text-blue-500" size={20} />
+                    <span className="ml-2 text-gray-400">Загрузка...</span>
+                </div>
+            ) : squads.length === 0 ? (
+                <div className="p-3 bg-yellow-900/20 border border-yellow-500/30 rounded-xl text-yellow-400 text-sm">
+                    Сквады не найдены
+                </div>
+            ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {squads.map(sq => (
+                        <label 
+                            key={sq.uuid} 
+                            className={`flex items-center space-x-3 px-3 py-2 rounded-xl border cursor-pointer transition-all ${
+                                selectedSquads.includes(sq.uuid) 
+                                    ? `bg-${color}-600/20 border-${color}-500 shadow-lg shadow-${color}-900/20` 
+                                    : 'bg-gray-950 border-gray-700 hover:border-gray-600'
+                            }`}
+                            style={selectedSquads.includes(sq.uuid) ? {
+                                backgroundColor: color === 'blue' ? 'rgba(37, 99, 235, 0.2)' : 'rgba(34, 197, 94, 0.2)',
+                                borderColor: color === 'blue' ? '#3b82f6' : '#22c55e'
+                            } : {}}
+                            onClick={() => toggleSquad(sq.uuid, type)}
+                        >
+                            <input 
+                                type="checkbox" 
+                                checked={selectedSquads.includes(sq.uuid)}
+                                onChange={() => {}}
+                                className="w-4 h-4 rounded bg-gray-800 border-gray-600 cursor-pointer" 
+                            />
+                            <div className="flex-1 min-w-0">
+                                <span className="text-sm font-medium text-gray-200 block truncate">{sq.name}</span>
+                                <span className="text-xs text-gray-500">{sq.members_count || 0} участников</span>
+                            </div>
+                        </label>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
 
     return (
         <div className="space-y-6">
@@ -2940,58 +2988,33 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
                 </div>
             </div>
             
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <div className="flex justify-between items-center mb-6 border-b border-gray-800 pb-4">
-                    <h3 className="text-lg font-bold text-white">Сквады по умолчанию</h3>
-                    <button 
-                        onClick={saveSquads}
-                        disabled={saving}
-                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center"
-                    >
-                        {saving && <Loader className="animate-spin mr-2" size={14} />}
-                        Сохранить
-                    </button>
-                </div>
-                <p className="text-sm text-gray-400 mb-4">
-                    Выберите сквады, которые будут автоматически назначаться новым пользователям при покупке подписки.
-                </p>
-                {loading ? (
-                    <div className="flex items-center justify-center py-8">
-                        <Loader className="animate-spin text-blue-500" size={24} />
-                        <span className="ml-3 text-gray-400">Загрузка сквадов из Remnawave...</span>
-                    </div>
-                ) : squads.length === 0 ? (
-                    <div className="p-4 bg-yellow-900/20 border border-yellow-500/30 rounded-xl text-yellow-400 text-sm">
-                        Сквады не найдены. Проверьте подключение к Remnawave.
-                        <button onClick={loadData} className="ml-2 underline hover:no-underline">Повторить</button>
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                        {squads.map(sq => (
-                            <label 
-                                key={sq.uuid} 
-                                className={`flex items-center space-x-3 px-4 py-3 rounded-xl border cursor-pointer transition-all ${
-                                    selectedSquads.includes(sq.uuid) 
-                                        ? 'bg-blue-600/20 border-blue-500 shadow-lg shadow-blue-900/20' 
-                                        : 'bg-gray-950 border-gray-700 hover:border-gray-600'
-                                }`}
-                                onClick={() => toggleSquad(sq.uuid)}
-                            >
-                                <input 
-                                    type="checkbox" 
-                                    checked={selectedSquads.includes(sq.uuid)}
-                                    onChange={() => {}}
-                                    className="w-4 h-4 rounded bg-gray-800 border-gray-600 text-blue-500 cursor-pointer" 
-                                />
-                                <div className="flex-1 min-w-0">
-                                    <span className="text-sm font-medium text-gray-200 block truncate">{sq.name}</span>
-                                    <span className="text-xs text-gray-500">{sq.members_count || 0} участников</span>
-                                </div>
-                            </label>
-                        ))}
-                    </div>
-                )}
+            <div className="flex justify-between items-center">
+                <h3 className="text-lg font-bold text-white">Сквады по умолчанию</h3>
+                <button 
+                    onClick={saveSquads}
+                    disabled={saving}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center"
+                >
+                    {saving && <Loader className="animate-spin mr-2" size={14} />}
+                    Сохранить
+                </button>
             </div>
+            
+            <SquadSelector 
+                title="🔒 VPN подписка" 
+                description="Сквады для обычной VPN подписки"
+                selectedSquads={vpnSquads}
+                type="vpn"
+                color="blue"
+            />
+            
+            <SquadSelector 
+                title="🌐 Обход белых списков" 
+                description="Сквады для подписки с обходом белых списков"
+                selectedSquads={whitelistSquads}
+                type="whitelist"
+                color="green"
+            />
         </div>
     );
 };
