@@ -524,6 +524,45 @@ class RemnawaveAPI:
                     traffic_limit_bytes=traffic_limit
                 )
         return asyncio.run(_create())
+    
+    def update_user_sync(self, uuid: str, expire_at: datetime = None, 
+                        traffic_limit_bytes: int = None, hwid_device_limit: int = None,
+                        active_internal_squads: List[str] = None):
+        """Обновить пользователя (синхронная обёртка)"""
+        async def _update():
+            async with self._api as api:
+                return await api.update_user(
+                    uuid,
+                    expire_at=expire_at,
+                    traffic_limit_bytes=traffic_limit_bytes,
+                    hwid_device_limit=hwid_device_limit,
+                    active_internal_squads=active_internal_squads
+                )
+        return asyncio.run(_update())
+    
+    def create_user_with_params(self, telegram_id: int, username: str, days: int,
+                               traffic_limit_bytes: int = 0, hwid_device_limit: int = None,
+                               active_internal_squads: List[str] = None):
+        """Создать пользователя с полными параметрами (синхронная обёртка)"""
+        async def _create():
+            async with self._api as api:
+                expire_at = datetime.now() + timedelta(days=days)
+                return await api.create_user(
+                    username or f"user_{telegram_id}",
+                    expire_at,
+                    telegram_id=telegram_id,
+                    traffic_limit_bytes=traffic_limit_bytes,
+                    hwid_device_limit=hwid_device_limit,
+                    active_internal_squads=active_internal_squads
+                )
+        return asyncio.run(_create())
+    
+    def get_internal_squads(self):
+        """Получить список внутренних сквадов (синхронная обёртка)"""
+        async def _get():
+            async with self._api as api:
+                return await api.get_internal_squads()
+        return asyncio.run(_get())
 
 
 # Глобальный экземпляр для обратной совместимости
