@@ -98,28 +98,60 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         # Создаем пользователя в БД
         user_id = database.create_user(telegram_id, username, referred_by=referred_by)
         
-        # Создаем пользователя в Remnawave
-        remnawave_user = remnawave.remnawave_api.create_user(telegram_id, username)
-        if not remnawave_user:
-            logger.error(f"Failed to create user in Remnawave: {telegram_id}")
-            return None
+        # Сначала проверяем существует ли пользователь в Remnawave
+        existing_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
         
-        user_uuid = remnawave_user.get('uuid')
+        if existing_users and len(existing_users) > 0:
+            # Пользователь уже существует - обновляем подписку
+            remnawave_user = existing_users[0]
+            user_uuid = remnawave_user.uuid if hasattr(remnawave_user, 'uuid') else remnawave_user.get('uuid')
+            subscription_url = remnawave_user.subscription_url if hasattr(remnawave_user, 'subscription_url') else remnawave_user.get('subscription_url', '')
+            
+            # Обновляем подписку
+            subscription = remnawave.remnawave_api.create_subscription(user_uuid, days, traffic_limit=traffic_limit)
+        else:
+            # Создаем нового пользователя в Remnawave
+            remnawave_user = remnawave.remnawave_api.create_user(telegram_id, username)
+            if not remnawave_user:
+                logger.error(f"Failed to create user in Remnawave: {telegram_id}")
+                return None
+            
+            # Получаем uuid - может быть dataclass или dict
+            user_uuid = remnawave_user.uuid if hasattr(remnawave_user, 'uuid') else remnawave_user.get('uuid')
+            subscription_url = remnawave_user.subscription_url if hasattr(remnawave_user, 'subscription_url') else remnawave_user.get('subscription_url', '')
+            
+            # Создаем подписку
+            subscription = remnawave.remnawave_api.create_subscription(user_uuid, days, traffic_limit=traffic_limit)
         
-        # Создаем подписку
-        subscription = remnawave.remnawave_api.create_subscription(user_uuid, days, traffic_limit=traffic_limit)
         if not subscription:
             logger.error(f"Failed to create subscription: {user_uuid}")
             return None
+        
+        # Получаем subscription_url из subscription если доступен
+        if subscription:
+            subscription_url = subscription.subscription_url if hasattr(subscription, 'subscription_url') else (subscription.get('subscription_url') if isinstance(subscription, dict) else subscription_url)
         
         # Сохраняем ключ в БД
         conn = database.get_db_connection()
         cursor = conn.cursor()
         expiry_date = (datetime.now() + timedelta(days=days)).isoformat()
-        cursor.execute("""
-            INSERT INTO vpn_keys (user_id, key_uuid, status, expiry_date, devices_limit, traffic_limit)
-            VALUES (?, ?, 'Active', ?, 1, ?)
-        """, (user_id, user_uuid, expiry_date, traffic_limit))
+        
+        # Проверяем существует ли уже ключ для этого пользователя
+        cursor.execute("SELECT id FROM vpn_keys WHERE user_id = ? AND key_uuid = ?", (user_id, user_uuid))
+        existing_key = cursor.fetchone()
+        
+        if existing_key:
+            # Обновляем существующий ключ
+            cursor.execute("""
+                UPDATE vpn_keys SET status = 'Active', expiry_date = ?, traffic_limit = ?, key_config = ?
+                WHERE id = ?
+            """, (expiry_date, traffic_limit, subscription_url, existing_key['id']))
+        else:
+            # Создаем новый ключ
+            cursor.execute("""
+                INSERT INTO vpn_keys (user_id, key_uuid, key_config, status, expiry_date, devices_limit, traffic_limit)
+                VALUES (?, ?, ?, 'Active', ?, 1, ?)
+            """, (user_id, user_uuid, subscription_url, expiry_date, traffic_limit))
         conn.commit()
         conn.close()
         
@@ -134,10 +166,13 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         return {
             'user_id': user_id,
             'remnawave_uuid': user_uuid,
+            'subscription_url': subscription_url,
             'subscription': subscription
         }
     except Exception as e:
         logger.error(f"Error creating user and subscription: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def process_payment(user_id: int, amount: float, payment_method: str, 
