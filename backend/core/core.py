@@ -112,7 +112,8 @@ def sanitize_username(username: str, telegram_id: int) -> str:
 
 
 def create_user_and_subscription(telegram_id: int, username: str, days: int, 
-                                 referred_by: int = None, traffic_limit: int = None) -> Optional[Dict]:
+                                 referred_by: int = None, traffic_limit: int = None,
+                                 squad_uuids: list = None) -> Optional[Dict]:
     """Создать пользователя и подписку"""
     try:
         # Создаем пользователя в БД
@@ -120,6 +121,10 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         
         # Санитизируем username для Remnawave
         safe_username = sanitize_username(username, telegram_id)
+        
+        # Получаем сквады по умолчанию, если не указаны явно
+        if squad_uuids is None:
+            squad_uuids = database.get_default_squads()
         
         # Сначала проверяем существует ли пользователь в Remnawave по telegram_id
         existing_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
@@ -130,12 +135,23 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
             user_uuid = remnawave_user.uuid if hasattr(remnawave_user, 'uuid') else remnawave_user.get('uuid')
             subscription_url = remnawave_user.subscription_url if hasattr(remnawave_user, 'subscription_url') else remnawave_user.get('subscription_url', '')
             
-            # Обновляем подписку
-            subscription = remnawave.remnawave_api.create_subscription(user_uuid, days, traffic_limit=traffic_limit)
+            # Обновляем подписку с добавлением сквадов
+            subscription = remnawave.remnawave_api.update_user_sync(
+                uuid=user_uuid,
+                expire_at=datetime.now() + timedelta(days=days),
+                traffic_limit_bytes=traffic_limit,
+                active_internal_squads=squad_uuids if squad_uuids else None
+            )
         else:
             # Создаем нового пользователя в Remnawave с санитизированным username
             try:
-                remnawave_user = remnawave.remnawave_api.create_user(telegram_id, safe_username)
+                remnawave_user = remnawave.remnawave_api.create_user_with_params(
+                    telegram_id=telegram_id,
+                    username=safe_username,
+                    days=days,
+                    traffic_limit_bytes=traffic_limit or 0,
+                    active_internal_squads=squad_uuids if squad_uuids else None
+                )
             except Exception as create_error:
                 error_msg = str(create_error).lower()
                 # Если пользователь уже существует (по username), пробуем с уникальным именем
@@ -143,7 +159,13 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
                     # Добавляем telegram_id к username для уникальности
                     unique_username = f"{safe_username}_{telegram_id}"
                     logger.info(f"Username {safe_username} already exists, trying {unique_username}")
-                    remnawave_user = remnawave.remnawave_api.create_user(telegram_id, unique_username)
+                    remnawave_user = remnawave.remnawave_api.create_user_with_params(
+                        telegram_id=telegram_id,
+                        username=unique_username,
+                        days=days,
+                        traffic_limit_bytes=traffic_limit or 0,
+                        active_internal_squads=squad_uuids if squad_uuids else None
+                    )
                 else:
                     raise create_error
             
@@ -155,8 +177,8 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
             user_uuid = remnawave_user.uuid if hasattr(remnawave_user, 'uuid') else remnawave_user.get('uuid')
             subscription_url = remnawave_user.subscription_url if hasattr(remnawave_user, 'subscription_url') else remnawave_user.get('subscription_url', '')
             
-            # Создаем подписку
-            subscription = remnawave.remnawave_api.create_subscription(user_uuid, days, traffic_limit=traffic_limit)
+            # Подписка уже создана при создании пользователя
+            subscription = remnawave_user
         
         if not subscription:
             logger.error(f"Failed to create subscription: {user_uuid}")
@@ -165,6 +187,24 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         # Получаем subscription_url из subscription если доступен
         if subscription:
             subscription_url = subscription.subscription_url if hasattr(subscription, 'subscription_url') else (subscription.get('subscription_url') if isinstance(subscription, dict) else subscription_url)
+        
+        # Конвертируем subscription в JSON-сериализуемый формат
+        subscription_data = None
+        if subscription:
+            if hasattr(subscription, '__dict__'):
+                # Это dataclass - конвертируем в dict
+                subscription_data = {
+                    'uuid': subscription.uuid if hasattr(subscription, 'uuid') else None,
+                    'username': subscription.username if hasattr(subscription, 'username') else None,
+                    'status': subscription.status.value if hasattr(subscription, 'status') and hasattr(subscription.status, 'value') else str(subscription.status) if hasattr(subscription, 'status') else None,
+                    'subscription_url': subscription.subscription_url if hasattr(subscription, 'subscription_url') else None,
+                    'expire_at': subscription.expire_at.isoformat() if hasattr(subscription, 'expire_at') and subscription.expire_at else None,
+                    'traffic_limit_bytes': subscription.traffic_limit_bytes if hasattr(subscription, 'traffic_limit_bytes') else None,
+                }
+            elif isinstance(subscription, dict):
+                subscription_data = subscription
+            else:
+                subscription_data = str(subscription)
         
         # Сохраняем ключ в БД
         conn = database.get_db_connection()
@@ -202,7 +242,7 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
             'user_id': user_id,
             'remnawave_uuid': user_uuid,
             'subscription_url': subscription_url,
-            'subscription': subscription
+            'subscription': subscription_data
         }
     except Exception as e:
         logger.error(f"Error creating user and subscription: {e}")
