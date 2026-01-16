@@ -318,6 +318,17 @@ def init_database():
             )
         """)
         
+        # Таблица настроек резервного копирования
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS backup_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                enabled INTEGER DEFAULT 0,
+                interval_hours INTEGER DEFAULT 12,
+                last_backup TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         # Миграция: добавляем поля в mailings если их нет
         try:
             cursor.execute("ALTER TABLE mailings ADD COLUMN button_type TEXT")
