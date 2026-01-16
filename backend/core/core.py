@@ -91,6 +91,26 @@ def send_notification_to_support_group(message: str) -> bool:
         logger.error(f"Failed to send notification to support group: {e}")
         return False
 
+def sanitize_username(username: str, telegram_id: int) -> str:
+    """Санитизация username для Remnawave - только буквы, цифры, _ и -"""
+    import re
+    if not username:
+        return f"user_{telegram_id}"
+    
+    # Удаляем все символы кроме букв, цифр, _ и -
+    sanitized = re.sub(r'[^a-zA-Z0-9_-]', '', username)
+    
+    # Если после санитизации пусто - используем telegram_id
+    if not sanitized:
+        return f"user_{telegram_id}"
+    
+    # Username должен начинаться с буквы или цифры
+    if sanitized[0] in '_-':
+        sanitized = f"u{sanitized}"
+    
+    return sanitized
+
+
 def create_user_and_subscription(telegram_id: int, username: str, days: int, 
                                  referred_by: int = None, traffic_limit: int = None) -> Optional[Dict]:
     """Создать пользователя и подписку"""
@@ -98,7 +118,10 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         # Создаем пользователя в БД
         user_id = database.create_user(telegram_id, username, referred_by=referred_by)
         
-        # Сначала проверяем существует ли пользователь в Remnawave
+        # Санитизируем username для Remnawave
+        safe_username = sanitize_username(username, telegram_id)
+        
+        # Сначала проверяем существует ли пользователь в Remnawave по telegram_id
         existing_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
         
         if existing_users and len(existing_users) > 0:
@@ -110,8 +133,20 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
             # Обновляем подписку
             subscription = remnawave.remnawave_api.create_subscription(user_uuid, days, traffic_limit=traffic_limit)
         else:
-            # Создаем нового пользователя в Remnawave
-            remnawave_user = remnawave.remnawave_api.create_user(telegram_id, username)
+            # Создаем нового пользователя в Remnawave с санитизированным username
+            try:
+                remnawave_user = remnawave.remnawave_api.create_user(telegram_id, safe_username)
+            except Exception as create_error:
+                error_msg = str(create_error).lower()
+                # Если пользователь уже существует (по username), пробуем с уникальным именем
+                if 'already exists' in error_msg or 'a019' in error_msg:
+                    # Добавляем telegram_id к username для уникальности
+                    unique_username = f"{safe_username}_{telegram_id}"
+                    logger.info(f"Username {safe_username} already exists, trying {unique_username}")
+                    remnawave_user = remnawave.remnawave_api.create_user(telegram_id, unique_username)
+                else:
+                    raise create_error
+            
             if not remnawave_user:
                 logger.error(f"Failed to create user in Remnawave: {telegram_id}")
                 return None
