@@ -536,19 +536,21 @@ def set_system_setting(key: str, value: str) -> bool:
     finally:
         conn.close()
 
-def get_default_squads() -> List[str]:
-    """Получить список UUID сквадов по умолчанию"""
+def get_default_squads(plan_type: str = 'vpn') -> List[str]:
+    """Получить список UUID сквадов по умолчанию для типа подписки"""
     import json
-    value = get_system_setting('default_squads', '[]')
+    key = f'default_squads_{plan_type}'  # default_squads_vpn или default_squads_whitelist
+    value = get_system_setting(key, '[]')
     try:
         return json.loads(value)
     except:
         return []
 
-def set_default_squads(squad_uuids: List[str]) -> bool:
-    """Установить список UUID сквадов по умолчанию"""
+def set_default_squads(squad_uuids: List[str], plan_type: str = 'vpn') -> bool:
+    """Установить список UUID сквадов по умолчанию для типа подписки"""
     import json
-    return set_system_setting('default_squads', json.dumps(squad_uuids))
+    key = f'default_squads_{plan_type}'  # default_squads_vpn или default_squads_whitelist
+    return set_system_setting(key, json.dumps(squad_uuids))
 
 # Инициализация при импорте
 if __name__ != "__main__":
