@@ -2853,6 +2853,7 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
     const [trialEnabled, setTrialEnabled] = useState(true);
     const [trialHours, setTrialHours] = useState('24');
     const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
 
     useEffect(() => {
         loadData();
@@ -2861,80 +2862,135 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
     const loadData = async () => {
         setLoading(true);
         try {
+            // Загружаем сквады из Remnawave
             const squadsData = await apiFetch('/panel/remnawave/squads');
             if (Array.isArray(squadsData)) {
                 setSquads(squadsData);
             }
+            
+            // Загружаем сохраненные сквады по умолчанию
+            const defaultSquadsData = await apiFetch('/panel/default-squads');
+            if (defaultSquadsData && Array.isArray(defaultSquadsData.squads)) {
+                setSelectedSquads(defaultSquadsData.squads);
+            }
         } catch (e) {
-            console.error('Failed to load squads from Remnawave:', e);
+            console.error('Failed to load squads:', e);
             onToast('Предупреждение', 'Не удалось загрузить сквады из Remnawave', 'info');
         }
         setLoading(false);
     };
 
-    const toggleSquad = (uuid: string) => {
-        setSelectedSquads(prev => 
-            prev.includes(uuid) ? prev.filter(s => s !== uuid) : [...prev, uuid]
-        );
+    const toggleSquad = async (uuid: string) => {
+        const newSelection = selectedSquads.includes(uuid) 
+            ? selectedSquads.filter(s => s !== uuid) 
+            : [...selectedSquads, uuid];
+        
+        setSelectedSquads(newSelection);
+        
+        // Автоматически сохраняем при изменении
+        try {
+            await apiFetch('/panel/default-squads', {
+                method: 'PUT',
+                body: JSON.stringify({ squads: newSelection })
+            });
+        } catch (e) {
+            console.error('Failed to save default squads:', e);
+            // Откатываем изменение при ошибке
+            setSelectedSquads(selectedSquads);
+            onToast('Ошибка', 'Не удалось сохранить сквады', 'error');
+        }
+    };
+
+    const saveSquads = async () => {
+        setSaving(true);
+        try {
+            await apiFetch('/panel/default-squads', {
+                method: 'PUT',
+                body: JSON.stringify({ squads: selectedSquads })
+            });
+            onToast('Успешно', 'Сквады по умолчанию сохранены', 'success');
+        } catch (e) {
+            console.error('Failed to save default squads:', e);
+            onToast('Ошибка', 'Не удалось сохранить сквады', 'error');
+        }
+        setSaving(false);
     };
 
     return (
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 mb-6">
-            <h3 className="text-lg font-bold text-white mb-6 border-b border-gray-800 pb-4">Пробный период</h3>
-            <div className="space-y-6">
-                <div className="flex justify-between items-center p-4 bg-gray-950 rounded-xl border border-gray-800">
-                    <span className="text-gray-300 font-medium">Включить пробный период</span>
-                    <button onClick={() => setTrialEnabled(!trialEnabled)} className={`w-12 h-6 rounded-full p-1 transition-colors relative ${trialEnabled ? 'bg-blue-600' : 'bg-gray-700'}`}>
-                        <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${trialEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+        <div className="space-y-6">
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                <h3 className="text-lg font-bold text-white mb-6 border-b border-gray-800 pb-4">Пробный период</h3>
+                <div className="space-y-6">
+                    <div className="flex justify-between items-center p-4 bg-gray-950 rounded-xl border border-gray-800">
+                        <span className="text-gray-300 font-medium">Включить пробный период</span>
+                        <button onClick={() => setTrialEnabled(!trialEnabled)} className={`w-12 h-6 rounded-full p-1 transition-colors relative ${trialEnabled ? 'bg-blue-600' : 'bg-gray-700'}`}>
+                            <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${trialEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                        </button>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-400 mb-2">Длительность (часов)</label>
+                        <input 
+                            type="number" 
+                            value={trialHours}
+                            onChange={e => setTrialHours(e.target.value)}
+                            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500 transition-colors" 
+                            placeholder="24" 
+                        />
+                    </div>
+                </div>
+            </div>
+            
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                <div className="flex justify-between items-center mb-6 border-b border-gray-800 pb-4">
+                    <h3 className="text-lg font-bold text-white">Сквады по умолчанию</h3>
+                    <button 
+                        onClick={saveSquads}
+                        disabled={saving}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center"
+                    >
+                        {saving && <Loader className="animate-spin mr-2" size={14} />}
+                        Сохранить
                     </button>
                 </div>
-                <div>
-                    <label className="block text-sm font-medium text-gray-400 mb-2">Длительность (часов)</label>
-                    <input 
-                        type="number" 
-                        value={trialHours}
-                        onChange={e => setTrialHours(e.target.value)}
-                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500 transition-colors" 
-                        placeholder="24" 
-                    />
-                </div>
-                <div>
-                    <label className="block text-sm font-medium text-gray-400 mb-2">Доступные сквады для триала</label>
-                    {loading ? (
-                        <div className="flex items-center justify-center py-4">
-                            <Loader className="animate-spin text-blue-500" size={20} />
-                            <span className="ml-2 text-gray-400">Загрузка сквадов из Remnawave...</span>
-                        </div>
-                    ) : squads.length === 0 ? (
-                        <div className="p-4 bg-yellow-900/20 border border-yellow-500/30 rounded-xl text-yellow-400 text-sm">
-                            Сквады не найдены. Проверьте подключение к Remnawave.
-                            <button onClick={loadData} className="ml-2 underline hover:no-underline">Повторить</button>
-                        </div>
-                    ) : (
-                        <div className="flex flex-wrap gap-3">
-                            {squads.map(sq => (
-                                <label 
-                                    key={sq.uuid} 
-                                    className={`flex items-center space-x-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
-                                        selectedSquads.includes(sq.uuid) 
-                                            ? 'bg-blue-600/20 border-blue-500' 
-                                            : 'bg-gray-950 border-gray-700 hover:border-gray-600'
-                                    }`}
-                                    onClick={() => toggleSquad(sq.uuid)}
-                                >
-                                    <input 
-                                        type="checkbox" 
-                                        checked={selectedSquads.includes(sq.uuid)}
-                                        onChange={() => {}}
-                                        className="rounded bg-gray-800 border-gray-600 text-blue-500" 
-                                    />
-                                    <span className="text-sm text-gray-300">{sq.name}</span>
-                                    <span className="text-xs text-gray-500">({sq.members_count || 0})</span>
-                                </label>
-                            ))}
-                        </div>
-                    )}
-                </div>
+                <p className="text-sm text-gray-400 mb-4">
+                    Выберите сквады, которые будут автоматически назначаться новым пользователям при покупке подписки.
+                </p>
+                {loading ? (
+                    <div className="flex items-center justify-center py-8">
+                        <Loader className="animate-spin text-blue-500" size={24} />
+                        <span className="ml-3 text-gray-400">Загрузка сквадов из Remnawave...</span>
+                    </div>
+                ) : squads.length === 0 ? (
+                    <div className="p-4 bg-yellow-900/20 border border-yellow-500/30 rounded-xl text-yellow-400 text-sm">
+                        Сквады не найдены. Проверьте подключение к Remnawave.
+                        <button onClick={loadData} className="ml-2 underline hover:no-underline">Повторить</button>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {squads.map(sq => (
+                            <label 
+                                key={sq.uuid} 
+                                className={`flex items-center space-x-3 px-4 py-3 rounded-xl border cursor-pointer transition-all ${
+                                    selectedSquads.includes(sq.uuid) 
+                                        ? 'bg-blue-600/20 border-blue-500 shadow-lg shadow-blue-900/20' 
+                                        : 'bg-gray-950 border-gray-700 hover:border-gray-600'
+                                }`}
+                                onClick={() => toggleSquad(sq.uuid)}
+                            >
+                                <input 
+                                    type="checkbox" 
+                                    checked={selectedSquads.includes(sq.uuid)}
+                                    onChange={() => {}}
+                                    className="w-4 h-4 rounded bg-gray-800 border-gray-600 text-blue-500 cursor-pointer" 
+                                />
+                                <div className="flex-1 min-w-0">
+                                    <span className="text-sm font-medium text-gray-200 block truncate">{sq.name}</span>
+                                    <span className="text-xs text-gray-500">{sq.members_count || 0} участников</span>
+                                </div>
+                            </label>
+                        ))}
+                    </div>
+                )}
             </div>
         </div>
     );
