@@ -987,7 +987,15 @@ def create_key():
         return jsonify({'error': 'Пользователь не найден'}), 404
     
     telegram_id = user.get('telegram_id')
-    username = user.get('username') or f"user_{telegram_id}"
+    raw_username = user.get('username') or f"user_{telegram_id}"
+    
+    # Санитизация username для Remnawave (только буквы, цифры, _ и -)
+    import re
+    username = re.sub(r'[^a-zA-Z0-9_-]', '', raw_username)
+    if not username:
+        username = f"user_{telegram_id}"
+    if username[0] in '_-':
+        username = f"u{username}"
     
     # Триальные настройки
     if is_trial:
@@ -1019,15 +1027,32 @@ def create_key():
             )
             remnawave_user = updated_user
         else:
-            # Создаём нового пользователя в Remnawave
-            remnawave_user = remnawave.remnawave_api.create_user_with_params(
-                telegram_id=telegram_id,
-                username=username,
-                days=days,
-                traffic_limit_bytes=traffic_bytes,
-                hwid_device_limit=devices,
-                active_internal_squads=squad_uuids if squad_uuids else None
-            )
+            # Создаём нового пользователя в Remnawave с санитизированным username
+            try:
+                remnawave_user = remnawave.remnawave_api.create_user_with_params(
+                    telegram_id=telegram_id,
+                    username=username,
+                    days=days,
+                    traffic_limit_bytes=traffic_bytes,
+                    hwid_device_limit=devices,
+                    active_internal_squads=squad_uuids if squad_uuids else None
+                )
+            except Exception as create_error:
+                error_msg = str(create_error).lower()
+                # Если username уже существует - добавляем telegram_id для уникальности
+                if 'already exists' in error_msg or 'a019' in error_msg:
+                    unique_username = f"{username}_{telegram_id}"
+                    logger.info(f"Username {username} already exists, trying {unique_username}")
+                    remnawave_user = remnawave.remnawave_api.create_user_with_params(
+                        telegram_id=telegram_id,
+                        username=unique_username,
+                        days=days,
+                        traffic_limit_bytes=traffic_bytes,
+                        hwid_device_limit=devices,
+                        active_internal_squads=squad_uuids if squad_uuids else None
+                    )
+                else:
+                    raise create_error
         
         if not remnawave_user:
             return jsonify({'error': 'Не удалось создать пользователя в Remnawave'}), 500
