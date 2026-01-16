@@ -306,6 +306,18 @@ def init_database():
             )
         """)
         
+        # Таблица настроек платежных провайдеров (для настройки из панели)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS payment_provider_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                setting_key TEXT NOT NULL,
+                setting_value TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(provider, setting_key)
+            )
+        """)
+        
         # Миграция: добавляем поля в mailings если их нет
         try:
             cursor.execute("ALTER TABLE mailings ADD COLUMN button_type TEXT")
@@ -376,6 +388,7 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_traffic_stats_date ON traffic_stats(date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_telegram_id ON blacklist(telegram_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_payment_provider_settings ON payment_provider_settings(provider, setting_key)")
         
         conn.commit()
         logger.info("База данных успешно инициализирована")
