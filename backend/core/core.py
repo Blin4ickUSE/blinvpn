@@ -15,8 +15,38 @@ logger = logging.getLogger(__name__)
 
 # Telegram Bot API
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+SUPPORT_BOT_TOKEN = os.getenv('SUPPORT_BOT_TOKEN', '')
 TELEGRAM_ADMIN_ID = os.getenv('TELEGRAM_ADMIN_ID', '')
 TELEGRAM_SUPPORT_GROUP_ID = os.getenv('TELEGRAM_SUPPORT_GROUP_ID', '')
+
+def send_notification_via_support_bot(telegram_id: int, message: str) -> bool:
+    """Отправить сообщение через бот поддержки (приоритет для тикетов)"""
+    if not SUPPORT_BOT_TOKEN:
+        return False
+    
+    try:
+        url = f"https://api.telegram.org/bot{SUPPORT_BOT_TOKEN}/sendMessage"
+        data = {
+            'chat_id': telegram_id,
+            'text': message,
+            'parse_mode': 'HTML'
+        }
+        response = requests.post(url, json=data, timeout=5)
+        if response.status_code == 200:
+            return True
+        logger.warning(f"Support bot failed to send to {telegram_id}: {response.text}")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to send via support bot to {telegram_id}: {e}")
+        return False
+
+def send_support_message_to_user(telegram_id: int, message: str) -> bool:
+    """Отправить сообщение поддержки - сначала через бот поддержки, потом через основной"""
+    # Сначала пробуем бот поддержки
+    if send_notification_via_support_bot(telegram_id, message):
+        return True
+    # Если не удалось - через основной бот
+    return send_notification_to_user(telegram_id, message)
 
 def send_notification_to_user(telegram_id: int, message: str) -> bool:
     """Отправить уведомление пользователю в Telegram"""
