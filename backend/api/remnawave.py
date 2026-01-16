@@ -469,6 +469,11 @@ def get_remnawave_api():
     """Получить экземпляр Remnawave API"""
     # Поддерживаем оба названия переменной для обратной совместимости
     api_url = os.getenv('REMWAVE_PANEL_URL') or os.getenv('REMWAVE_API_URL', 'http://localhost:3000')
+    
+    # Автоматически добавляем протокол если его нет
+    if api_url and not api_url.startswith('http://') and not api_url.startswith('https://'):
+        api_url = 'https://' + api_url
+    
     api_key = os.getenv('REMWAVE_API_KEY', '')
     secret_key = os.getenv('REMWAVE_SECRET_KEY')
     caddy_token = os.getenv('REMWAVE_CADDY_TOKEN')
