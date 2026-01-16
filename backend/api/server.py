@@ -1819,21 +1819,87 @@ def update_payment_fees():
     finally:
         conn.close()
 
+@app.route('/api/panel/payment-settings', methods=['GET'])
+@require_auth
+def get_payment_settings():
+    """Получить настройки платежных систем"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT * FROM payment_provider_settings")
+        rows = cursor.fetchall()
+        settings = {}
+        for row in rows:
+            provider = row['provider']
+            if provider not in settings:
+                settings[provider] = {}
+            settings[provider][row['setting_key']] = row['setting_value']
+        
+        # Заполняем пустыми значениями если нет в БД
+        providers = ['yookassa', 'heleket', 'platega']
+        for p in providers:
+            if p not in settings:
+                settings[p] = {'enabled': '0'}
+        
+        return jsonify(settings)
+    finally:
+        conn.close()
+
+@app.route('/api/panel/payment-settings/<provider>', methods=['PUT'])
+@require_auth
+def update_payment_settings(provider: str):
+    """Обновить настройки платежной системы"""
+    data = request.json
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        for key, value in data.items():
+            # Upsert: INSERT OR REPLACE
+            cursor.execute("""
+                INSERT OR REPLACE INTO payment_provider_settings (provider, setting_key, setting_value, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            """, (provider, key, str(value)))
+        conn.commit()
+        
+        # Обновляем переменные окружения в памяти (опционально)
+        # Это позволит применить настройки без перезапуска
+        if provider == 'yookassa':
+            if 'shop_id' in data:
+                os.environ['YOOKASSA_SHOP_ID'] = str(data['shop_id'])
+            if 'secret_key' in data:
+                os.environ['YOOKASSA_SECRET_KEY'] = str(data['secret_key'])
+        elif provider == 'heleket':
+            if 'merchant' in data:
+                os.environ['HELEKET_MERCHANT'] = str(data['merchant'])
+            if 'api_key' in data:
+                os.environ['HELEKET_API_KEY'] = str(data['api_key'])
+        elif provider == 'platega':
+            if 'merchant_id' in data:
+                os.environ['PLATEGA_MERCHANT_ID'] = str(data['merchant_id'])
+            if 'secret_key' in data:
+                os.environ['PLATEGA_SECRET_KEY'] = str(data['secret_key'])
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Error updating payment settings for {provider}: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
 @app.route('/api/panel/remnawave/squads', methods=['GET'])
 @require_auth
 def get_remnawave_squads():
     """Получить список сквадов из Remnawave"""
     try:
         import asyncio
-        from backend.api.remnawave import RemnawaveAPI
-        import os
+        from backend.api.remnawave import get_remnawave_api, RemnaWaveAPI
         
         async def fetch_squads():
-            api_url = os.getenv('REMWAVE_API_URL', 'http://localhost:1488')
-            api_key = os.getenv('REMWAVE_API_KEY', '')
-            
-            async with RemnawaveAPI(api_url, api_key) as api:
-                internal_squads = await api.get_internal_squads()
+            api = get_remnawave_api()
+            async with api as connected_api:
+                internal_squads = await connected_api.get_internal_squads()
                 return [{'uuid': s.uuid, 'name': s.name, 'members_count': s.members_count} for s in internal_squads]
         
         squads = asyncio.run(fetch_squads())

@@ -467,7 +467,8 @@ class RemnaWaveAPI:
 # Синхронная обёртка для использования в синхронном коде
 def get_remnawave_api():
     """Получить экземпляр Remnawave API"""
-    api_url = os.getenv('REMWAVE_API_URL', 'http://localhost:1488')
+    # Поддерживаем оба названия переменной для обратной совместимости
+    api_url = os.getenv('REMWAVE_PANEL_URL') or os.getenv('REMWAVE_API_URL', 'http://localhost:3000')
     api_key = os.getenv('REMWAVE_API_KEY', '')
     secret_key = os.getenv('REMWAVE_SECRET_KEY')
     caddy_token = os.getenv('REMWAVE_CADDY_TOKEN')
