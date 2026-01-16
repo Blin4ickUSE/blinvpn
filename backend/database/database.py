@@ -508,6 +508,48 @@ def hash_hwid(hwid: str) -> str:
     """Хешировать HWID для безопасного хранения"""
     return hashlib.sha256(hwid.encode()).hexdigest()
 
+def get_system_setting(key: str, default: str = None) -> Optional[str]:
+    """Получить системную настройку"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT setting_value FROM system_settings WHERE setting_key = ?", (key,))
+        row = cursor.fetchone()
+        return row['setting_value'] if row else default
+    finally:
+        conn.close()
+
+def set_system_setting(key: str, value: str) -> bool:
+    """Установить системную настройку"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT OR REPLACE INTO system_settings (setting_key, setting_value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+        """, (key, value))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Error setting system setting {key}: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_default_squads() -> List[str]:
+    """Получить список UUID сквадов по умолчанию"""
+    import json
+    value = get_system_setting('default_squads', '[]')
+    try:
+        return json.loads(value)
+    except:
+        return []
+
+def set_default_squads(squad_uuids: List[str]) -> bool:
+    """Установить список UUID сквадов по умолчанию"""
+    import json
+    return set_system_setting('default_squads', json.dumps(squad_uuids))
+
 # Инициализация при импорте
 if __name__ != "__main__":
     init_database()
