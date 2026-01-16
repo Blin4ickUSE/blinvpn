@@ -2243,12 +2243,12 @@ export default function App() {
         <label className="text-xs text-slate-500 mb-2 block uppercase font-bold tracking-wider">Ваша ссылка</label>
         <div className="flex gap-2">
           <div className="bg-slate-900 flex-1 p-3 rounded-lg text-slate-300 font-mono text-sm truncate">
-            {telegramId ? `https://t.me/${BOT_USERNAME_MINI}/?startapp=${telegramId}` : 'Загрузка...'}
+            {telegramId ? `https://t.me/${BOT_USERNAME_MINI}?start=ref${telegramId}` : 'Загрузка...'}
           </div>
           <button
             onClick={() => {
               if (telegramId) {
-                handleCopy(`https://t.me/${BOT_USERNAME_MINI}/?startapp=${telegramId}`);
+                handleCopy(`https://t.me/${BOT_USERNAME_MINI}?start=ref${telegramId}`);
               }
             }}
             className="bg-blue-600 px-4 rounded-lg text-white hover:bg-blue-500"
@@ -2553,4 +2553,3 @@ export default function App() {
     </div>
   );
 }
-
