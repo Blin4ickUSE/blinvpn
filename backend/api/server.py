@@ -806,8 +806,8 @@ def reply_to_ticket(ticket_id: int):
         
         telegram_id = result['telegram_id']
         
-        # Отправляем сообщение пользователю - сначала через бот поддержки, потом через основной
-        success = core.send_support_message_to_user(telegram_id, f"💬 <b>Ответ поддержки:</b>\n\n{message_text}")
+        # Отправляем сообщение пользователю напрямую - без "Ответ поддержки", просто текст ответа
+        success = core.send_support_message_to_user(telegram_id, message_text)
         
         if success:
             # Сохраняем сообщение в БД
@@ -963,6 +963,141 @@ def get_keys():
         return jsonify(keys)
     finally:
         conn.close()
+
+
+@app.route('/api/panel/keys', methods=['POST'])
+@require_auth
+def create_key():
+    """Создать ключ VPN для пользователя через Remnawave"""
+    data = request.json
+    
+    user_id = data.get('user_id')
+    days = data.get('days', 30)
+    traffic_gb = data.get('traffic', 100)  # В ГБ
+    devices = data.get('devices', 5)
+    is_trial = data.get('is_trial', False)
+    squad_uuids = data.get('squads', [])  # Список UUID сквадов
+    
+    if not user_id:
+        return jsonify({'error': 'user_id обязателен'}), 400
+    
+    # Получаем пользователя
+    user = database.get_user_by_id(user_id)
+    if not user:
+        return jsonify({'error': 'Пользователь не найден'}), 404
+    
+    telegram_id = user.get('telegram_id')
+    username = user.get('username') or f"user_{telegram_id}"
+    
+    # Триальные настройки
+    if is_trial:
+        days = 1
+        traffic_gb = 5
+        devices = 1
+    
+    traffic_bytes = int(traffic_gb * (1024 ** 3))  # Конвертация в байты
+    
+    try:
+        from backend.api import remnawave
+        
+        # Создаем или получаем пользователя в Remnawave
+        remnawave_user = None
+        existing_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
+        
+        if existing_users and len(existing_users) > 0:
+            # Пользователь уже существует - обновляем подписку
+            remnawave_user = existing_users[0]
+            expire_at = datetime.now() + timedelta(days=days)
+            
+            # Обновляем пользователя
+            updated_user = remnawave.remnawave_api.update_user_sync(
+                uuid=remnawave_user.uuid,
+                expire_at=expire_at,
+                traffic_limit_bytes=traffic_bytes,
+                hwid_device_limit=devices,
+                active_internal_squads=squad_uuids if squad_uuids else None
+            )
+            remnawave_user = updated_user
+        else:
+            # Создаём нового пользователя в Remnawave
+            remnawave_user = remnawave.remnawave_api.create_user_with_params(
+                telegram_id=telegram_id,
+                username=username,
+                days=days,
+                traffic_limit_bytes=traffic_bytes,
+                hwid_device_limit=devices,
+                active_internal_squads=squad_uuids if squad_uuids else None
+            )
+        
+        if not remnawave_user:
+            return jsonify({'error': 'Не удалось создать пользователя в Remnawave'}), 500
+        
+        # Сохраняем или обновляем ключ в БД
+        conn = database.get_db_connection()
+        cursor = conn.cursor()
+        
+        expiry_date = (datetime.now() + timedelta(days=days)).isoformat()
+        key_uuid = remnawave_user.uuid if hasattr(remnawave_user, 'uuid') else remnawave_user.get('uuid')
+        subscription_url = remnawave_user.subscription_url if hasattr(remnawave_user, 'subscription_url') else remnawave_user.get('subscription_url', '')
+        
+        # Проверяем существует ли уже ключ для этого пользователя
+        cursor.execute("SELECT id FROM vpn_keys WHERE user_id = ? AND key_uuid = ?", (user_id, key_uuid))
+        existing_key = cursor.fetchone()
+        
+        if existing_key:
+            # Обновляем существующий ключ
+            cursor.execute("""
+                UPDATE vpn_keys
+                SET status = 'Active', expiry_date = ?, traffic_limit = ?, devices_limit = ?, key_config = ?
+                WHERE id = ?
+            """, (expiry_date, traffic_bytes, devices, subscription_url, existing_key['id']))
+            key_id = existing_key['id']
+        else:
+            # Создаем новый ключ
+            cursor.execute("""
+                INSERT INTO vpn_keys (user_id, key_uuid, key_config, status, expiry_date, devices_limit, traffic_limit)
+                VALUES (?, ?, ?, 'Active', ?, ?, ?)
+            """, (user_id, key_uuid, subscription_url, expiry_date, devices, traffic_bytes))
+            key_id = cursor.lastrowid
+        
+        conn.commit()
+        conn.close()
+        
+        # Уведомление админу
+        admin_msg = (
+            f"🔑 Создан новый ключ:\n"
+            f"👤 Пользователь: @{username}\n"
+            f"📅 Срок: {days} дней\n"
+            f"📊 Трафик: {traffic_gb} ГБ\n"
+            f"📱 Устройства: {devices}\n"
+            f"🆔 Trial: {'Да' if is_trial else 'Нет'}"
+        )
+        core.send_notification_to_admin(admin_msg)
+        
+        # Отправляем ключ пользователю
+        if subscription_url:
+            user_msg = (
+                f"🎉 Ваш VPN ключ готов!\n\n"
+                f"📅 Срок действия: {days} дней\n"
+                f"📊 Лимит трафика: {traffic_gb} ГБ\n"
+                f"📱 Устройства: {devices}\n\n"
+                f"🔗 Ссылка для подключения:\n<code>{subscription_url}</code>"
+            )
+            core.send_notification_to_user(telegram_id, user_msg)
+        
+        return jsonify({
+            'success': True,
+            'key_id': key_id,
+            'key_uuid': key_uuid,
+            'subscription_url': subscription_url,
+            'expiry_date': expiry_date
+        }), 201
+        
+    except Exception as e:
+        logger.error(f"Ошибка создания ключа: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Ошибка создания ключа: {str(e)}'}), 500
 
 
 @app.route('/api/user/referrals', methods=['GET'])
@@ -1730,6 +1865,26 @@ def update_public_page(page_type: str):
         return jsonify({'success': True})
     finally:
         conn.close()
+
+@app.route('/api/public-pages', methods=['GET'])
+def get_all_public_pages():
+    """Получить все публичные страницы (публичный эндпоинт для мини-приложения)"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT page_type, content, updated_at FROM public_pages")
+        rows = cursor.fetchall()
+        pages = {}
+        for row in rows:
+            pages[row['page_type']] = {
+                'content': row['content'],
+                'updated_at': row['updated_at']
+            }
+        return jsonify(pages)
+    finally:
+        conn.close()
+
 
 @app.route('/api/public-pages/<page_type>', methods=['GET'])
 def get_public_page(page_type: str):
