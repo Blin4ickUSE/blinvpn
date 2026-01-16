@@ -401,7 +401,8 @@ def create_subscription():
             traffic_limit_bytes = int(whitelist_gb * (1024 ** 3))
             result = core.create_user_and_subscription(
                 user['telegram_id'], user.get('username', ''), days,
-                traffic_limit=traffic_limit_bytes
+                traffic_limit=traffic_limit_bytes,
+                plan_type='whitelist'
             )
             if result:
                 return jsonify({'success': True, 'subscription': result})
@@ -420,11 +421,13 @@ def create_subscription():
         traffic_limit_bytes = int(whitelist_gb * (1024 ** 3))
         result = core.create_user_and_subscription(
             user['telegram_id'], user.get('username', ''), days,
-            traffic_limit=traffic_limit_bytes
+            traffic_limit=traffic_limit_bytes,
+            plan_type='whitelist'
         )
     else:
         result = core.create_user_and_subscription(
-            user['telegram_id'], user.get('username', ''), days
+            user['telegram_id'], user.get('username', ''), days,
+            plan_type='vpn'
         )
     
     if result:
@@ -1998,23 +2001,34 @@ def update_settings():
 @app.route('/api/panel/default-squads', methods=['GET'])
 @require_auth
 def get_default_squads():
-    """Получить список сквадов по умолчанию для подписки"""
-    squads = database.get_default_squads()
-    return jsonify({'squads': squads})
+    """Получить список сквадов по умолчанию для подписок"""
+    vpn_squads = database.get_default_squads('vpn')
+    whitelist_squads = database.get_default_squads('whitelist')
+    return jsonify({
+        'vpn_squads': vpn_squads,
+        'whitelist_squads': whitelist_squads
+    })
 
 @app.route('/api/panel/default-squads', methods=['PUT'])
 @require_auth
 def set_default_squads():
-    """Установить список сквадов по умолчанию для подписки"""
+    """Установить список сквадов по умолчанию для подписок"""
     data = request.json
-    squad_uuids = data.get('squads', [])
+    vpn_squads = data.get('vpn_squads', [])
+    whitelist_squads = data.get('whitelist_squads', [])
     
-    if not isinstance(squad_uuids, list):
+    if not isinstance(vpn_squads, list) or not isinstance(whitelist_squads, list):
         return jsonify({'error': 'squads должен быть массивом UUID'}), 400
     
-    success = database.set_default_squads(squad_uuids)
-    if success:
-        return jsonify({'success': True, 'squads': squad_uuids})
+    success_vpn = database.set_default_squads(vpn_squads, 'vpn')
+    success_whitelist = database.set_default_squads(whitelist_squads, 'whitelist')
+    
+    if success_vpn and success_whitelist:
+        return jsonify({
+            'success': True, 
+            'vpn_squads': vpn_squads,
+            'whitelist_squads': whitelist_squads
+        })
     return jsonify({'error': 'Ошибка сохранения настроек'}), 500
 
 @app.route('/api/panel/payment-fees', methods=['GET'])
