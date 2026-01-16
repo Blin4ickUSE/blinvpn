@@ -3,6 +3,7 @@ REST API сервер для мини-приложения и панели
 """
 import os
 import logging
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import sys
@@ -1945,6 +1946,9 @@ def get_settings():
         cursor.execute("SELECT setting_key, setting_value FROM system_settings")
         db_settings = {row['setting_key']: row['setting_value'] for row in cursor.fetchall()}
         
+        # Добавляем сквады по умолчанию
+        db_settings['default_squads'] = database.get_default_squads()
+        
         # Настройки из .env
         env_settings = {
             'MINIAPP_URL': os.getenv('MINIAPP_URL', ''),
@@ -1990,6 +1994,28 @@ def update_settings():
         return jsonify({'success': True})
     finally:
         conn.close()
+
+@app.route('/api/panel/default-squads', methods=['GET'])
+@require_auth
+def get_default_squads():
+    """Получить список сквадов по умолчанию для подписки"""
+    squads = database.get_default_squads()
+    return jsonify({'squads': squads})
+
+@app.route('/api/panel/default-squads', methods=['PUT'])
+@require_auth
+def set_default_squads():
+    """Установить список сквадов по умолчанию для подписки"""
+    data = request.json
+    squad_uuids = data.get('squads', [])
+    
+    if not isinstance(squad_uuids, list):
+        return jsonify({'error': 'squads должен быть массивом UUID'}), 400
+    
+    success = database.set_default_squads(squad_uuids)
+    if success:
+        return jsonify({'success': True, 'squads': squad_uuids})
+    return jsonify({'error': 'Ошибка сохранения настроек'}), 500
 
 @app.route('/api/panel/payment-fees', methods=['GET'])
 @require_auth
