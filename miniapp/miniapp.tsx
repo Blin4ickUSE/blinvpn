@@ -246,7 +246,7 @@ const VPN_PLANS_DEFAULT: Plan[] = [
   { id: '2y', duration: '2 ГОДА', price: 1199, highlight: false, days: 730 },
 ];
 
-const PRESET_AMOUNTS = [50, 100, 250, 500, 1000, 2000, 5000, 10000, 50000, 100000]; // Минимум 50₽, максимум 100,000₽
+const PRESET_AMOUNTS = [100, 250, 500, 1000, 2000, 5000]; // Минимум 50₽, максимум 100,000₽
 
 /**
  * Рассчитывает цену за whitelist bypass: абонентская плата (100₽) + 15₽/ГБ
@@ -635,24 +635,38 @@ export default function App() {
     setActivePlatform(detected);
     setWizardPlatform(detected);
 
-    // Определяем Telegram ID
+    // Определяем Telegram ID и username из Telegram WebApp
     let tgId: number | null = null;
+    let tgUsername: string = '';
     const win: any = window as any;
-    if (win.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
-      tgId = Number(win.Telegram.WebApp.initDataUnsafe.user.id);
+    
+    if (win.Telegram?.WebApp?.initDataUnsafe?.user) {
+      const tgUser = win.Telegram.WebApp.initDataUnsafe.user;
+      tgId = Number(tgUser.id);
+      tgUsername = tgUser.username || tgUser.first_name || '';
+      
+      // Уведомляем Telegram что приложение готово
+      win.Telegram.WebApp.ready();
+      win.Telegram.WebApp.expand();
     } else {
       const params = new URLSearchParams(window.location.search);
       const fromQuery = params.get('telegram_id');
       if (fromQuery) tgId = Number(fromQuery);
+      tgUsername = params.get('username') || '';
     }
-    if (!tgId) return;
+    
+    if (!tgId) {
+      console.error('Telegram ID не определен. Приложение работает только через Telegram.');
+      return;
+    }
 
     setTelegramId(tgId);
+    if (tgUsername) setUsername(tgUsername);
 
     (async () => {
       try {
-        // Пользователь
-        const userData = await miniApiFetch(`/user/info?telegram_id=${tgId}`);
+        // Пользователь (автоматически создается если не существует)
+        const userData = await miniApiFetch(`/user/info?telegram_id=${tgId}&username=${encodeURIComponent(tgUsername)}`);
         if (userData) {
           setUserId(userData.id);
           setBalance(userData.balance || 0);
