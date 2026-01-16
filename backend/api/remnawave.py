@@ -487,6 +487,26 @@ def get_remnawave_api():
 
 
 # Для обратной совместимости
+def sanitize_remnawave_username(username: str, telegram_id: int) -> str:
+    """Санитизация username для Remnawave - только буквы, цифры, _ и -"""
+    import re
+    if not username:
+        return f"user_{telegram_id}"
+    
+    # Удаляем все символы кроме букв, цифр, _ и -
+    sanitized = re.sub(r'[^a-zA-Z0-9_-]', '', username)
+    
+    # Если после санитизации пусто - используем telegram_id
+    if not sanitized:
+        return f"user_{telegram_id}"
+    
+    # Username должен начинаться с буквы или цифры
+    if sanitized[0] in '_-':
+        sanitized = f"u{sanitized}"
+    
+    return sanitized
+
+
 class RemnawaveAPI:
     """Обёртка для синхронного использования"""
     
@@ -495,11 +515,14 @@ class RemnawaveAPI:
     
     def create_user(self, telegram_id: int, username: str = None, email: str = None):
         """Создать пользователя (синхронная обёртка)"""
+        # Санитизируем username
+        safe_username = sanitize_remnawave_username(username, telegram_id)
+        
         async def _create():
             async with self._api as api:
                 expire_at = datetime.now() + timedelta(days=30)
                 return await api.create_user(
-                    username or f"user_{telegram_id}",
+                    safe_username,
                     expire_at,
                     telegram_id=telegram_id,
                     email=email
@@ -544,11 +567,14 @@ class RemnawaveAPI:
                                traffic_limit_bytes: int = 0, hwid_device_limit: int = None,
                                active_internal_squads: List[str] = None):
         """Создать пользователя с полными параметрами (синхронная обёртка)"""
+        # Санитизируем username
+        safe_username = sanitize_remnawave_username(username, telegram_id)
+        
         async def _create():
             async with self._api as api:
                 expire_at = datetime.now() + timedelta(days=days)
                 return await api.create_user(
-                    username or f"user_{telegram_id}",
+                    safe_username,
                     expire_at,
                     telegram_id=telegram_id,
                     traffic_limit_bytes=traffic_limit_bytes,
