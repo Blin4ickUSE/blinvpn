@@ -44,12 +44,19 @@ def require_auth(f):
 def get_user_info():
     """Получить информацию о пользователе"""
     telegram_id = request.args.get('telegram_id', type=int)
+    username = request.args.get('username', '')
+    
     if not telegram_id:
         return jsonify({'error': 'telegram_id required'}), 400
     
     user = database.get_user_by_telegram_id(telegram_id)
+    
+    # Автоматически создаем пользователя если его нет
     if not user:
-        return jsonify({'error': 'User not found'}), 404
+        user_id = database.create_user(telegram_id, username or f'user_{telegram_id}')
+        user = database.get_user_by_id(user_id)
+        if not user:
+            return jsonify({'error': 'Failed to create user'}), 500
     
     # Проверка бана
     ban_status = abuse_detected.check_user_ban_status(user['id'])
@@ -612,10 +619,17 @@ def get_mailing_stats():
         cursor.execute("SELECT COALESCE(SUM(sent_count), 0) AS total FROM mailings WHERE status = 'Completed'")
         total_sent = cursor.fetchone()['total'] or 0
         
-        # Доставляемость (упрощенно - считаем успешными все отправленные)
-        cursor.execute("SELECT COUNT(*) AS cnt FROM mailings WHERE status = 'Completed'")
-        completed_count = cursor.fetchone()['cnt'] or 0
-        delivered_rate = 98.5 if completed_count > 0 else 0  # Упрощенно, можно улучшить
+        # Доставляемость - считаем по реальным данным
+        cursor.execute("""
+            SELECT COALESCE(SUM(sent_count), 0) as total_sent, 
+                   COALESCE(SUM(CASE WHEN status = 'Completed' THEN sent_count ELSE 0 END), 0) as delivered
+            FROM mailings
+        """)
+        delivery_row = cursor.fetchone()
+        total_sent_for_rate = delivery_row['total_sent'] or 0
+        delivered_count = delivery_row['delivered'] or 0
+        # Если все успешно отправлены - 100%
+        delivered_rate = (delivered_count / total_sent_for_rate * 100) if total_sent_for_rate > 0 else 100
         
         # Переходы (пока нет трекинга, возвращаем 0)
         clicks = 0
@@ -792,8 +806,8 @@ def reply_to_ticket(ticket_id: int):
         
         telegram_id = result['telegram_id']
         
-        # Отправляем сообщение пользователю через основной бот
-        success = core.send_notification_to_user(telegram_id, message_text)
+        # Отправляем сообщение пользователю - сначала через бот поддержки, потом через основной
+        success = core.send_support_message_to_user(telegram_id, f"💬 <b>Ответ поддержки:</b>\n\n{message_text}")
         
         if success:
             # Сохраняем сообщение в БД
@@ -1204,6 +1218,7 @@ def get_full_statistics():
         
         # Выручка по дням (последние 30 дней)
         revenue_data = []
+        revenue_labels = []
         for i in range(30):
             day = (datetime.utcnow() - timedelta(days=29-i)).date()
             day_start = datetime.combine(day, datetime.min.time())
@@ -1215,6 +1230,7 @@ def get_full_statistics():
                   AND created_at >= ? AND created_at < ?
             """, (day_start.isoformat(), day_end.isoformat()))
             revenue_data.append(float(cursor.fetchone()['total'] or 0))
+            revenue_labels.append(day.strftime('%d.%m.%Y'))
         
         # Распределение пользователей
         cursor.execute("SELECT COUNT(*) AS cnt FROM users WHERE status = 'Active'")
@@ -1321,6 +1337,7 @@ def get_full_statistics():
             'openTickets': open_tickets,
             'clientsBalance': clients_balance,
             'revenueData': revenue_data,
+            'revenueLabels': revenue_labels,
             'userDistData': user_dist_data,
             'paymentMethodsData': payment_methods_data,
             'totalSubscriptions': total_subscriptions,
@@ -1737,12 +1754,18 @@ def get_settings():
     conn = database.get_db_connection()
     cursor = conn.cursor()
     
+    def mask_token(token: str) -> str:
+        """Маскирует токен, показывая только первые и последние 4 символа"""
+        if not token or len(token) < 10:
+            return token
+        return token[:4] + '...' + token[-4:]
+    
     try:
         # Настройки из БД
         cursor.execute("SELECT setting_key, setting_value FROM system_settings")
         db_settings = {row['setting_key']: row['setting_value'] for row in cursor.fetchall()}
         
-        # Настройки из .env (только безопасные, не секреты)
+        # Настройки из .env
         env_settings = {
             'MINIAPP_URL': os.getenv('MINIAPP_URL', ''),
             'PANEL_URL': os.getenv('PANEL_URL', ''),
@@ -1751,6 +1774,14 @@ def get_settings():
             'TRIAL_HOURS': os.getenv('TRIAL_HOURS', '24'),
             'MIN_TOPUP_AMOUNT': os.getenv('MIN_TOPUP_AMOUNT', '50'),
             'MAX_TOPUP_AMOUNT': os.getenv('MAX_TOPUP_AMOUNT', '100000'),
+            # Токены (частично замаскированные для безопасности)
+            'TELEGRAM_BOT_TOKEN': mask_token(os.getenv('TELEGRAM_BOT_TOKEN', '')),
+            'SUPPORT_BOT_TOKEN': mask_token(os.getenv('SUPPORT_BOT_TOKEN', '')),
+            'TELEGRAM_ADMIN_ID': os.getenv('TELEGRAM_ADMIN_ID', ''),
+            'TELEGRAM_SUPPORT_GROUP_ID': os.getenv('TELEGRAM_SUPPORT_GROUP_ID', ''),
+            # Remnawave
+            'REMWAVE_PANEL_URL': os.getenv('REMWAVE_PANEL_URL', os.getenv('REMWAVE_API_URL', '')),
+            'REMWAVE_API_KEY': mask_token(os.getenv('REMWAVE_API_KEY', '')),
         }
         
         return jsonify({**db_settings, **env_settings})
@@ -1888,6 +1919,121 @@ def update_payment_settings(provider: str):
     finally:
         conn.close()
 
+@app.route('/api/panel/backups/status', methods=['GET'])
+@require_auth
+def get_backup_status():
+    """Получить статус резервного копирования"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT * FROM backup_settings ORDER BY id DESC LIMIT 1")
+        row = cursor.fetchone()
+        if row:
+            return jsonify({
+                'enabled': bool(row['enabled']),
+                'interval_hours': row['interval_hours'],
+                'last_backup': row['last_backup']
+            })
+        return jsonify({
+            'enabled': False,
+            'interval_hours': 12,
+            'last_backup': None
+        })
+    finally:
+        conn.close()
+
+
+@app.route('/api/panel/backups/settings', methods=['PUT'])
+@require_auth
+def update_backup_settings():
+    """Обновить настройки резервного копирования"""
+    data = request.json
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT id FROM backup_settings ORDER BY id DESC LIMIT 1")
+        row = cursor.fetchone()
+        if row:
+            cursor.execute("""
+                UPDATE backup_settings SET enabled = ?, interval_hours = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (1 if data.get('enabled') else 0, data.get('interval_hours', 12), row['id']))
+        else:
+            cursor.execute("""
+                INSERT INTO backup_settings (enabled, interval_hours)
+                VALUES (?, ?)
+            """, (1 if data.get('enabled') else 0, data.get('interval_hours', 12)))
+        conn.commit()
+        return jsonify({'success': True})
+    finally:
+        conn.close()
+
+
+@app.route('/api/panel/backups/create', methods=['POST'])
+@require_auth
+def create_backup():
+    """Создать резервную копию и отправить администратору"""
+    import os
+    import shutil
+    import tempfile
+    from datetime import datetime
+    
+    try:
+        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'blinvpn.db')
+        
+        if not os.path.exists(db_path):
+            return jsonify({'error': 'Database file not found'}), 404
+        
+        # Создаем временный файл с копией БД
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_name = f'blinvpn_backup_{timestamp}.db'
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backup_path = os.path.join(temp_dir, backup_name)
+            shutil.copy2(db_path, backup_path)
+            
+            # Создаем zip архив
+            zip_path = os.path.join(temp_dir, f'{backup_name}.zip')
+            shutil.make_archive(backup_path, 'zip', temp_dir, backup_name)
+            
+            # Отправляем файл администратору
+            admin_id = os.getenv('TELEGRAM_ADMIN_ID')
+            bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+            
+            if admin_id and bot_token:
+                import requests
+                with open(f'{backup_path}.zip', 'rb') as f:
+                    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+                    response = requests.post(
+                        url,
+                        data={
+                            'chat_id': admin_id,
+                            'caption': f'🗄️ Резервная копия БД\n📅 {datetime.now().strftime("%d.%m.%Y %H:%M")}'
+                        },
+                        files={'document': (f'{backup_name}.zip', f, 'application/zip')},
+                        timeout=30
+                    )
+                    if response.status_code != 200:
+                        logger.error(f"Failed to send backup: {response.text}")
+                        return jsonify({'error': 'Failed to send backup to admin'}), 500
+        
+        # Обновляем время последнего бекапа
+        conn = database.get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("UPDATE backup_settings SET last_backup = CURRENT_TIMESTAMP")
+            conn.commit()
+        finally:
+            conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Backup creation error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/panel/remnawave/squads', methods=['GET'])
 @require_auth
 def get_remnawave_squads():
@@ -1907,6 +2053,229 @@ def get_remnawave_squads():
     except Exception as e:
         logger.error(f"Error fetching Remnawave squads: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/panel/users/mass-action', methods=['POST'])
+@require_auth
+def mass_user_action():
+    """Массовые действия над пользователями"""
+    data = request.get_json()
+    action_type = data.get('action')
+    value = data.get('value', '')
+    notify = data.get('notify', False)
+    user_ids = data.get('user_ids', [])  # Если пустой - применить ко всем
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Получаем список пользователей
+        if user_ids:
+            placeholders = ','.join('?' * len(user_ids))
+            cursor.execute(f"SELECT id, telegram_id, balance FROM users WHERE id IN ({placeholders})", user_ids)
+        else:
+            cursor.execute("SELECT id, telegram_id, balance FROM users")
+        users = cursor.fetchall()
+        
+        affected = 0
+        notifications = []
+        
+        for user in users:
+            user_id = user['id']
+            telegram_id = user['telegram_id']
+            
+            if action_type == 'MASS_ADD_BALANCE':
+                amount = float(value)
+                cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, user_id))
+                cursor.execute("""
+                    INSERT INTO transactions (user_id, amount, type, status, description)
+                    VALUES (?, ?, 'deposit', 'Success', 'Начисление от администрации')
+                """, (user_id, amount))
+                if notify:
+                    notifications.append((telegram_id, f"💰 Вам начислено {amount} ₽ на баланс!"))
+                affected += 1
+                
+            elif action_type == 'MASS_ADD_DAYS':
+                days = int(value)
+                cursor.execute("""
+                    UPDATE vpn_keys SET expiry_date = datetime(
+                        CASE WHEN expiry_date > datetime('now') THEN expiry_date ELSE datetime('now') END,
+                        '+' || ? || ' days'
+                    ) WHERE user_id = ?
+                """, (days, user_id))
+                if notify:
+                    notifications.append((telegram_id, f"⏰ Ваша подписка продлена на {days} дней!"))
+                affected += 1
+                
+            elif action_type == 'MASS_BAN':
+                cursor.execute("UPDATE users SET is_banned = 1 WHERE id = ?", (user_id,))
+                if notify:
+                    notifications.append((telegram_id, f"⛔ Ваш аккаунт заблокирован. Причина: {value or 'Не указана'}"))
+                affected += 1
+                
+            elif action_type == 'MASS_UNBAN':
+                cursor.execute("UPDATE users SET is_banned = 0 WHERE id = ?", (user_id,))
+                if notify:
+                    notifications.append((telegram_id, "✅ Ваш аккаунт разблокирован!"))
+                affected += 1
+                
+            elif action_type == 'MASS_RESET_TRIAL':
+                cursor.execute("UPDATE users SET trial_used = 0 WHERE id = ?", (user_id,))
+                if notify:
+                    notifications.append((telegram_id, "🎁 Ваш пробный период сброшен! Вы можете снова воспользоваться триалом."))
+                affected += 1
+                
+            elif action_type == 'MASS_DELETE_KEYS':
+                cursor.execute("DELETE FROM vpn_keys WHERE user_id = ?", (user_id,))
+                if notify:
+                    notifications.append((telegram_id, "🔑 Ваши VPN ключи были удалены."))
+                affected += 1
+                
+            elif action_type == 'MASS_SET_PARTNER':
+                rate = int(value) if value else 20
+                cursor.execute("UPDATE users SET is_partner = 1, partner_rate = ? WHERE id = ?", (rate, user_id))
+                if notify:
+                    notifications.append((telegram_id, f"🤝 Вы стали партнером! Ваша комиссия: {rate}%"))
+                affected += 1
+                
+            elif action_type == 'MASS_REMOVE_PARTNER':
+                cursor.execute("UPDATE users SET is_partner = 0, partner_rate = 0 WHERE id = ?", (user_id,))
+                if notify:
+                    notifications.append((telegram_id, "👤 Ваш партнерский статус отменен."))
+                affected += 1
+        
+        conn.commit()
+        
+        # Отправляем уведомления через бота (асинхронно)
+        if notifications:
+            from threading import Thread
+            def send_notifications():
+                import asyncio
+                from aiogram import Bot
+                bot = Bot(token=os.getenv('TELEGRAM_BOT_TOKEN', ''))
+                async def send_all():
+                    for tg_id, msg in notifications:
+                        try:
+                            await bot.send_message(tg_id, msg)
+                        except Exception as e:
+                            logger.warning(f"Failed to send notification to {tg_id}: {e}")
+                    await bot.session.close()
+                asyncio.run(send_all())
+            Thread(target=send_notifications, daemon=True).start()
+        
+        return jsonify({'success': True, 'affected': affected})
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Mass action error: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/panel/users/<int:user_id>/action', methods=['POST'])
+@require_auth
+def single_user_action(user_id):
+    """Действия над одним пользователем"""
+    data = request.get_json()
+    action_type = data.get('action')
+    value = data.get('value', '')
+    notify = data.get('notify', False)
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT telegram_id, balance FROM users WHERE id = ?", (user_id,))
+        user = cursor.fetchone()
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        telegram_id = user['telegram_id']
+        notification_msg = None
+        
+        if action_type == 'ADD_BALANCE':
+            amount = float(value)
+            cursor.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, user_id))
+            cursor.execute("""
+                INSERT INTO transactions (user_id, amount, type, status, description)
+                VALUES (?, ?, 'deposit', 'Success', 'Начисление от администрации')
+            """, (user_id, amount))
+            notification_msg = f"💰 Вам начислено {amount} ₽ на баланс!"
+            
+        elif action_type == 'SUB_BALANCE':
+            amount = float(value)
+            cursor.execute("UPDATE users SET balance = balance - ? WHERE id = ?", (amount, user_id))
+            cursor.execute("""
+                INSERT INTO transactions (user_id, amount, type, status, description)
+                VALUES (?, ?, 'withdrawal', 'Success', 'Списание администрацией')
+            """, (user_id, -amount))
+            notification_msg = f"💸 С вашего баланса списано {amount} ₽"
+            
+        elif action_type == 'EXTEND_SUB':
+            days = int(value)
+            cursor.execute("""
+                UPDATE vpn_keys SET expiry_date = datetime(
+                    CASE WHEN expiry_date > datetime('now') THEN expiry_date ELSE datetime('now') END,
+                    '+' || ? || ' days'
+                ) WHERE user_id = ?
+            """, (days, user_id))
+            notification_msg = f"⏰ Ваша подписка продлена на {days} дней!"
+            
+        elif action_type == 'REDUCE_SUB':
+            days = int(value)
+            cursor.execute("""
+                UPDATE vpn_keys SET expiry_date = datetime(expiry_date, '-' || ? || ' days')
+                WHERE user_id = ?
+            """, (days, user_id))
+            notification_msg = f"⏰ Срок вашей подписки уменьшен на {days} дней."
+            
+        elif action_type == 'SET_TRAFFIC':
+            limit_gb = int(value)
+            cursor.execute("UPDATE vpn_keys SET traffic_limit = ? WHERE user_id = ?", (limit_gb * 1024 * 1024 * 1024, user_id))
+            notification_msg = f"📊 Ваш лимит трафика установлен: {limit_gb} ГБ"
+            
+        elif action_type == 'SET_DEVICES':
+            limit = int(value)
+            cursor.execute("UPDATE vpn_keys SET devices_limit = ? WHERE user_id = ?", (limit, user_id))
+            notification_msg = f"📱 Ваш лимит устройств: {limit}"
+            
+        elif action_type == 'BAN':
+            cursor.execute("UPDATE users SET is_banned = 1 WHERE id = ?", (user_id,))
+            notification_msg = f"⛔ Ваш аккаунт заблокирован. Причина: {value or 'Не указана'}"
+            
+        elif action_type == 'UNBAN':
+            cursor.execute("UPDATE users SET is_banned = 0 WHERE id = ?", (user_id,))
+            notification_msg = "✅ Ваш аккаунт разблокирован!"
+            
+        elif action_type == 'NOTIFY':
+            notification_msg = value
+        
+        conn.commit()
+        
+        # Отправляем уведомление
+        if notify and notification_msg:
+            from threading import Thread
+            def send_notification():
+                import asyncio
+                from aiogram import Bot
+                bot = Bot(token=os.getenv('TELEGRAM_BOT_TOKEN', ''))
+                async def send():
+                    try:
+                        await bot.send_message(telegram_id, notification_msg)
+                    except Exception as e:
+                        logger.warning(f"Failed to send notification: {e}")
+                    await bot.session.close()
+                asyncio.run(send())
+            Thread(target=send_notification, daemon=True).start()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"User action error: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv('API_PORT', 8000)))
