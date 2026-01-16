@@ -20,7 +20,22 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv('SUPPORT_BOT_TOKEN', '')
+MAIN_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 SUPPORT_GROUP_ID = int(os.getenv('TELEGRAM_SUPPORT_GROUP_ID', '-1000000000000'))
+
+# Валидация токенов - предотвращение конфликта "два бота на одном токене"
+if not BOT_TOKEN:
+    logger.error("❌ SUPPORT_BOT_TOKEN не указан в .env!")
+    sys.exit(1)
+
+if BOT_TOKEN == MAIN_BOT_TOKEN:
+    logger.error("❌ КРИТИЧЕСКАЯ ОШИБКА: SUPPORT_BOT_TOKEN совпадает с TELEGRAM_BOT_TOKEN!")
+    logger.error("   Это вызовет ошибку 'Conflict: terminated by other getUpdates request'")
+    logger.error("   Создайте ОТДЕЛЬНОГО бота в @BotFather для службы поддержки!")
+    sys.exit(1)
+
+if SUPPORT_GROUP_ID == -1000000000000:
+    logger.warning("⚠️ TELEGRAM_SUPPORT_GROUP_ID не настроен, используется значение по умолчанию")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -288,10 +303,12 @@ async def handle_admin_reply(message: types.Message):
             # Получаем telegram_id пользователя
             user = database.get_user_by_id(user_id)
             if not user:
-                logger.error(f"Пользователь с ID {user_id} не найден")
+                logger.error(f"Пользователь с ID {user_id} не найден в БД")
+                await message.reply(f"❌ Пользователь ID={user_id} не найден в БД")
                 return
             
             telegram_id = user['telegram_id']
+            logger.info(f"Отправляю ответ пользователю: user_id={user_id}, telegram_id={telegram_id}")
             
             # Формируем текст сообщения
             message_text = message.text or message.caption or ''
@@ -348,8 +365,8 @@ async def handle_admin_reply(message: types.Message):
             conn.commit()
             conn.close()
         except Exception as e:
-            logger.error(f"Не удалось отправить ответ пользователю {user_id}: {e}")
-            await message.reply("❌ Не удалось доставить ответ пользователю (возможно, он заблокировал бота).")
+            logger.error(f"Не удалось отправить ответ пользователю user_id={user_id}, telegram_id={telegram_id}: {e}")
+            await message.reply(f"❌ Не удалось доставить ответ пользователю (telegram_id={telegram_id}).\nОшибка: {e}")
 
 async def main():
     """Запуск бота"""
