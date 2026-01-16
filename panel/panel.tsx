@@ -679,11 +679,21 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
             return;
         }
         try {
-            // TODO: Реализовать создание ключа через API с использованием Remnawave
-            onToast('Успех', 'Ключ успешно создан и отправлен', 'success');
+            const response = await apiFetch('/panel/keys', {
+                method: 'POST',
+                body: JSON.stringify({
+                    user_id: selectedUser.id,
+                    days: params.days,
+                    traffic: params.traffic,
+                    devices: params.devices,
+                    is_trial: isTrial,
+                    squads: selectedSquads
+                })
+            });
+            onToast('Успех', 'Ключ успешно создан и отправлен пользователю', 'success');
             onClose(); 
         } catch (e: any) {
-            onToast('Ошибка', 'Не удалось создать ключ', 'error');
+            onToast('Ошибка', e.message || 'Не удалось создать ключ', 'error');
         }
     };
 
