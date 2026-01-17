@@ -492,6 +492,22 @@ def update_user_balance(user_id: int, amount: float, ensure_non_negative: bool =
     finally:
         conn.close()
 
+def update_user_full_name(telegram_id: int, full_name: str) -> bool:
+    """Обновить полное имя пользователя (first_name из Telegram)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            UPDATE users 
+            SET full_name = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE telegram_id = ?
+        """, (full_name, telegram_id))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
 def get_all_users(limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
     """Получить всех пользователей"""
     conn = get_db_connection()
