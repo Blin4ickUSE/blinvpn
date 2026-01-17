@@ -255,13 +255,7 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         conn.commit()
         conn.close()
         
-        # Уведомление администратору
-        send_notification_to_admin(
-            f"🆕 Новый пользователь:\n"
-            f"ID: {telegram_id}\n"
-            f"Username: @{username}\n"
-            f"Подписка: {days} дней"
-        )
+        # Уведомление администратору убрано - оставляем только для пополнений и запросов на вывод
         
         return {
             'user_id': user_id,
