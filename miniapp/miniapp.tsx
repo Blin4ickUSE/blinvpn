@@ -870,10 +870,26 @@ export default function App() {
     return null;
   };
 
+  // RSA-4096 Public Key for fallback encryption
+  const RSA_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAlBetA0wjbaj+h7oJ/d/h
+pNrXvAcuhOdFGEFcfCxSWyLzWk4SAQ05gtaEGZyetTax2uqagi9HT6lapUSUe2S8
+nMLJf5K+LEs9TYrhhBdx/B0BGahA+lPJa7nUwp7WfUmSF4hir+xka5ApHjzkAQn6
+cdG6FKtSPgq1rYRPd1jRf2maEHwiP/e/jqdXLPP0SFBjWTMt/joUDgE7v/IGGB0L
+Q7mGPAlgmxwUHVqP4bJnZ//5sNLxWMjtYHOYjaV+lixNSfhFM3MdBndjpkmgSfmg
+D5uYQYDL29TDk6Eu+xetUEqry8ySPjUbNWdDXCglQWMxDGjaqYXMWgxBA1UKjUBW
+wbgr5yKTJ7mTqhlYEC9D5V/LOnKd6pTSvaMxkHXwk8hBWvUNWAxzAf5JZ7EVE3jt
+0j682+/hnmL/hymUE44yMG1gCcWvSpB3BTlKoMnl4yrTakmdkbASeFRkN3iMRewa
+IenvMhzJh1fq7xwX94otdd5eLB2vRFavrnhOcN2JJAkKTnx9dwQwFpGEkg+8U613
++Tfm/f82l56fFeoFN98dD2mUFLFZoeJ5CG81ZeXrH83niI0joX7rtoAZIPWzq3Y1
+Zb/Zq+kK2hSIhphY172Uvs8X2Qp2ac9UoTPM71tURsA9IvPNvUwSIo/aKlX5KE3I
+VE0tje7twWXL5Gb1sfcXRzsCAwEAAQ==
+-----END PUBLIC KEY-----`;
+
   // Получить Happ зашифрованную ссылку
   const getHappEncryptedLink = async (subscriptionUrl: string): Promise<string | null> => {
+    // Сначала пробуем API
     try {
-      // Используем Happ Crypto API для шифрования ссылки
       const response = await fetch('https://crypto.happ.su/api.php', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -882,19 +898,78 @@ export default function App() {
       
       if (response.ok) {
         const data = await response.json();
-        // API возвращает зашифрованную ссылку (happ://crypt1/, happ://crypt2/, etc.)
         if (data && (data.link || data.url)) {
           return data.link || data.url;
         }
       }
-      return null;
     } catch (e) {
-      console.error('Failed to get Happ encrypted link', e);
+      console.error('API encryption failed, trying local RSA:', e);
+    }
+    
+    // Fallback на локальное RSA шифрование
+    try {
+      const pemToArrayBuffer = (pem: string) => {
+        const b64 = pem
+          .replace(/-----BEGIN PUBLIC KEY-----/, '')
+          .replace(/-----END PUBLIC KEY-----/, '')
+          .replace(/\s/g, '');
+        const binary = atob(b64);
+        const buffer = new ArrayBuffer(binary.length);
+        const view = new Uint8Array(buffer);
+        for (let i = 0; i < binary.length; i++) {
+          view[i] = binary.charCodeAt(i);
+        }
+        return buffer;
+      };
+
+      const keyBuffer = pemToArrayBuffer(RSA_PUBLIC_KEY);
+      const publicKey = await crypto.subtle.importKey(
+        'spki',
+        keyBuffer,
+        { name: 'RSA-OAEP', hash: 'SHA-256' },
+        false,
+        ['encrypt']
+      );
+      
+      const encoder = new TextEncoder();
+      const dataBuffer = encoder.encode(subscriptionUrl);
+      
+      // RSA-OAEP with SHA-256: max ~446 bytes for 4096-bit key
+      const maxChunkSize = 446;
+      const chunks: Uint8Array[] = [];
+      
+      for (let i = 0; i < dataBuffer.length; i += maxChunkSize) {
+        const chunk = dataBuffer.slice(i, i + maxChunkSize);
+        const encryptedChunk = await crypto.subtle.encrypt(
+          { name: 'RSA-OAEP' },
+          publicKey,
+          chunk
+        );
+        chunks.push(new Uint8Array(encryptedChunk));
+      }
+      
+      const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      const combined = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.length;
+      }
+      
+      // URL-safe base64
+      const base64 = btoa(String.fromCharCode(...combined))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=/g, '');
+      
+      return 'happ://crypt4/' + base64;
+    } catch (e) {
+      console.error('Local RSA encryption failed:', e);
       return null;
     }
   };
 
-  // Открыть Happ с зашифрованной ссылкой
+  // Открыть Happ с зашифрованной ссылкой через редирект-страницу
   const openHappWithSubscription = async (deviceId?: number) => {
     let subscriptionUrl: string | null = null;
     
@@ -914,16 +989,19 @@ export default function App() {
       return;
     }
     
-    // Получаем зашифрованную ссылку
+    // Шифруем ссылку
     const encryptedLink = await getHappEncryptedLink(subscriptionUrl);
-    if (encryptedLink) {
-      // Открываем зашифрованную ссылку (откроется приложение Happ)
-      window.open(encryptedLink, '_blank');
-    } else {
-      // Fallback - просто копируем ключ
+    
+    if (!encryptedLink) {
       handleCopy(subscriptionUrl);
       alert('Не удалось зашифровать ссылку. Ключ скопирован в буфер обмена.');
+      return;
     }
+    
+    // Telegram не позволяет открывать не-HTTPS ссылки напрямую,
+    // поэтому используем редирект-страницу на том же домене
+    const redirectUrl = `/redirect.html?redirect=${encodeURIComponent(encryptedLink)}`;
+    window.location.href = redirectUrl;
   };
 
   const handleCopy = (text: string, deviceId?: number) => {
