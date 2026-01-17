@@ -46,6 +46,7 @@ def get_user_info():
     """Получить информацию о пользователе"""
     telegram_id = request.args.get('telegram_id', type=int)
     username = request.args.get('username', '')
+    first_name = request.args.get('first_name', '')  # Имя пользователя из Telegram
     ref = request.args.get('ref', type=int)  # Telegram ID реферера
     
     if not telegram_id:
@@ -75,7 +76,13 @@ def get_user_info():
                 else:
                     logger.warning(f"Referral rate limit exceeded for referrer {ref}")
         
-        user_id = database.create_user(telegram_id, username or f'user_{telegram_id}', referred_by=referred_by)
+        # Создаем пользователя с full_name = first_name
+        user_id = database.create_user(
+            telegram_id, 
+            username or f'user_{telegram_id}',
+            full_name=first_name or None,
+            referred_by=referred_by
+        )
         user = database.get_user_by_id(user_id)
         if not user:
             return jsonify({'error': 'Failed to create user'}), 500
@@ -92,6 +99,11 @@ def get_user_info():
                         user = database.get_user_by_telegram_id(telegram_id)
                 else:
                     logger.warning(f"Referral rate limit exceeded for referrer {ref}")
+        
+        # Обновляем first_name если он был передан и еще не сохранен
+        if first_name and not user.get('full_name'):
+            database.update_user_full_name(telegram_id, first_name)
+            user = database.get_user_by_telegram_id(telegram_id)
     
     # Проверка бана
     ban_status = abuse_detected.check_user_ban_status(user['id'])
@@ -107,6 +119,7 @@ def get_user_info():
         'id': user['id'],
         'telegram_id': user['telegram_id'],
         'username': user.get('username'),
+        'full_name': user.get('full_name'),  # First name из Telegram
         'balance': user.get('balance', 0),
         'status': user.get('status', 'Trial'),
         'referral_code': user.get('referral_code'),
@@ -391,6 +404,55 @@ def delete_payment_method(method_id: int):
         """, (method_id, user['id']))
         conn.commit()
         return jsonify({'success': True})
+    finally:
+        conn.close()
+
+@app.route('/api/user/devices/<int:device_id>', methods=['DELETE'])
+def delete_user_device(device_id: int):
+    """Удалить устройство пользователя"""
+    telegram_id = request.args.get('telegram_id', type=int)
+    if not telegram_id:
+        return jsonify({'error': 'telegram_id required'}), 400
+    
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Проверяем, что устройство принадлежит пользователю
+        cursor.execute("""
+            SELECT id, vpn_key_id FROM devices 
+            WHERE id = ? AND user_id = ?
+        """, (device_id, user['id']))
+        device = cursor.fetchone()
+        
+        if not device:
+            return jsonify({'error': 'Device not found'}), 404
+        
+        # Деактивируем устройство
+        cursor.execute("""
+            UPDATE devices 
+            SET is_active = 0 
+            WHERE id = ? AND user_id = ?
+        """, (device_id, user['id']))
+        
+        # Если есть связанный VPN ключ, деактивируем его тоже
+        if device['vpn_key_id']:
+            cursor.execute("""
+                UPDATE vpn_keys 
+                SET status = 'Inactive' 
+                WHERE id = ?
+            """, (device['vpn_key_id'],))
+        
+        conn.commit()
+        logger.info(f"Device {device_id} deleted for user {telegram_id}")
+        return jsonify({'success': True})
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error deleting device {device_id}: {e}")
+        return jsonify({'error': str(e)}), 500
     finally:
         conn.close()
 
@@ -1181,7 +1243,7 @@ def get_user_referrals():
     try:
         cursor.execute(
             """
-            SELECT id, username, registration_date
+            SELECT id, username, full_name, registration_date
             FROM users
             WHERE referred_by = ?
             ORDER BY registration_date DESC
@@ -1212,7 +1274,7 @@ def get_user_referrals():
             referrals.append(
                 {
                     "id": ref_id,
-                    "name": r["username"] or f"id{ref_id}",
+                    "name": r["full_name"] or r["username"] or f"id{ref_id}",
                     "date": r["registration_date"] or "",
                     "spent": total_spent,
                     "myProfit": profit,
