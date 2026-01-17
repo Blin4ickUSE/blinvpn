@@ -263,13 +263,13 @@ function calculateWhitelistPrice(gb: number, subscriptionFee: number = 100, pric
 const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
   { 
     id: 'card', 
-    name: 'Банковская карта | Platega', 
+    name: 'Банковская карта', 
     icon: '💳', 
     feePercent: 0  // Без комиссии по умолчанию
   },
   { 
     id: 'sbp', 
-    name: 'СБП (Быстрый платеж)', 
+    name: 'СБП', 
     icon: '⚡', 
     feePercent: 0, 
     variants: [
@@ -279,7 +279,7 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
   },
   { 
     id: 'crypto', 
-    name: 'Криптовалюта | Heleket', 
+    name: 'Криптовалюта', 
     icon: '🪙', 
     feePercent: 0 
   },
@@ -643,6 +643,7 @@ export default function App() {
     // Определяем Telegram ID и username из Telegram WebApp
     let tgId: number | null = null;
     let tgUsername: string = '';
+    let referralId: number | null = null;
     const win: any = window as any;
     
     if (win.Telegram?.WebApp?.initDataUnsafe?.user) {
@@ -655,6 +656,19 @@ export default function App() {
         setUserPhotoUrl(tgUser.photo_url);
       }
       
+      // Извлекаем реферальный ID из start_param (формат: ref123456789)
+      const startParam = win.Telegram.WebApp.initDataUnsafe?.start_param;
+      if (startParam && typeof startParam === 'string') {
+        const refMatch = startParam.match(/ref(\d+)/);
+        if (refMatch) {
+          referralId = parseInt(refMatch[1], 10);
+          // Нельзя быть своим собственным рефералом
+          if (referralId === tgId) {
+            referralId = null;
+          }
+        }
+      }
+      
       // Уведомляем Telegram что приложение готово
       win.Telegram.WebApp.ready();
       win.Telegram.WebApp.expand();
@@ -663,6 +677,14 @@ export default function App() {
       const fromQuery = params.get('telegram_id');
       if (fromQuery) tgId = Number(fromQuery);
       tgUsername = params.get('username') || '';
+      // Также проверяем ref параметр из URL
+      const refParam = params.get('ref');
+      if (refParam) {
+        referralId = parseInt(refParam, 10);
+        if (isNaN(referralId) || referralId === tgId) {
+          referralId = null;
+        }
+      }
     }
     
     if (!tgId) {
@@ -676,7 +698,12 @@ export default function App() {
     (async () => {
       try {
         // Пользователь (автоматически создается если не существует)
-        const userData = await miniApiFetch(`/user/info?telegram_id=${tgId}&username=${encodeURIComponent(tgUsername)}`);
+        // Передаем реферальный ID если есть
+        let userUrl = `/user/info?telegram_id=${tgId}&username=${encodeURIComponent(tgUsername)}`;
+        if (referralId) {
+          userUrl += `&ref=${referralId}`;
+        }
+        const userData = await miniApiFetch(userUrl);
         if (userData) {
           setUserId(userData.id);
           setBalance(userData.balance || 0);
@@ -1198,7 +1225,7 @@ export default function App() {
             {!isTrialUsed && (
                 <div className="text-center mt-2">
                     <span className="text-xs text-blue-300 font-medium bg-blue-500/10 px-3 py-1 rounded-full border border-blue-500/20">
-                        🎁 Дарим 3 дня бесплатно
+                        🎁 Дарим 24 часа бесплатно
                     </span>
                 </div>
             )}
