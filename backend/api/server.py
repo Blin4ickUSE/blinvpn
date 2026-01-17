@@ -128,6 +128,7 @@ def get_user_info():
         'referral_earned': stats.get('total_earned', 0),
         'referral_rate': stats.get('rate', 20),
         'is_new_user': is_new_user,
+        'trial_used': user.get('trial_used', 0),  # Был ли использован пробный период
     })
 
 @app.route('/api/payment/create', methods=['POST'])
@@ -466,6 +467,7 @@ def create_subscription():
     whitelist_gb = data.get('whitelist_gb', 0)  # Для whitelist подписки
     use_auto_pay = data.get('use_auto_pay', False)  # Использовать автоплатеж
     payment_method_id = data.get('payment_method_id')  # ID сохраненного способа оплаты
+    is_trial = data.get('is_trial', False)  # Пробный период
     
     if not user_id or not days:
         return jsonify({'error': 'Missing required fields'}), 400
@@ -474,8 +476,15 @@ def create_subscription():
     if not user:
         return jsonify({'error': 'User not found'}), 404
     
-    # Рассчитываем цену в зависимости от типа подписки
-    if plan_type == 'whitelist':
+    # Проверка пробного периода
+    if is_trial:
+        if user.get('trial_used', 0) == 1:
+            return jsonify({'error': 'Пробный период уже использован'}), 400
+        # Триальные настройки
+        days = 1
+        price = 0
+    elif plan_type == 'whitelist':
+        # Рассчитываем цену для whitelist
         if whitelist_gb < 5 or whitelist_gb > 500:
             return jsonify({'error': 'Whitelist GB must be between 5 and 500'}), 400
         from backend.core.whitelist_billing import calculate_whitelist_price
@@ -507,13 +516,22 @@ def create_subscription():
         else:
             return jsonify({'error': 'Auto payment failed'}), 400
     
-    # Обычная покупка через баланс
-    deducted = database.update_user_balance(user_id, -price, ensure_non_negative=True)
-    if not deducted:
-        return jsonify({'error': 'Insufficient balance'}), 400
+    # Для пробного периода не списываем баланс
+    if not is_trial:
+        deducted = database.update_user_balance(user_id, -price, ensure_non_negative=True)
+        if not deducted:
+            return jsonify({'error': 'Insufficient balance'}), 400
     
     # Создаем подписку
-    if plan_type == 'whitelist':
+    if is_trial:
+        # Пробный период - 1 день, 5 ГБ трафика
+        traffic_limit_bytes = int(5 * (1024 ** 3))
+        result = core.create_user_and_subscription(
+            user['telegram_id'], user.get('username', ''), days,
+            traffic_limit=traffic_limit_bytes,
+            plan_type='vpn'
+        )
+    elif plan_type == 'whitelist':
         # Для whitelist создаем подписку с лимитом трафика
         traffic_limit_bytes = int(whitelist_gb * (1024 ** 3))
         result = core.create_user_and_subscription(
@@ -528,23 +546,33 @@ def create_subscription():
         )
     
     if result:
-        # Создаем транзакцию
         conn = database.get_db_connection()
         cursor = conn.cursor()
-        description = f"{'Whitelist' if plan_type == 'whitelist' else 'VPN'} подписка ({days} дней)"
-        if plan_type == 'whitelist':
-            description += f" - {whitelist_gb} ГБ"
+        
+        if is_trial:
+            # Помечаем пробный период как использованный
+            cursor.execute("UPDATE users SET trial_used = 1 WHERE id = ?", (user_id,))
+            description = "Активация пробного периода (1 день)"
+            trans_type = 'trial'
+        else:
+            description = f"{'Whitelist' if plan_type == 'whitelist' else 'VPN'} подписка ({days} дней)"
+            if plan_type == 'whitelist':
+                description += f" - {whitelist_gb} ГБ"
+            trans_type = 'subscription'
+        
+        # Создаем транзакцию
         cursor.execute("""
             INSERT INTO transactions (user_id, type, amount, status, description, payment_method)
-            VALUES (?, 'subscription', ?, 'Success', ?, 'Balance')
-        """, (user_id, -price, description))
+            VALUES (?, ?, ?, 'Success', ?, 'Balance')
+        """, (user_id, trans_type, -price, description))
         conn.commit()
         conn.close()
         
         return jsonify({'success': True, 'subscription': result})
     
-    # Откат баланса, если создание не удалось
-    database.update_user_balance(user_id, price)
+    # Откат баланса, если создание не удалось (только для не-триала)
+    if not is_trial:
+        database.update_user_balance(user_id, price)
     return jsonify({'error': 'Failed to create subscription'}), 500
 
 # ========== API для панели ==========
