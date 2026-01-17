@@ -851,6 +851,25 @@ export default function App() {
     ]);
   };
 
+  // Получить userId, если еще не загружен
+  const ensureUserId = async (): Promise<number | null> => {
+    if (userId) return userId;
+    if (!telegramId) return null;
+    
+    try {
+      const userData = await miniApiFetch(`/user/info?telegram_id=${telegramId}`);
+      if (userData && userData.id) {
+        setUserId(userData.id);
+        setBalance(userData.balance || 0);
+        setIsTrialUsed(userData.trial_used === 1 || userData.trial_used === true);
+        return userData.id;
+      }
+    } catch (e) {
+      console.error('Failed to ensure userId', e);
+    }
+    return null;
+  };
+
   // Получить Happ зашифрованную ссылку
   const getHappEncryptedLink = async (subscriptionUrl: string): Promise<string | null> => {
     try {
@@ -1036,7 +1055,7 @@ export default function App() {
     }
   };
 
-  const buyWhitelist = () => {
+  const buyWhitelist = async () => {
     let finalGB = whitelistGB;
     if (finalGB < 5) finalGB = 5;
     else if (finalGB > 500) finalGB = 500;
@@ -1061,75 +1080,77 @@ export default function App() {
       return;
     }
     
-    // Создаём подписку через API и обновляем данные с сервера
-    if (!userId) {
-      alert('Пользователь не загружен, попробуйте позже');
+    // Получаем userId если еще не загружен
+    const currentUserId = await ensureUserId();
+    if (!currentUserId) {
+      alert('Не удалось загрузить данные пользователя. Попробуйте перезагрузить приложение.');
       return;
     }
     
-    miniApiFetch('/subscription/create', {
-      method: 'POST',
-      body: JSON.stringify({
-        user_id: userId,
-        days: 30,
-        type: 'whitelist',
-        whitelist_gb: finalGB,
-        price: price,
-      }),
-    })
-      .then((res) => {
-        if (res && res.success) {
-          addHistoryItem('buy_dev', name, -price);
-          refreshAll().then(() => {
-            setView('instruction_view');
-          });
-        } else {
-          alert(res?.error || 'Ошибка создания подписки');
-        }
-      })
-      .catch(e => {
-        console.error('Failed to create subscription', e);
-        alert('Ошибка создания подписки');
+    try {
+      const res = await miniApiFetch('/subscription/create', {
+        method: 'POST',
+        body: JSON.stringify({
+          user_id: currentUserId,
+          days: 30,
+          type: 'whitelist',
+          whitelist_gb: finalGB,
+          price: price,
+        }),
       });
+      
+      if (res && res.success) {
+        addHistoryItem('buy_dev', name, -price);
+        await refreshAll();
+        setView('instruction_view');
+      } else {
+        alert(res?.error || 'Ошибка создания подписки');
+      }
+    } catch (e) {
+      console.error('Failed to create subscription', e);
+      alert('Ошибка создания подписки');
+    }
   }
 
-  const wizardActivate = () => {
+  const wizardActivate = async () => {
     let price = 0;
     let name = '';
+
+    // Получаем userId если еще не загружен
+    const currentUserId = await ensureUserId();
+    if (!currentUserId) {
+      alert('Не удалось загрузить данные пользователя. Попробуйте перезагрузить приложение.');
+      return;
+    }
 
     if (wizardType === 'vpn') {
         if (!wizardPlan) return;
         if (wizardPlan.isTrial) {
             // Активируем триал через API
-            if (!userId) {
-              alert('Пользователь не загружен, попробуйте позже');
-              return;
-            }
-            miniApiFetch('/subscription/create', {
-              method: 'POST',
-              body: JSON.stringify({
-                user_id: userId,
-                days: wizardPlan.days || 1,
-                type: 'vpn',
-                is_trial: true,
-                price: 0,
-              }),
-            })
-              .then((res) => {
-                if (res && res.success) {
-                  setIsTrialUsed(true);
-                  addHistoryItem('trial', 'Активация пробного периода', 0);
-                  refreshAll().then(() => {
-                    setWizardStep(4);
-                  });
-                } else {
-                  alert(res?.error || 'Ошибка активации пробного периода');
-                }
-              })
-              .catch(e => {
-                console.error('Failed to activate trial', e);
-                alert('Ошибка активации пробного периода');
+            try {
+              const res = await miniApiFetch('/subscription/create', {
+                method: 'POST',
+                body: JSON.stringify({
+                  user_id: currentUserId,
+                  days: wizardPlan.days || 1,
+                  type: 'vpn',
+                  is_trial: true,
+                  price: 0,
+                }),
               });
+              
+              if (res && res.success) {
+                setIsTrialUsed(true);
+                addHistoryItem('trial', 'Активация пробного периода', 0);
+                await refreshAll();
+                setWizardStep(4);
+              } else {
+                alert(res?.error || 'Ошибка активации пробного периода');
+              }
+            } catch (e) {
+              console.error('Failed to activate trial', e);
+              alert('Ошибка активации пробного периода');
+            }
             return;
         }
         price = wizardPlan.price;
@@ -1152,62 +1173,54 @@ export default function App() {
       return;
     }
 
-    // Реальное создание подписки через backend / Remnawave
-    if (!userId) {
-      alert('Пользователь не загружен, попробуйте позже');
-      return;
-    }
     // Если используется автоплатеж для whitelist, создаем платеж с сохраненным способом оплаты
     if (wizardType === 'whitelist' && useAutoPay && selectedPaymentMethodId) {
-      miniApiFetch('/subscription/create', {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: userId,
-          days: 30,
-          type: 'whitelist',
-          whitelist_gb: whitelistGB,
-          use_auto_pay: true,
-          payment_method_id: selectedPaymentMethodId,
-          price: price,
-        }),
-      }).then(() => {
-        addHistoryItem('buy_dev', name, -price);
-        // Обновляем все данные с сервера для актуальности
-        refreshAll().then(() => {
-          setWizardStep(4);
+      try {
+        await miniApiFetch('/subscription/create', {
+          method: 'POST',
+          body: JSON.stringify({
+            user_id: currentUserId,
+            days: 30,
+            type: 'whitelist',
+            whitelist_gb: whitelistGB,
+            use_auto_pay: true,
+            payment_method_id: selectedPaymentMethodId,
+            price: price,
+          }),
         });
-      }).catch(e => {
+        addHistoryItem('buy_dev', name, -price);
+        await refreshAll();
+        setWizardStep(4);
+      } catch (e) {
         console.error('Failed to create subscription with auto pay', e);
         alert('Ошибка создания подписки с автоплатежом');
-      });
+      }
       return;
     }
     
-    miniApiFetch('/subscription/create', {
-      method: 'POST',
-      body: JSON.stringify({
-        user_id: userId,
-        days: wizardType === 'vpn' ? wizardPlan?.days : 30,
-        type: wizardType,
-        whitelist_gb: wizardType === 'whitelist' ? whitelistGB : undefined,
-        price: price,
-      }),
-    })
-      .then((res) => {
-        if (res && res.success) {
-          addHistoryItem('buy_dev', `Подключение: ${name}`, -price);
-          // Обновляем все данные с сервера для актуальности
-          refreshAll().then(() => {
-            setWizardStep(4);
-          });
-        } else {
-          alert(res?.error || 'Не удалось создать подписку');
-        }
-      })
-      .catch((e) => {
-        console.error(e);
-        alert('Ошибка при создании подписки');
+    try {
+      const res = await miniApiFetch('/subscription/create', {
+        method: 'POST',
+        body: JSON.stringify({
+          user_id: currentUserId,
+          days: wizardType === 'vpn' ? wizardPlan?.days : 30,
+          type: wizardType,
+          whitelist_gb: wizardType === 'whitelist' ? whitelistGB : undefined,
+          price: price,
+        }),
       });
+      
+      if (res && res.success) {
+        addHistoryItem('buy_dev', `Подключение: ${name}`, -price);
+        await refreshAll();
+        setWizardStep(4);
+      } else {
+        alert(res?.error || 'Не удалось создать подписку');
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Ошибка при создании подписки');
+    }
   };
 
   const getPaymentTotal = () => {
