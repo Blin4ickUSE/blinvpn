@@ -46,18 +46,52 @@ def get_user_info():
     """Получить информацию о пользователе"""
     telegram_id = request.args.get('telegram_id', type=int)
     username = request.args.get('username', '')
+    ref = request.args.get('ref', type=int)  # Telegram ID реферера
     
     if not telegram_id:
         return jsonify({'error': 'telegram_id required'}), 400
     
+    # Нельзя быть своим собственным рефералом
+    if ref == telegram_id:
+        ref = None
+    
     user = database.get_user_by_telegram_id(telegram_id)
+    is_new_user = False
     
     # Автоматически создаем пользователя если его нет
     if not user:
-        user_id = database.create_user(telegram_id, username or f'user_{telegram_id}')
+        is_new_user = True
+        
+        # Обрабатываем реферала
+        referred_by = None
+        if ref:
+            # Проверяем, существует ли реферер
+            referrer = database.get_user_by_telegram_id(ref)
+            if referrer:
+                # Проверяем рейт-лимит (25 рефералов в минуту)
+                if database.check_referral_rate_limit(ref, limit=25, window_seconds=60):
+                    referred_by = referrer['id']
+                    logger.info(f"Referral accepted: user {telegram_id} referred by {ref}")
+                else:
+                    logger.warning(f"Referral rate limit exceeded for referrer {ref}")
+        
+        user_id = database.create_user(telegram_id, username or f'user_{telegram_id}', referred_by=referred_by)
         user = database.get_user_by_id(user_id)
         if not user:
             return jsonify({'error': 'Failed to create user'}), 500
+    else:
+        # Пользователь уже существует - попробуем установить реферера, если его нет
+        if ref and user.get('referred_by') is None:
+            referrer = database.get_user_by_telegram_id(ref)
+            if referrer:
+                # Проверяем рейт-лимит
+                if database.check_referral_rate_limit(ref, limit=25, window_seconds=60):
+                    if database.set_referrer_for_user(user['id'], referrer['id']):
+                        logger.info(f"Referral set for existing user {telegram_id} -> {ref}")
+                        # Обновляем user для получения актуальных данных
+                        user = database.get_user_by_telegram_id(telegram_id)
+                else:
+                    logger.warning(f"Referral rate limit exceeded for referrer {ref}")
     
     # Проверка бана
     ban_status = abuse_detected.check_user_ban_status(user['id'])
@@ -80,6 +114,7 @@ def get_user_info():
         'referrals_count': stats.get('referrals_count', 0),
         'referral_earned': stats.get('total_earned', 0),
         'referral_rate': stats.get('rate', 20),
+        'is_new_user': is_new_user,
     })
 
 @app.route('/api/payment/create', methods=['POST'])
