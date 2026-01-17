@@ -1014,7 +1014,7 @@ export default function App() {
     setWithdrawModalOpen(true);
   };
 
-  const handleWithdrawNext = () => {
+  const handleWithdrawNext = async () => {
     const { step, amount, method, lastCardWithdraw } = withdrawState;
     const numAmount = Number(amount);
 
@@ -1029,28 +1029,55 @@ export default function App() {
       }
       setWithdrawState(prev => ({ ...prev, step: 3 }));
     } else if (step === 3) {
-      if (method === 'balance') {
-        setBalance(prev => prev + numAmount);
-        setReferrals(prev => ({ ...prev, earned: prev.earned - numAmount }));
-        addHistoryItem('ref_out', 'Вывод на баланс', numAmount);
-        setWithdrawState(prev => ({ ...prev, step: 4 })); 
-      } else if (method === 'card') {
-        if (!withdrawState.phone || !withdrawState.bank) return alert("Заполните все поля");
+      // Отправляем запрос на сервер для обработки вывода
+      try {
+        const requestData: any = {
+          telegram_id: telegramId,
+          amount: numAmount,
+          method: method,
+        };
         
-        const now = Date.now();
-        if (lastCardWithdraw && now - lastCardWithdraw < 24 * 60 * 60 * 1000) {
-           return alert("Вывод на карту доступен не чаще 1 раза в 24 часа.");
+        if (method === 'card') {
+          if (!withdrawState.phone || !withdrawState.bank) return alert("Заполните все поля");
+          
+          const now = Date.now();
+          if (lastCardWithdraw && now - lastCardWithdraw < 24 * 60 * 60 * 1000) {
+             return alert("Вывод на карту доступен не чаще 1 раза в 24 часа.");
+          }
+          
+          requestData.phone = withdrawState.phone;
+          requestData.bank = withdrawState.bank;
+        } else if (method === 'crypto') {
+          if (!withdrawState.cryptoNet || !withdrawState.cryptoAddr) return alert("Заполните все поля");
+          
+          requestData.crypto_net = withdrawState.cryptoNet;
+          requestData.crypto_addr = withdrawState.cryptoAddr;
         }
-
-        setReferrals(prev => ({ ...prev, earned: prev.earned - numAmount }));
-        addHistoryItem('ref_req', 'Заявка на вывод (Карта)', 0);
-        setWithdrawState(prev => ({ ...prev, step: 4, lastCardWithdraw: now }));
-      } else if (method === 'crypto') {
-        if (!withdrawState.cryptoNet || !withdrawState.cryptoAddr) return alert("Заполните все поля");
         
-        setReferrals(prev => ({ ...prev, earned: prev.earned - numAmount }));
-        addHistoryItem('ref_req', 'Заявка на вывод (Crypto)', 0);
-        setWithdrawState(prev => ({ ...prev, step: 4 }));
+        const result = await miniApiFetch('/user/withdraw', {
+          method: 'POST',
+          body: JSON.stringify(requestData),
+        });
+        
+        if (result && result.success) {
+          if (method === 'balance') {
+            setBalance(prev => prev + numAmount);
+            addHistoryItem('ref_out', 'Вывод на баланс', numAmount);
+          } else if (method === 'card') {
+            addHistoryItem('ref_req', 'Заявка на вывод (Карта)', 0);
+            setWithdrawState(prev => ({ ...prev, lastCardWithdraw: Date.now() }));
+          } else if (method === 'crypto') {
+            addHistoryItem('ref_req', 'Заявка на вывод (Crypto)', 0);
+          }
+          
+          setReferrals(prev => ({ ...prev, earned: prev.earned - numAmount }));
+          setWithdrawState(prev => ({ ...prev, step: 4 }));
+        } else {
+          alert(result?.error || 'Не удалось выполнить вывод');
+        }
+      } catch (e) {
+        console.error('Withdrawal error:', e);
+        alert('Ошибка при выводе средств');
       }
     }
   };
