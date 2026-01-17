@@ -552,6 +552,95 @@ def set_default_squads(squad_uuids: List[str], plan_type: str = 'vpn') -> bool:
     key = f'default_squads_{plan_type}'  # default_squads_vpn или default_squads_whitelist
     return set_system_setting(key, json.dumps(squad_uuids))
 
+
+# ========== Функции для рейт-лимитинга рефералов ==========
+
+def check_referral_rate_limit(referrer_telegram_id: int, limit: int = 25, window_seconds: int = 60) -> bool:
+    """
+    Проверить, не превышен ли лимит рефералов для пользователя.
+    
+    Args:
+        referrer_telegram_id: Telegram ID реферера (того, кто приглашает)
+        limit: Максимальное количество рефералов в окне
+        window_seconds: Временное окно в секундах
+        
+    Returns:
+        True если можно добавить реферала, False если лимит превышен
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Считаем количество рефералов, добавленных за последние N секунд
+        cutoff_time = datetime.now() - timedelta(seconds=window_seconds)
+        
+        cursor.execute("""
+            SELECT COUNT(*) as count
+            FROM users
+            WHERE referred_by = (SELECT id FROM users WHERE telegram_id = ?)
+            AND registration_date > ?
+        """, (referrer_telegram_id, cutoff_time.isoformat()))
+        
+        result = cursor.fetchone()
+        count = result['count'] if result else 0
+        
+        return count < limit
+    finally:
+        conn.close()
+
+
+def set_referrer_for_user(user_id: int, referrer_id: int) -> bool:
+    """
+    Установить реферера для пользователя (если еще не установлен).
+    
+    Args:
+        user_id: ID пользователя
+        referrer_id: ID реферера (внутренний ID, не telegram_id)
+        
+    Returns:
+        True если реферер успешно установлен, False если уже был установлен
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Проверяем, не установлен ли уже реферер
+        cursor.execute("SELECT referred_by FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        
+        if not row:
+            return False
+        
+        # Если реферер уже установлен, не меняем
+        if row['referred_by'] is not None:
+            return False
+        
+        # Устанавливаем реферера
+        cursor.execute("""
+            UPDATE users 
+            SET referred_by = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (referrer_id, user_id))
+        
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_user_by_referral_code(referral_code: str) -> Optional[Dict[str, Any]]:
+    """Получить пользователя по реферальному коду"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT * FROM users WHERE referral_code = ?", (referral_code,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 # Инициализация при импорте
 if __name__ != "__main__":
     init_database()
