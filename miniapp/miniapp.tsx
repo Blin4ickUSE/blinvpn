@@ -563,6 +563,7 @@ export default function App() {
   const [userId, setUserId] = useState<number | null>(null);
   const [telegramId, setTelegramId] = useState<number | null>(null);
   const [username, setUsername] = useState<string>('User');
+  const [displayName, setDisplayName] = useState<string>('User'); // first_name для отображения
   const [userPhotoUrl, setUserPhotoUrl] = useState<string | null>(null);
   
   // Data
@@ -643,13 +644,15 @@ export default function App() {
     // Определяем Telegram ID и username из Telegram WebApp
     let tgId: number | null = null;
     let tgUsername: string = '';
+    let tgFirstName: string = '';
     let referralId: number | null = null;
     const win: any = window as any;
     
     if (win.Telegram?.WebApp?.initDataUnsafe?.user) {
       const tgUser = win.Telegram.WebApp.initDataUnsafe.user;
       tgId = Number(tgUser.id);
-      tgUsername = tgUser.username || tgUser.first_name || '';
+      tgUsername = tgUser.username || '';
+      tgFirstName = tgUser.first_name || '';
       
       // Получаем URL аватарки пользователя из Telegram WebApp
       if (tgUser.photo_url) {
@@ -677,6 +680,7 @@ export default function App() {
       const fromQuery = params.get('telegram_id');
       if (fromQuery) tgId = Number(fromQuery);
       tgUsername = params.get('username') || '';
+      tgFirstName = params.get('first_name') || '';
       // Также проверяем ref параметр из URL
       const refParam = params.get('ref');
       if (refParam) {
@@ -694,12 +698,17 @@ export default function App() {
 
     setTelegramId(tgId);
     if (tgUsername) setUsername(tgUsername);
+    // Устанавливаем displayName: приоритет first_name, затем username
+    setDisplayName(tgFirstName || tgUsername || 'User');
 
     (async () => {
       try {
         // Пользователь (автоматически создается если не существует)
-        // Передаем реферальный ID если есть
+        // Передаем реферальный ID и first_name если есть
         let userUrl = `/user/info?telegram_id=${tgId}&username=${encodeURIComponent(tgUsername)}`;
+        if (tgFirstName) {
+          userUrl += `&first_name=${encodeURIComponent(tgFirstName)}`;
+        }
         if (referralId) {
           userUrl += `&ref=${referralId}`;
         }
@@ -708,6 +717,8 @@ export default function App() {
           setUserId(userData.id);
           setBalance(userData.balance || 0);
           setUsername(userData.username || `User_${tgId}`);
+          // Обновляем displayName: full_name из API или первоначальное значение
+          setDisplayName(userData.full_name || tgFirstName || userData.username || `User_${tgId}`);
           setIsTrialUsed(userData.trial_used === 1 || userData.trial_used === true);
           setReferrals({
             count: userData.referrals_count || 0,
@@ -1175,17 +1186,17 @@ export default function App() {
           {userPhotoUrl ? (
             <img 
               src={userPhotoUrl} 
-              alt={username} 
+              alt={displayName} 
               className="w-10 h-10 rounded-full object-cover shadow-lg shadow-blue-500/20"
             />
           ) : (
             <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-full flex items-center justify-center font-bold text-lg text-white shadow-lg shadow-blue-500/20">
-              {username.charAt(0).toUpperCase()}
+              {displayName.charAt(0).toUpperCase()}
             </div>
           )}
           <div>
             <div className="text-xs text-slate-400 font-medium">Добро пожаловать</div>
-            <div className="font-bold text-slate-100">{username}</div>
+            <div className="font-bold text-slate-100">{displayName}</div>
           </div>
         </div>
       </div>
