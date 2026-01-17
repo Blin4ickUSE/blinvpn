@@ -39,6 +39,151 @@ def require_auth(f):
     wrapper.__name__ = f.__name__
     return wrapper
 
+# ========== Редирект для открытия Happ ==========
+
+@app.route('/api/redirect')
+def redirect_to_happ():
+    """Страница редиректа для открытия приложения Happ"""
+    from flask import Response
+    
+    redirect_url = request.args.get('redirect', '')
+    original_url = request.args.get('original', '')
+    
+    html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Открытие Happ...</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            padding: 20px;
+        }}
+        .container {{ text-align: center; max-width: 400px; }}
+        .spinner {{
+            width: 50px; height: 50px;
+            border: 3px solid rgba(255,255,255,0.1);
+            border-top-color: #00d9ff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }}
+        @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+        h2 {{ font-size: 20px; margin-bottom: 10px; }}
+        p {{ color: rgba(255,255,255,0.7); font-size: 14px; margin-bottom: 20px; }}
+        .btn {{
+            display: inline-block;
+            padding: 14px 28px;
+            background: #00d9ff;
+            color: #000;
+            text-decoration: none;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 16px;
+            border: none;
+            cursor: pointer;
+            margin: 5px;
+        }}
+        .btn-secondary {{
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.2);
+        }}
+        .hidden {{ display: none; }}
+        .manual {{ margin-top: 30px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.1); }}
+        .link-box {{
+            background: rgba(0,0,0,0.3);
+            padding: 12px;
+            border-radius: 8px;
+            word-break: break-all;
+            font-family: monospace;
+            font-size: 11px;
+            margin: 10px 0;
+            max-height: 100px;
+            overflow-y: auto;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="loading">
+            <div class="spinner"></div>
+            <h2>Открываем Happ...</h2>
+            <p>Нажмите кнопку, если приложение не открылось</p>
+        </div>
+        
+        <div id="buttons">
+            <a id="openBtn" class="btn" href="{redirect_url}">📱 Открыть в Happ</a>
+        </div>
+        
+        <div id="manual" class="manual hidden">
+            <p>Скопируйте ссылку и вставьте в приложение Happ:</p>
+            <div id="linkBox" class="link-box">{original_url or redirect_url}</div>
+            <button id="copyBtn" class="btn btn-secondary">Скопировать ссылку</button>
+        </div>
+    </div>
+
+    <script>
+        const redirectUrl = "{redirect_url}";
+        const originalUrl = "{original_url}";
+        
+        if (redirectUrl) {{
+            // Пробуем открыть через iframe
+            try {{
+                const iframe = document.createElement('iframe');
+                iframe.style.display = 'none';
+                iframe.src = redirectUrl;
+                document.body.appendChild(iframe);
+            }} catch(e) {{}}
+            
+            // Пробуем через location.href
+            setTimeout(function() {{
+                try {{ window.location.href = redirectUrl; }} catch(e) {{}}
+            }}, 100);
+            
+            // Показываем копирование через 2 секунды
+            setTimeout(function() {{
+                document.getElementById('loading').querySelector('.spinner').style.display = 'none';
+                document.getElementById('loading').querySelector('h2').textContent = 'Нажмите кнопку выше';
+                document.getElementById('manual').classList.remove('hidden');
+            }}, 2000);
+            
+            document.getElementById('copyBtn').addEventListener('click', function() {{
+                const text = originalUrl || redirectUrl;
+                if (navigator.clipboard) {{
+                    navigator.clipboard.writeText(text).then(() => {{
+                        this.textContent = 'Скопировано!';
+                        setTimeout(() => {{ this.textContent = 'Скопировать ссылку'; }}, 2000);
+                    }});
+                }} else {{
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    this.textContent = 'Скопировано!';
+                    setTimeout(() => {{ this.textContent = 'Скопировать ссылку'; }}, 2000);
+                }}
+            }});
+        }} else {{
+            document.getElementById('loading').innerHTML = '<h2>Ошибка</h2><p>Ссылка не найдена</p>';
+            document.getElementById('buttons').style.display = 'none';
+        }}
+    </script>
+</body>
+</html>'''
+    
+    return Response(html, mimetype='text/html')
+
 # ========== API для мини-приложения ==========
 
 @app.route('/api/user/info', methods=['GET'])
