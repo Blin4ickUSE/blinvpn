@@ -1283,7 +1283,21 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     <div className="min-h-screen bg-gray-950 text-gray-100 font-sans selection:bg-blue-500 selection:text-white">
       <ToastContainer toasts={toasts} removeToast={(id) => setToasts(prev => prev.filter(t => t.id !== id))} />
       
-      {selectedTransaction && (<TransactionModal transaction={selectedTransaction} onClose={() => setSelectedTransaction(null)} onRefund={(id) => addToast('Возврат', `Возврат по транзакции #${id} успешно выполнен`, 'success')} />)}
+      {selectedTransaction && (<TransactionModal transaction={selectedTransaction} onClose={() => setSelectedTransaction(null)} onRefund={async (id) => {
+        try {
+          const result = await apiFetch(`/panel/transactions/${id}/refund`, { method: 'POST' });
+          if (result.success) {
+            addToast('Возврат', result.message || `Возврат по транзакции #${id} успешно выполнен`, 'success');
+            // Обновляем список транзакций
+            const updatedTransactions = await apiFetch('/panel/transactions?limit=100');
+            setTransactions(updatedTransactions || []);
+          } else {
+            addToast('Ошибка', result.error || 'Не удалось выполнить возврат', 'error');
+          }
+        } catch (e: any) {
+          addToast('Ошибка', e.message || 'Не удалось выполнить возврат', 'error');
+        }
+      }} />)}
       {selectedUser && (<UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} onToast={addToast} />)}
       {isCreateKeyOpen && (<CreateKeyModal onClose={() => setIsCreateKeyOpen(false)} users={users} onToast={addToast} />)}
       {editingKey && (<KeyEditModal keyItem={editingKey} onClose={() => setEditingKey(null)} onSave={handleUpdateKey} onDelete={handleDeleteKey} />)}
