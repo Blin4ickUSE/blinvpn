@@ -971,26 +971,34 @@ VE0tje7twWXL5Gb1sfcXRzsCAwEAAQ==
 
   // Открыть Happ с зашифрованной ссылкой через редирект-страницу
   const openHappWithSubscription = async (deviceId?: number) => {
+    console.log('openHappWithSubscription called, deviceId:', deviceId);
+    console.log('Available devices:', devices);
+    console.log('Device keys:', Array.from(deviceKeys.entries()));
+    
     let subscriptionUrl: string | null = null;
     
     // Получаем URL подписки из deviceKeys
     if (deviceId && deviceKeys.has(deviceId)) {
       subscriptionUrl = deviceKeys.get(deviceId) || null;
     } else {
-      // Пробуем найти активное устройство
+      // Пробуем найти активное устройство с ключом
       const activeDevice = devices.find(d => deviceKeys.has(d.id));
       if (activeDevice) {
         subscriptionUrl = deviceKeys.get(activeDevice.id) || null;
+        console.log('Found active device:', activeDevice.id, 'with URL:', subscriptionUrl);
       }
     }
     
     if (!subscriptionUrl) {
+      console.log('No subscription URL found');
       alert('У вас нет активных подписок. Сначала создайте подписку.');
       return;
     }
     
     // Шифруем ссылку
+    console.log('Encrypting URL:', subscriptionUrl);
     const encryptedLink = await getHappEncryptedLink(subscriptionUrl);
+    console.log('Encrypted link:', encryptedLink);
     
     if (!encryptedLink) {
       handleCopy(subscriptionUrl);
@@ -1000,8 +1008,19 @@ VE0tje7twWXL5Gb1sfcXRzsCAwEAAQ==
     
     // Telegram не позволяет открывать не-HTTPS ссылки напрямую,
     // поэтому используем редирект-страницу на том же домене
-    const redirectUrl = `/redirect.html?redirect=${encodeURIComponent(encryptedLink)}`;
-    window.location.href = redirectUrl;
+    const redirectUrl = `${window.location.origin}/redirect.html?redirect=${encodeURIComponent(encryptedLink)}`;
+    console.log('Redirect URL:', redirectUrl);
+    
+    // Пробуем использовать Telegram WebApp API для открытия ссылки
+    const win = window as any;
+    if (win.Telegram?.WebApp?.openLink) {
+      console.log('Using Telegram.WebApp.openLink');
+      win.Telegram.WebApp.openLink(redirectUrl);
+    } else {
+      // Fallback - открываем в новом окне
+      console.log('Using window.open fallback');
+      window.open(redirectUrl, '_blank');
+    }
   };
 
   const handleCopy = (text: string, deviceId?: number) => {
@@ -1784,10 +1803,8 @@ VE0tje7twWXL5Gb1sfcXRzsCAwEAAQ==
                                             alert('У вас нет активных устройств с ключами. Сначала создайте подписку.');
                                         }
                                     } else if (action.type === 'trigger_add') {
-                                        // Для iOS/Android - открываем Happ с зашифрованной ссылкой
-                                        if (wizardPlatform === 'ios' || wizardPlatform === 'android') {
-                                            openHappWithSubscription();
-                                        }
+                                        // Открываем Happ с зашифрованной ссылкой
+                                        await openHappWithSubscription();
                                     } else if (action.url) {
                                         window.open(action.url, '_blank');
                                     }
@@ -2330,10 +2347,8 @@ VE0tje7twWXL5Gb1sfcXRzsCAwEAAQ==
                         } else if (action.type === 'nav_ios') {
                           setActivePlatform('ios');
                         } else if (action.type === 'trigger_add') {
-                          // Для iOS/Android - открываем Happ с зашифрованной ссылкой
-                          if (activePlatform === 'ios' || activePlatform === 'android') {
-                            openHappWithSubscription();
-                          }
+                          // Открываем Happ с зашифрованной ссылкой
+                          await openHappWithSubscription();
                         } else if (action.url) {
                           window.open(action.url, '_blank');
                         }
