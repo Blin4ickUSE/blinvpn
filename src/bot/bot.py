@@ -40,7 +40,17 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 def extract_referral_id(text: str) -> int:
-    """Извлечь referral ID из команды /start"""
+    """Извлечь referral ID из команды /start
+    
+    Поддерживаемые форматы:
+    - /start ref123456789
+    - /start ref=123456789
+    """
+    # Пробуем формат ref123456789 (без =)
+    match = re.search(r'ref(\d+)', text)
+    if match:
+        return int(match.group(1))
+    # Пробуем формат ref=123456789 (с =)
     match = re.search(r'ref=(\d+)', text)
     return int(match.group(1)) if match else None
 
@@ -56,8 +66,12 @@ async def cmd_start(message: types.Message):
     
     # Извлекаем referral ID
     referral_id = None
-    if message.text and 'ref=' in message.text:
+    if message.text and 'ref' in message.text:
         referral_id = extract_referral_id(message.text)
+    
+    # Нельзя быть своим собственным рефералом
+    if referral_id == telegram_id:
+        referral_id = None
     
     # Получаем или создаем пользователя
     user = database.get_user_by_telegram_id(telegram_id)
@@ -66,15 +80,33 @@ async def cmd_start(message: types.Message):
         username = message.from_user.username
         full_name = message.from_user.full_name
         
-        # Проверяем referral
+        # Проверяем referral и рейт-лимит
         referred_by = None
         if referral_id:
             ref_user = database.get_user_by_telegram_id(referral_id)
             if ref_user:
-                referred_by = ref_user['id']
+                # Проверяем рейт-лимит: не более 25 рефералов в минуту
+                if database.check_referral_rate_limit(referral_id, limit=25, window_seconds=60):
+                    referred_by = ref_user['id']
+                    logger.info(f"Referral accepted: user {telegram_id} referred by {referral_id}")
+                else:
+                    logger.warning(f"Referral rate limit exceeded for referrer {referral_id}")
         
         user_id = database.create_user(telegram_id, username, full_name, referred_by)
         user = database.get_user_by_id(user_id)
+    else:
+        # Пользователь уже существует - попробуем установить реферера, если его нет
+        if referral_id and user.get('referred_by') is None:
+            ref_user = database.get_user_by_telegram_id(referral_id)
+            if ref_user:
+                # Проверяем рейт-лимит
+                if database.check_referral_rate_limit(referral_id, limit=25, window_seconds=60):
+                    if database.set_referrer_for_user(user['id'], ref_user['id']):
+                        logger.info(f"Referral set for existing user {telegram_id} -> {referral_id}")
+                        # Обновляем данные пользователя
+                        user = database.get_user_by_telegram_id(telegram_id)
+                else:
+                    logger.warning(f"Referral rate limit exceeded for referrer {referral_id}")
     
     # Проверяем статус бана
     ban_status = abuse_detected.check_user_ban_status(user['id'])
@@ -91,7 +123,7 @@ async def cmd_start(message: types.Message):
     # Формируем сообщение
     text = (
         "*👋 Добро пожаловать!*\n\n"
-        "Это *BlinVPN* — лучший сервис для защиты ваших данных. "
+        "Это *BlinVPN* — лучший сервис для обхода блокировок и защиты данных. "
         "Просто запусти мини-приложение кнопкой ниже!\n\n"
         "*🎁 Дарим 3 дня бесплатно!*\n"
         "*🇷🇺 Оплата по СБП и Криптовалюте.*\n"
@@ -123,5 +155,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Бот остановлен")
-
 
