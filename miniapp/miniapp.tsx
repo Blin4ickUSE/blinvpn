@@ -959,20 +959,29 @@ export default function App() {
     
     try {
       // Удаляем на сервере
-      await miniApiFetch(`/user/devices/${currentDevice.id}?telegram_id=${telegramId}`, {
+      const result = await miniApiFetch(`/user/devices/${currentDevice.id}?telegram_id=${telegramId}`, {
         method: 'DELETE'
       });
       
-      // Обновляем локально
-      setDevices(prev => prev.filter(d => d.id !== currentDevice.id));
-      setDeviceKeys(prev => {
-        const newMap = new Map(prev);
-        newMap.delete(currentDevice.id);
-        return newMap;
-      });
-      addHistoryItem('device_del', `Удалено устройство: ${currentDevice.name}`, 0);
+      if (result && result.success) {
+        // Обновляем локально
+        setDevices(prev => prev.filter(d => d.id !== currentDevice.id));
+        setDeviceKeys(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(currentDevice.id);
+          return newMap;
+        });
+        addHistoryItem('device_del', `Удалено устройство: ${currentDevice.name}`, 0);
+      } else {
+        alert(result?.error || 'Не удалось удалить устройство');
+        // Обновляем список устройств с сервера на случай рассинхронизации
+        refreshDevices();
+      }
     } catch (e) {
       console.error('Failed to delete device', e);
+      alert('Ошибка при удалении устройства');
+      // Обновляем список устройств с сервера
+      refreshDevices();
     }
     
     setDeleteModalOpen(false);
@@ -1051,16 +1060,37 @@ export default function App() {
       }
       return;
     }
-    setBalance(prev => prev - price);
-    const newDevice = { 
-      id: Date.now(), 
-      name: name, 
-      type: activePlatform, 
-      added: new Date().toLocaleDateString('ru-RU') 
-    };
-    setDevices(prev => [...prev, newDevice]);
-    addHistoryItem('buy_dev', name, -price);
-    setView('instruction_view');
+    
+    // Создаём подписку через API и обновляем данные с сервера
+    if (!userId) {
+      alert('Пользователь не загружен, попробуйте позже');
+      return;
+    }
+    
+    miniApiFetch('/subscription/create', {
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: userId,
+        days: 30,
+        type: 'whitelist',
+        whitelist_gb: finalGB,
+        price: price,
+      }),
+    })
+      .then((res) => {
+        if (res && res.success) {
+          addHistoryItem('buy_dev', name, -price);
+          refreshAll().then(() => {
+            setView('instruction_view');
+          });
+        } else {
+          alert(res?.error || 'Ошибка создания подписки');
+        }
+      })
+      .catch(e => {
+        console.error('Failed to create subscription', e);
+        alert('Ошибка создания подписки');
+      });
   }
 
   const wizardActivate = () => {
@@ -1070,16 +1100,36 @@ export default function App() {
     if (wizardType === 'vpn') {
         if (!wizardPlan) return;
         if (wizardPlan.isTrial) {
-            setIsTrialUsed(true);
-            const trialDevice = { 
-                id: Date.now(), 
-                name: `VPN (${wizardPlan.duration})`, 
-                type: wizardPlatform, 
-                added: new Date().toLocaleDateString('ru-RU') 
-            };
-            setDevices(prev => [...prev, trialDevice]);
-            addHistoryItem('trial', 'Активация пробного периода', 0);
-            setWizardStep(4);
+            // Активируем триал через API
+            if (!userId) {
+              alert('Пользователь не загружен, попробуйте позже');
+              return;
+            }
+            miniApiFetch('/subscription/create', {
+              method: 'POST',
+              body: JSON.stringify({
+                user_id: userId,
+                days: wizardPlan.days || 1,
+                type: 'vpn',
+                is_trial: true,
+                price: 0,
+              }),
+            })
+              .then((res) => {
+                if (res && res.success) {
+                  setIsTrialUsed(true);
+                  addHistoryItem('trial', 'Активация пробного периода', 0);
+                  refreshAll().then(() => {
+                    setWizardStep(4);
+                  });
+                } else {
+                  alert(res?.error || 'Ошибка активации пробного периода');
+                }
+              })
+              .catch(e => {
+                console.error('Failed to activate trial', e);
+                alert('Ошибка активации пробного периода');
+              });
             return;
         }
         price = wizardPlan.price;
