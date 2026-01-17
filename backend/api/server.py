@@ -137,8 +137,7 @@ def create_payment():
     data = request.json
     user_id = data.get('user_id')
     amount = data.get('amount')
-    method = data.get('method')  # 'yookassa', 'heleket', 'platega'
-    provider = data.get('provider')  # для SBP
+    method = data.get('method')  # 'yookassa', 'yookassa_sbp', 'heleket', 'platega_card', 'platega_sbp'
     
     if not user_id or not amount or not method:
         return jsonify({'error': 'Missing required fields'}), 400
@@ -147,59 +146,91 @@ def create_payment():
     if not user:
         return jsonify({'error': 'User not found'}), 404
     
-    order_id = f"user_{user_id}_{int(os.urandom(4).hex(), 16)}"
-    return_url = f"{os.getenv('MINIAPP_URL')}/success"
+    return_url = f"{os.getenv('MINIAPP_URL', '')}/success"
     
-    if method == 'yookassa':
-        # Проверяем, нужны ли автоплатежи
-        save_payment_method = data.get('save_payment_method', False)
-        payment_method_id = data.get('payment_method_id')  # Для автоплатежа
+    try:
+        if method == 'yookassa' or method == 'yookassa_card':
+            # Банковская карта через YooKassa
+            save_payment_method = data.get('save_payment_method', False)
+            payment_method_id = data.get('payment_method_id')  # Для автоплатежа
+            
+            metadata = {'user_id': str(user_id)}
+            if data.get('subscription_id'):
+                metadata['subscription_id'] = str(data.get('subscription_id'))
+            
+            payment = yookassa.yookassa_api.create_payment(
+                amount, f"Пополнение баланса BlinVPN", return_url, user_id, 
+                metadata=metadata,
+                save_payment_method=save_payment_method,
+                payment_method_id=payment_method_id,
+                payment_type='bank_card'
+            )
+            if payment:
+                result = {
+                    'payment_id': payment['id'],
+                    'confirmation_url': payment.get('confirmation_url'),
+                    'payment_url': payment.get('confirmation_url'),
+                    'status': payment['status']
+                }
+                # Если способ оплаты сохранен, возвращаем его ID
+                if payment.get('payment_method_saved'):
+                    result['payment_method_id'] = payment.get('payment_method_id')
+                    result['card_last4'] = payment.get('card_last4')
+                return jsonify(result)
         
-        metadata = {'user_id': str(user_id)}
-        if data.get('subscription_id'):
-            metadata['subscription_id'] = str(data.get('subscription_id'))
+        elif method == 'yookassa_sbp':
+            # СБП через YooKassa
+            metadata = {'user_id': str(user_id)}
+            
+            payment = yookassa.yookassa_api.create_sbp_payment(
+                amount, f"Пополнение баланса BlinVPN (СБП)", return_url, user_id,
+                metadata=metadata
+            )
+            if payment:
+                return jsonify({
+                    'payment_id': payment['id'],
+                    'confirmation_url': payment.get('confirmation_url'),
+                    'payment_url': payment.get('confirmation_url'),
+                    'status': payment['status']
+                })
         
-        payment = yookassa.yookassa_api.create_payment(
-            amount, f"Пополнение баланса", return_url, user_id, 
-            metadata=metadata,
-            save_payment_method=save_payment_method,
-            payment_method_id=payment_method_id
-        )
-        if payment:
-            result = {
-                'payment_id': payment['id'],
-                'confirmation_url': payment.get('confirmation_url'),
-                'status': payment['status']
-            }
-            # Если способ оплаты сохранен, возвращаем его ID
-            if payment.get('payment_method_saved'):
-                result['payment_method_id'] = payment.get('payment_method_id')
-                result['card_last4'] = payment.get('card_last4')
-            return jsonify(result)
-    
-    elif method == 'heleket':
-        payment = heleket.heleket_api.create_payment(
-            amount, order_id, url_return=return_url,
-            url_callback=f"{os.getenv('WEBHOOK_URL')}/heleket"
-        )
-        if payment:
-            return jsonify({
-                'payment_id': payment.get('order_id'),
-                'payment_url': payment.get('payment_url'),
-                'status': 'pending'
-            })
-    
-    elif method == 'platega':
-        payment = platega.platega_api.create_payment(
-            amount, order_id, return_url=return_url,
-            callback_url=f"{os.getenv('WEBHOOK_URL')}/platega"
-        )
-        if payment:
-            return jsonify({
-                'payment_id': payment.get('id'),
-                'payment_url': payment.get('payment_url'),
-                'status': 'pending'
-            })
+        elif method == 'heleket':
+            # Криптовалюта через Heleket
+            payment = heleket.heleket_api.create_payment(amount, user_id)
+            if payment:
+                return jsonify({
+                    'payment_id': payment.get('uuid') or payment.get('order_id'),
+                    'payment_url': payment.get('payment_url'),
+                    'status': payment.get('status', 'pending'),
+                    'payer_amount': payment.get('payer_amount'),
+                    'payer_currency': payment.get('payer_currency')
+                })
+        
+        elif method == 'platega_card':
+            # Банковская карта через Platega
+            payment = platega.platega_api.create_card_payment(amount, user_id)
+            if payment:
+                return jsonify({
+                    'payment_id': payment.get('id'),
+                    'payment_url': payment.get('redirect_url'),
+                    'status': payment.get('status', 'pending')
+                })
+        
+        elif method == 'platega_sbp':
+            # СБП через Platega
+            payment = platega.platega_api.create_sbp_payment(amount, user_id)
+            if payment:
+                return jsonify({
+                    'payment_id': payment.get('id'),
+                    'payment_url': payment.get('redirect_url'),
+                    'status': payment.get('status', 'pending')
+                })
+        
+        else:
+            return jsonify({'error': f'Unknown payment method: {method}'}), 400
+        
+    except Exception as e:
+        logger.error(f"Payment creation error for method {method}: {e}")
     
     return jsonify({'error': 'Payment creation failed'}), 500
 
@@ -1015,6 +1046,133 @@ def get_transactions():
     finally:
         conn.close()
 
+@app.route('/api/panel/transactions/<int:transaction_id>/refund', methods=['POST'])
+@require_auth
+def refund_transaction(transaction_id: int):
+    """Сделать возврат по транзакции"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Получаем транзакцию
+        cursor.execute("""
+            SELECT t.*, u.telegram_id, u.username
+            FROM transactions t
+            LEFT JOIN users u ON t.user_id = u.id
+            WHERE t.id = ?
+        """, (transaction_id,))
+        
+        transaction = cursor.fetchone()
+        if not transaction:
+            return jsonify({'success': False, 'error': 'Транзакция не найдена'}), 404
+        
+        if transaction['type'] != 'deposit':
+            return jsonify({'success': False, 'error': 'Возврат возможен только для пополнений'}), 400
+        
+        if transaction['status'] == 'Refunded':
+            return jsonify({'success': False, 'error': 'Транзакция уже была возвращена'}), 400
+        
+        amount = float(transaction['amount'])
+        user_id = transaction['user_id']
+        payment_id = transaction['payment_id']
+        payment_provider = transaction['payment_provider']
+        
+        # Если это YooKassa - делаем возврат через API
+        refund_result = None
+        if payment_provider == 'YooKassa' and payment_id:
+            from backend.api import yookassa
+            refund_result = yookassa.yookassa_api.create_refund(payment_id, amount)
+            if not refund_result:
+                return jsonify({'success': False, 'error': 'Не удалось создать возврат в YooKassa'}), 500
+        
+        # Списываем сумму с баланса пользователя
+        user = database.get_user_by_id(user_id)
+        if user:
+            current_balance = user.get('balance', 0)
+            new_balance = max(0, current_balance - amount)  # Не уходим в минус
+            
+            cursor.execute("""
+                UPDATE users SET balance = ? WHERE id = ?
+            """, (new_balance, user_id))
+        
+        # Помечаем транзакцию как возвращенную
+        cursor.execute("""
+            UPDATE transactions 
+            SET status = 'Refunded', refunded_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (transaction_id,))
+        
+        # Создаем транзакцию возврата
+        cursor.execute("""
+            INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, description)
+            VALUES (?, 'refund', ?, 'Success', ?, ?, ?)
+        """, (user_id, -amount, transaction['payment_method'], payment_provider, f'Возврат по транзакции #{transaction_id}'))
+        
+        conn.commit()
+        
+        # Уведомляем пользователя
+        if transaction['telegram_id']:
+            core.send_notification_to_user(
+                transaction['telegram_id'],
+                f"💸 Возврат средств: {amount}₽ по транзакции #{transaction_id}"
+            )
+        
+        logger.info(f"Возврат по транзакции #{transaction_id}: {amount}₽ для user {user_id}")
+        
+        return jsonify({
+            'success': True, 
+            'message': f'Возврат {amount}₽ выполнен успешно',
+            'refund_id': refund_result.get('id') if refund_result else None
+        })
+        
+    except Exception as e:
+        logger.error(f"Error refunding transaction {transaction_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/panel/users/<int:user_id>/unban', methods=['POST'])
+@require_auth
+def unban_user(user_id: int):
+    """Разбанить пользователя"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Проверяем существование пользователя
+        cursor.execute("SELECT id, telegram_id, username, is_banned FROM users WHERE id = ?", (user_id,))
+        user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({'success': False, 'error': 'Пользователь не найден'}), 404
+        
+        if not user['is_banned']:
+            return jsonify({'success': False, 'error': 'Пользователь не заблокирован'}), 400
+        
+        # Разбаниваем пользователя
+        cursor.execute("UPDATE users SET is_banned = 0 WHERE id = ?", (user_id,))
+        conn.commit()
+        
+        # Уведомляем пользователя
+        if user['telegram_id']:
+            core.send_notification_to_user(
+                user['telegram_id'],
+                "✅ Ваш аккаунт разблокирован! Вы снова можете пользоваться сервисом."
+            )
+        
+        logger.info(f"User {user_id} unbanned successfully")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Пользователь @{user["username"] or user_id} разблокирован'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error unbanning user {user_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        conn.close()
+
 @app.route('/api/panel/keys', methods=['GET'])
 @require_auth
 def get_keys():
@@ -1217,16 +1375,7 @@ def create_key():
         conn.commit()
         conn.close()
         
-        # Уведомление админу
-        admin_msg = (
-            f"🔑 Создан новый ключ:\n"
-            f"👤 Пользователь: @{username}\n"
-            f"📅 Срок: {days} дней\n"
-            f"📊 Трафик: {traffic_gb} ГБ\n"
-            f"📱 Устройства: {devices}\n"
-            f"🆔 Trial: {'Да' if is_trial else 'Нет'}"
-        )
-        core.send_notification_to_admin(admin_msg)
+        # Уведомление админу удалено - оставляем только для пополнений и запросов на вывод
         
         # Отправляем ключ пользователю
         if subscription_url:
@@ -1311,6 +1460,114 @@ def get_user_referrals():
             )
 
         return jsonify(referrals)
+    finally:
+        conn.close()
+
+
+@app.route('/api/user/withdraw', methods=['POST'])
+def request_withdrawal():
+    """Запрос на вывод средств из реферального баланса"""
+    data = request.json
+    telegram_id = data.get('telegram_id')
+    amount = data.get('amount', 0)
+    method = data.get('method')  # 'balance', 'card', 'crypto'
+    
+    # Дополнительные данные в зависимости от метода
+    phone = data.get('phone', '')
+    bank = data.get('bank', '')
+    crypto_net = data.get('crypto_net', '')
+    crypto_addr = data.get('crypto_addr', '')
+    
+    if not telegram_id or not amount or not method:
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    amount = float(amount)
+    if amount <= 0:
+        return jsonify({'error': 'Invalid amount'}), 400
+    
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    partner_balance = user.get('partner_balance', 0)
+    if amount > partner_balance:
+        return jsonify({'error': 'Insufficient partner balance'}), 400
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        if method == 'balance':
+            # Перевод на основной баланс
+            cursor.execute("""
+                UPDATE users 
+                SET balance = balance + ?, partner_balance = partner_balance - ?
+                WHERE id = ?
+            """, (amount, amount, user['id']))
+            
+            cursor.execute("""
+                INSERT INTO transactions (user_id, type, amount, status, description)
+                VALUES (?, 'transfer', ?, 'Success', 'Перевод с реферального баланса на основной')
+            """, (user['id'], amount))
+            
+            conn.commit()
+            
+            return jsonify({
+                'success': True,
+                'message': f'Переведено {amount}₽ на основной баланс'
+            })
+        
+        elif method in ('card', 'crypto'):
+            # Запрос на вывод - списываем с partner_balance и создаем заявку
+            cursor.execute("""
+                UPDATE users SET partner_balance = partner_balance - ? WHERE id = ?
+            """, (amount, user['id']))
+            
+            # Создаем заявку на вывод
+            if method == 'card':
+                description = f'Заявка на вывод {amount}₽ на карту. Банк: {bank}, Телефон: {phone}'
+            else:
+                description = f'Заявка на вывод {amount}₽ в криптовалюте. Сеть: {crypto_net}, Адрес: {crypto_addr}'
+            
+            cursor.execute("""
+                INSERT INTO transactions (user_id, type, amount, status, description, payment_method)
+                VALUES (?, 'withdrawal_request', ?, 'Pending', ?, ?)
+            """, (user['id'], -amount, description, 'Карта' if method == 'card' else 'Crypto'))
+            
+            conn.commit()
+            
+            # Уведомление в группу поддержки о запросе на вывод
+            username = user.get('username', 'N/A')
+            support_message = (
+                f"💸 <b>Запрос на вывод средств</b>\n\n"
+                f"👤 Пользователь: @{username}\n"
+                f"🆔 Telegram ID: {telegram_id}\n"
+                f"💵 Сумма: {amount}₽\n"
+                f"💳 Метод: {'Банковская карта' if method == 'card' else 'Криптовалюта'}\n"
+            )
+            
+            if method == 'card':
+                support_message += f"🏦 Банк: {bank}\n📱 Телефон: {phone}"
+            else:
+                support_message += f"🌐 Сеть: {crypto_net}\n📝 Адрес: <code>{crypto_addr}</code>"
+            
+            # Отправляем в группу поддержки
+            core.send_notification_to_support_group(support_message)
+            
+            # Также уведомляем администратора
+            core.send_notification_to_admin(support_message)
+            
+            return jsonify({
+                'success': True,
+                'message': f'Заявка на вывод {amount}₽ создана. Ожидайте обработки.'
+            })
+        
+        else:
+            return jsonify({'error': f'Unknown withdrawal method: {method}'}), 400
+            
+    except Exception as e:
+        logger.error(f"Error processing withdrawal request: {e}")
+        return jsonify({'error': str(e)}), 500
     finally:
         conn.close()
 
