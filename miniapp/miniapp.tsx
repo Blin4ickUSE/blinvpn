@@ -1008,18 +1008,39 @@ VE0tje7twWXL5Gb1sfcXRzsCAwEAAQ==
     
     // Telegram не позволяет открывать не-HTTPS ссылки напрямую,
     // поэтому используем редирект-страницу на том же домене
-    const redirectUrl = `${window.location.origin}/redirect.html?redirect=${encodeURIComponent(encryptedLink)}`;
+    // Передаём и зашифрованную ссылку, и оригинальную для копирования
+    const redirectUrl = `${window.location.origin}/redirect.html?redirect=${encodeURIComponent(encryptedLink)}&original=${encodeURIComponent(subscriptionUrl)}`;
     console.log('Redirect URL:', redirectUrl);
+    console.log('Encrypted link:', encryptedLink);
+    console.log('Original URL:', subscriptionUrl);
     
-    // Пробуем использовать Telegram WebApp API для открытия ссылки
+    // Сначала пробуем открыть зашифрованную ссылку напрямую через iframe
+    // Это работает для кастомных протоколов в некоторых браузерах
+    try {
+      const iframe = document.createElement('iframe');
+      iframe.style.display = 'none';
+      iframe.src = encryptedLink;
+      document.body.appendChild(iframe);
+      console.log('Tried iframe method');
+      
+      // Удаляем iframe через секунду
+      setTimeout(() => {
+        document.body.removeChild(iframe);
+      }, 1000);
+    } catch (e) {
+      console.log('Iframe method failed:', e);
+    }
+    
+    // Параллельно открываем редирект-страницу как fallback
     const win = window as any;
     if (win.Telegram?.WebApp?.openLink) {
+      // openLink открывает во внешнем браузере
       console.log('Using Telegram.WebApp.openLink');
       win.Telegram.WebApp.openLink(redirectUrl);
     } else {
-      // Fallback - открываем в новом окне
-      console.log('Using window.open fallback');
-      window.open(redirectUrl, '_blank');
+      // Fallback - открываем в текущем окне
+      console.log('Using window.location.href fallback');
+      window.location.href = redirectUrl;
     }
   };
 
