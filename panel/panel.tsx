@@ -2869,6 +2869,7 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
     const [trialHours, setTrialHours] = useState('24');
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [syncing, setSyncing] = useState(false);
 
     useEffect(() => {
         loadData();
@@ -2928,6 +2929,22 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
             onToast('Ошибка', 'Не удалось сохранить сквады', 'error');
         }
         setSaving(false);
+    };
+
+    const syncWithRemnawave = async () => {
+        setSyncing(true);
+        try {
+            const result = await apiFetch('/panel/remnawave/sync', { method: 'POST' });
+            if (result.success) {
+                onToast('Синхронизация', `Удалено ключей: ${result.deleted_keys}`, 'success');
+            } else {
+                onToast('Ошибка', result.error || 'Ошибка синхронизации', 'error');
+            }
+        } catch (e) {
+            console.error('Failed to sync with Remnawave:', e);
+            onToast('Ошибка', 'Не удалось синхронизировать с Remnawave', 'error');
+        }
+        setSyncing(false);
     };
 
     const SquadSelector = ({ title, description, selectedSquads, type, color }: { 
@@ -3029,6 +3046,21 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
                 type="whitelist"
                 color="green"
             />
+            
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                <h3 className="text-lg font-bold text-white mb-2">Синхронизация с Remnawave</h3>
+                <p className="text-sm text-gray-400 mb-4">
+                    Удалить из БД бота ключи, которые были удалены из Remnawave
+                </p>
+                <button 
+                    onClick={syncWithRemnawave}
+                    disabled={syncing}
+                    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center"
+                >
+                    {syncing && <Loader className="animate-spin mr-2" size={14} />}
+                    {syncing ? 'Синхронизация...' : '🔄 Синхронизировать'}
+                </button>
+            </div>
         </div>
     );
 };
