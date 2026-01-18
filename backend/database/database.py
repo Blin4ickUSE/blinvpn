@@ -47,7 +47,7 @@ def init_database():
                 referral_code TEXT UNIQUE,
                 referred_by INTEGER,
                 is_partner INTEGER DEFAULT 0,
-                partner_rate INTEGER DEFAULT 10,
+                partner_rate INTEGER DEFAULT 20,
                 partner_balance REAL DEFAULT 0,
                 total_earned REAL DEFAULT 0,
                 trial_used INTEGER DEFAULT 0,
