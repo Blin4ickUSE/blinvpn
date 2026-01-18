@@ -1517,25 +1517,21 @@ export default function App() {
                         </div>
                         </div>
                         
-                        <div className="relative w-full h-6 flex items-center">
+                        <div className="relative w-full h-6 flex items-center touch-none">
                             <input 
                                 type="range" 
                                 min="5" 
                                 max="500"
                                 value={whitelistGB}
                                 onChange={(e) => setWhitelistGB(Number(e.target.value))}
-                                className="absolute w-full h-2 bg-transparent appearance-none cursor-pointer z-20 opacity-0"
+                                className="absolute w-full h-6 bg-transparent appearance-none cursor-pointer z-20 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:cursor-grab [&::-webkit-slider-thumb]:active:cursor-grabbing [&::-moz-range-thumb]:w-6 [&::-moz-range-thumb]:h-6 [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:shadow-lg [&::-moz-range-thumb]:cursor-grab"
                             />
-                            <div className="w-full h-2 bg-slate-700 rounded-lg absolute overflow-hidden">
+                            <div className="w-full h-2 bg-slate-700 rounded-lg absolute overflow-hidden pointer-events-none">
                                 <div 
                                     className="h-full bg-blue-600 rounded-lg" 
                                     style={{ width: `${((whitelistGB - 5) / 495) * 100}%` }}
                                 ></div>
                             </div>
-                            <div 
-                                className="w-6 h-6 bg-white rounded-full shadow-lg absolute pointer-events-none transition-transform"
-                                style={{ left: `calc(${((whitelistGB - 5) / 495) * 100}% - 12px)` }}
-                            ></div>
                         </div>
 
                         <div className="flex justify-between text-xs text-slate-500 mt-2">
@@ -1859,12 +1855,15 @@ export default function App() {
             <div className="relative">
               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">₽</span>
               <input
-                type="number"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 placeholder="Другая сумма..."
                 value={customAmount}
                 onChange={(e) => { 
-                  setCustomAmount(e.target.value); 
-                  setTopupAmount(Number(e.target.value)); 
+                  const val = e.target.value.replace(/[^0-9]/g, '');
+                  setCustomAmount(val); 
+                  setTopupAmount(Number(val) || 0); 
                 }}
                 className="w-full bg-slate-900 border border-slate-700 rounded-xl p-4 pl-10 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder:text-slate-600"
               />
@@ -2091,25 +2090,21 @@ export default function App() {
                </div>
             </div>
             
-            <div className="relative w-full h-6 flex items-center">
+            <div className="relative w-full h-6 flex items-center touch-none">
                 <input 
                     type="range" 
                     min="5" 
                     max="500" 
                     value={whitelistGB}
                     onChange={(e) => setWhitelistGB(Number(e.target.value))}
-                    className="absolute w-full h-2 bg-transparent appearance-none cursor-pointer z-20 opacity-0"
+                    className="absolute w-full h-6 bg-transparent appearance-none cursor-pointer z-20 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:cursor-grab [&::-webkit-slider-thumb]:active:cursor-grabbing [&::-moz-range-thumb]:w-6 [&::-moz-range-thumb]:h-6 [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:shadow-lg [&::-moz-range-thumb]:cursor-grab"
                 />
-                <div className="w-full h-2 bg-slate-700 rounded-lg absolute overflow-hidden">
+                <div className="w-full h-2 bg-slate-700 rounded-lg absolute overflow-hidden pointer-events-none">
                     <div 
                         className="h-full bg-blue-600 rounded-lg" 
                         style={{ width: `${((whitelistGB - 5) / 495) * 100}%` }}
                     ></div>
                 </div>
-                <div 
-                    className="w-6 h-6 bg-white rounded-full shadow-lg absolute pointer-events-none transition-transform"
-                    style={{ left: `calc(${((whitelistGB - 5) / 495) * 100}% - 12px)` }}
-                ></div>
             </div>
 
             <div className="flex justify-between text-xs text-slate-500 mt-2">
