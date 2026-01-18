@@ -394,25 +394,14 @@ def get_referral_stats(user_id: int) -> Dict[str, Any]:
         result = cursor.fetchone()
         referrals_count = result[0] if result else 0
         
-        # Получаем общую сумму транзакций рефералов
-        cursor.execute("""
-            SELECT COALESCE(SUM(amount), 0) as total_spent
-            FROM transactions
-            WHERE user_id IN (SELECT id FROM users WHERE referred_by = ?)
-            AND type = 'deposit'
-        """, (user_id,))
-        
-        result = cursor.fetchone()
-        total_spent = result[0] if result else 0
-        
-        # Вычисляем доход (20% от потраченного)
-        referral_rate = user.get('partner_rate', 20) / 100
-        total_earned = total_spent * referral_rate
+        # Получаем фактический заработок из БД (уже начисленный partner_balance и total_earned)
+        partner_balance = user.get('partner_balance', 0) or 0
+        total_earned = user.get('total_earned', 0) or 0
         
         return {
             'referrals_count': referrals_count,
-            'total_spent': total_spent or 0,
-            'total_earned': total_earned,
+            'partner_balance': partner_balance,  # Доступно для вывода
+            'total_earned': total_earned,  # Всего заработано за всё время
             'rate': user.get('partner_rate', 20)
         }
     finally:
