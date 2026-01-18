@@ -123,6 +123,8 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         if squad_uuids is None:
             squad_uuids = database.get_default_squads(plan_type)
         
+        logger.info(f"Creating subscription for {telegram_id}, plan_type={plan_type}, squads={squad_uuids}")
+        
         # Генерируем уникальный username для каждой новой подписки
         # Формат: username_telegramid_timestamp
         import time
@@ -415,4 +417,71 @@ def get_referral_stats(user_id: int) -> Dict[str, Any]:
         }
     finally:
         conn.close()
+
+
+def sync_keys_with_remnawave() -> Dict:
+    """
+    Синхронизировать ключи с Remnawave.
+    Удаляет из БД бота ключи, которых нет в Remnawave.
+    """
+    try:
+        # Получаем все ключи из Remnawave (постранично)
+        remnawave_uuids = set()
+        start = 0
+        size = 100
+        
+        while True:
+            result = remnawave.remnawave_api.get_all_users_sync(start=start, size=size)
+            users = result.get('users', [])
+            total = result.get('total', 0)
+            
+            for user in users:
+                if hasattr(user, 'uuid'):
+                    remnawave_uuids.add(user.uuid)
+                elif isinstance(user, dict):
+                    remnawave_uuids.add(user.get('uuid'))
+            
+            start += size
+            if start >= total:
+                break
+        
+        logger.info(f"Found {len(remnawave_uuids)} users in Remnawave")
+        
+        # Получаем все ключи из БД
+        conn = database.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, key_uuid, user_id FROM vpn_keys WHERE key_uuid IS NOT NULL")
+        db_keys = cursor.fetchall()
+        
+        deleted_count = 0
+        for key in db_keys:
+            key_id = key['id']
+            key_uuid = key['key_uuid']
+            user_id = key['user_id']
+            
+            if key_uuid and key_uuid not in remnawave_uuids:
+                # Ключ не найден в Remnawave - удаляем из БД
+                logger.info(f"Key {key_uuid} not found in Remnawave, deleting from DB")
+                
+                # Удаляем связанные устройства
+                cursor.execute("DELETE FROM devices WHERE vpn_key_id = ?", (key_id,))
+                
+                # Удаляем ключ
+                cursor.execute("DELETE FROM vpn_keys WHERE id = ?", (key_id,))
+                deleted_count += 1
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Sync completed: deleted {deleted_count} keys from DB")
+        return {
+            'success': True,
+            'remnawave_users': len(remnawave_uuids),
+            'deleted_keys': deleted_count
+        }
+    except Exception as e:
+        logger.error(f"Error syncing with Remnawave: {e}")
+        import traceback
+        traceback.print_exc()
+        return {'success': False, 'error': str(e)}
 
