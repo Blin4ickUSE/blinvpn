@@ -212,6 +212,7 @@ def get_user_info():
         
         # Обрабатываем реферала
         referred_by = None
+        referrer = None
         if ref:
             # Проверяем, существует ли реферер
             referrer = database.get_user_by_telegram_id(ref)
@@ -233,6 +234,20 @@ def get_user_info():
         user = database.get_user_by_id(user_id)
         if not user:
             return jsonify({'error': 'Failed to create user'}), 500
+        
+        # Уведомляем реферера о новом реферале
+        if referred_by and referrer:
+            try:
+                new_user_name = first_name or username or f"user_{telegram_id}"
+                msg = (
+                    f"🎉 <b>Новый реферал!</b>\n\n"
+                    f"Пользователь <b>{new_user_name}</b> присоединился по вашей ссылке.\n"
+                    f"Вы будете получать {referrer.get('partner_rate', 20)}% с его покупок!"
+                )
+                core.send_notification_to_user(referrer['telegram_id'], msg)
+                logger.info(f"Notified referrer {ref} about new referral {telegram_id}")
+            except Exception as e:
+                logger.error(f"Failed to notify referrer about new referral: {e}")
     else:
         # Пользователь уже существует - попробуем установить реферера, если его нет
         if ref and user.get('referred_by') is None:
@@ -287,9 +302,9 @@ def get_user_info():
         'balance': user.get('balance', 0),
         'status': user.get('status', 'Trial'),
         'referral_code': user.get('referral_code'),
-        'partner_balance': user.get('partner_balance', 0),
+        'partner_balance': stats.get('partner_balance', 0),  # Доступно для вывода
         'referrals_count': stats.get('referrals_count', 0),
-        'referral_earned': stats.get('total_earned', 0),
+        'referral_earned': stats.get('total_earned', 0),  # Всего заработано
         'referral_rate': stats.get('rate', 20),
         'is_new_user': is_new_user,
         'trial_used': user.get('trial_used', 0),  # Был ли использован пробный период
@@ -765,6 +780,26 @@ def create_subscription():
         """, (user_id, trans_type, -price, description))
         conn.commit()
         conn.close()
+        
+        # Начисляем доход рефереру (если есть) - только для платных подписок
+        if not is_trial and price > 0:
+            referral_result = database.credit_referral_income(user_id, price, f"Доход от покупки подписки ({description})")
+            if referral_result:
+                logger.info(f"Credited {referral_result['income']}₽ to referrer {referral_result['referrer_telegram_id']}")
+                # Уведомляем реферера о доходе
+                try:
+                    referrer_telegram_id = referral_result['referrer_telegram_id']
+                    income = referral_result['income']
+                    rate = referral_result['rate']
+                    msg = (
+                        f"💰 <b>Реферальный доход!</b>\n\n"
+                        f"Ваш реферал совершил покупку.\n"
+                        f"Ваша комиссия ({rate}%): <b>{income:.2f}₽</b>\n\n"
+                        f"Доступно для вывода: проверьте в разделе «Рефералы»"
+                    )
+                    core.send_notification_to_user(referrer_telegram_id, msg)
+                except Exception as e:
+                    logger.error(f"Failed to notify referrer: {e}")
         
         return jsonify({'success': True, 'subscription': result})
     
@@ -1609,18 +1644,56 @@ def get_user_referrals():
         referrals = []
         for r in referrals_rows:
             ref_id = r["id"]
-            # Сумма пополнений реферала
+            
+            # Сумма покупок реферала (подписки, а не депозиты)
             cursor.execute(
                 """
-                SELECT COALESCE(SUM(amount), 0) as total
+                SELECT COALESCE(SUM(ABS(amount)), 0) as total
                 FROM transactions
-                WHERE user_id = ? AND type = 'deposit'
+                WHERE user_id = ? AND type IN ('subscription', 'trial')
                 """,
                 (ref_id,),
             )
             spent_row = cursor.fetchone()
             total_spent = float(spent_row["total"] or 0)
-            profit = total_spent * rate
+            
+            # Мой реальный доход от этого реферала (из транзакций referral_income)
+            cursor.execute(
+                """
+                SELECT COALESCE(SUM(amount), 0) as total
+                FROM transactions
+                WHERE user_id = ? AND type = 'referral_income' 
+                AND description LIKE ?
+                """,
+                (user["id"], f"%реферала%{r['username'] or ref_id}%"),
+            )
+            income_row = cursor.fetchone()
+            my_profit = float(income_row["total"] or 0)
+            
+            # Если нет записанного дохода, рассчитываем потенциальный
+            if my_profit == 0 and total_spent > 0:
+                my_profit = total_spent * rate
+            
+            # История транзакций реферала (последние 5)
+            cursor.execute(
+                """
+                SELECT type, amount, created_at, description
+                FROM transactions
+                WHERE user_id = ? AND type IN ('subscription', 'trial')
+                ORDER BY created_at DESC
+                LIMIT 5
+                """,
+                (ref_id,),
+            )
+            history_rows = cursor.fetchall()
+            history = []
+            for h in history_rows:
+                history.append({
+                    "type": h["type"],
+                    "amount": abs(float(h["amount"] or 0)),
+                    "date": h["created_at"] or "",
+                    "description": h["description"] or ""
+                })
 
             referrals.append(
                 {
@@ -1628,12 +1701,67 @@ def get_user_referrals():
                     "name": r["full_name"] or r["username"] or f"id{ref_id}",
                     "date": r["registration_date"] or "",
                     "spent": total_spent,
-                    "myProfit": profit,
-                    "history": [],  # История можно дополнить при необходимости
+                    "myProfit": my_profit,
+                    "history": history,
                 }
             )
 
         return jsonify(referrals)
+    finally:
+        conn.close()
+
+
+@app.route('/api/user/referral-history', methods=['GET'])
+def get_referral_income_history():
+    """Получить историю реферального дохода пользователя"""
+    telegram_id = request.args.get('telegram_id', type=int)
+    if not telegram_id:
+        return jsonify({'error': 'telegram_id required'}), 400
+    
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Получаем все транзакции реферального дохода и вывода
+        cursor.execute("""
+            SELECT id, type, amount, status, description, created_at
+            FROM transactions
+            WHERE user_id = ? AND type IN ('referral_income', 'transfer', 'withdrawal_request')
+            ORDER BY created_at DESC
+            LIMIT 50
+        """, (user['id'],))
+        
+        rows = cursor.fetchall()
+        history = []
+        
+        for row in rows:
+            trans_type = row['type']
+            
+            if trans_type == 'referral_income':
+                title = '💰 Реферальный доход'
+                icon = 'income'
+            elif trans_type == 'transfer':
+                title = '🔄 Перевод на баланс'
+                icon = 'transfer'
+            else:
+                title = '💸 Заявка на вывод'
+                icon = 'withdrawal'
+            
+            history.append({
+                'id': row['id'],
+                'type': icon,
+                'title': title,
+                'amount': float(row['amount'] or 0),
+                'status': row['status'],
+                'description': row['description'],
+                'date': row['created_at']
+            })
+        
+        return jsonify(history)
     finally:
         conn.close()
 
