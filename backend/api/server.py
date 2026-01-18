@@ -26,16 +26,37 @@ CORS(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Секретный ключ для аутентификации панели
+# Секретный ключ для аутентификации панели (legacy)
 PANEL_SECRET = os.getenv('PANEL_SECRET', 'change_this_secret')
 
 def require_auth(f):
-    """Декоратор для проверки аутентификации"""
+    """
+    Декоратор для проверки аутентификации.
+    Поддерживает:
+    1. Legacy: Bearer {PANEL_SECRET}
+    2. Новая система: Bearer {session_token}
+    """
     def wrapper(*args, **kwargs):
         auth_header = request.headers.get('Authorization')
-        if not auth_header or auth_header != f'Bearer {PANEL_SECRET}':
+        if not auth_header:
             return jsonify({'error': 'Unauthorized'}), 401
-        return f(*args, **kwargs)
+        
+        # Извлекаем токен
+        if not auth_header.startswith('Bearer '):
+            return jsonify({'error': 'Invalid authorization format'}), 401
+        
+        token = auth_header[7:]  # Убираем "Bearer "
+        
+        # Проверяем legacy PANEL_SECRET
+        if token == PANEL_SECRET:
+            return f(*args, **kwargs)
+        
+        # Проверяем сессию
+        session = database.verify_panel_session(token)
+        if session:
+            return f(*args, **kwargs)
+        
+        return jsonify({'error': 'Unauthorized'}), 401
     wrapper.__name__ = f.__name__
     return wrapper
 
@@ -2051,11 +2072,12 @@ def get_finance_stats():
         deposits_total = float(deposits_row['total'] or 0)
         deposits_count = deposits_row['cnt'] or 0
         
-        # Списания (все расходы)
+        # Расходы: выводы реферальных средств, возвраты, рефанды
         cursor.execute("""
             SELECT COALESCE(SUM(ABS(amount)), 0) AS total, COUNT(*) AS cnt
             FROM transactions
-            WHERE type IN ('subscription', 'whitelist_overage', 'withdrawal') AND amount < 0
+            WHERE type IN ('referral_withdrawal', 'refund', 'withdrawal', 'admin_withdrawal') 
+              AND status = 'Success'
         """)
         withdrawals_row = cursor.fetchone()
         withdrawals_total = float(withdrawals_row['total'] or 0)
@@ -3262,6 +3284,305 @@ def single_user_action(user_id):
         return jsonify({'error': str(e)}), 500
     finally:
         conn.close()
+
+
+# ========== Авторизация панели (логин/пароль) ==========
+
+@app.route('/api/panel/auth/login', methods=['POST'])
+def panel_login():
+    """Авторизация в панели по логину и паролю"""
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    
+    if not username or not password:
+        return jsonify({'error': 'Username and password required'}), 400
+    
+    admin = database.verify_panel_admin(username, password)
+    if not admin:
+        return jsonify({'error': 'Invalid credentials'}), 401
+    
+    session_token = database.create_panel_session(admin['id'])
+    if not session_token:
+        return jsonify({'error': 'Failed to create session'}), 500
+    
+    return jsonify({
+        'success': True,
+        'session_token': session_token,
+        'username': admin['username']
+    })
+
+
+@app.route('/api/panel/auth/logout', methods=['POST'])
+def panel_logout():
+    """Выход из панели"""
+    auth_header = request.headers.get('Authorization')
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header[7:]
+        database.delete_panel_session(token)
+    return jsonify({'success': True})
+
+
+@app.route('/api/panel/auth/check', methods=['GET'])
+def panel_auth_check():
+    """Проверка авторизации (для клиента)"""
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return jsonify({'authenticated': False}), 401
+    
+    token = auth_header[7:]
+    
+    # Legacy PANEL_SECRET
+    if token == PANEL_SECRET:
+        return jsonify({'authenticated': True, 'method': 'legacy'})
+    
+    # Сессия
+    session = database.verify_panel_session(token)
+    if session:
+        return jsonify({
+            'authenticated': True, 
+            'method': 'session',
+            'username': session['username']
+        })
+    
+    return jsonify({'authenticated': False}), 401
+
+
+@app.route('/api/panel/auth/init', methods=['GET'])
+def panel_auth_init():
+    """
+    Получить информацию об инициализации авторизации.
+    При первом запуске создаёт дефолтного админа и возвращает пароль.
+    """
+    result = database.get_or_create_default_admin()
+    
+    if result.get('password'):
+        # Новый админ создан
+        return jsonify({
+            'initialized': True,
+            'new_admin': True,
+            'username': result['username'],
+            'password': result['password'],
+            'message': 'Сохраните эти данные! Пароль показывается только один раз.'
+        })
+    elif result.get('exists'):
+        return jsonify({
+            'initialized': True,
+            'new_admin': False,
+            'username': result['username']
+        })
+    else:
+        return jsonify({'initialized': False, 'error': 'Failed to initialize admin'}), 500
+
+
+@app.route('/api/panel/auth/change-password', methods=['POST'])
+@require_auth
+def panel_change_password():
+    """Смена пароля администратора"""
+    auth_header = request.headers.get('Authorization')
+    token = auth_header[7:] if auth_header and auth_header.startswith('Bearer ') else None
+    
+    session = database.verify_panel_session(token) if token else None
+    if not session:
+        return jsonify({'error': 'Session required for password change'}), 403
+    
+    data = request.json
+    new_password = data.get('new_password')
+    
+    if not new_password or len(new_password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+    
+    if database.update_admin_password(session['admin_id'], new_password):
+        return jsonify({'success': True})
+    return jsonify({'error': 'Failed to update password'}), 500
+
+
+# ========== Управление сквадами ==========
+
+@app.route('/api/panel/squads', methods=['GET'])
+@require_auth
+def get_squads():
+    """Получить все сквады"""
+    squads = database.get_all_squad_configs()
+    mapping = database.get_subscription_squad_mapping()
+    return jsonify({
+        'squads': squads,
+        'mapping': mapping
+    })
+
+
+@app.route('/api/panel/squads/sync', methods=['POST'])
+@require_auth
+def sync_squads():
+    """Синхронизировать сквады с Remnawave"""
+    try:
+        import asyncio
+        
+        async def do_sync():
+            async with remnawave.get_api() as api:
+                rw_squads = await api.get_internal_squads()
+                
+                synced = []
+                for squad in rw_squads:
+                    # Определяем тип сквада по имени
+                    name_lower = squad.name.lower()
+                    if 'wifi' in name_lower or 'vpn' in name_lower:
+                        squad_type = 'vpn'
+                    elif 'lte' in name_lower or 'whitelist' in name_lower:
+                        squad_type = 'whitelist'
+                    elif 'trial' in name_lower or 'test' in name_lower:
+                        squad_type = 'trial'
+                    else:
+                        squad_type = 'vpn'  # По умолчанию
+                    
+                    database.upsert_squad_config(
+                        squad_uuid=squad.uuid,
+                        squad_name=squad.name,
+                        squad_type=squad_type,
+                        max_users=0,  # Без лимита по умолчанию
+                        priority=squad.view_position
+                    )
+                    synced.append({
+                        'uuid': squad.uuid,
+                        'name': squad.name,
+                        'type': squad_type
+                    })
+                
+                # Синхронизируем счётчики
+                database.sync_squad_user_counts()
+                
+                return synced
+        
+        synced = asyncio.run(do_sync())
+        return jsonify({
+            'success': True,
+            'synced': synced,
+            'count': len(synced)
+        })
+    except Exception as e:
+        logger.error(f"Squad sync error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/panel/squads/<squad_uuid>', methods=['PUT'])
+@require_auth
+def update_squad(squad_uuid: str):
+    """Обновить настройки сквада"""
+    data = request.json
+    
+    squad_name = data.get('squad_name')
+    squad_type = data.get('squad_type')
+    max_users = data.get('max_users', 0)
+    priority = data.get('priority', 0)
+    is_active = data.get('is_active', True)
+    
+    if not squad_name or not squad_type:
+        return jsonify({'error': 'squad_name and squad_type required'}), 400
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE squad_configs 
+            SET squad_name = ?, squad_type = ?, max_users = ?, 
+                priority = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE squad_uuid = ?
+        """, (squad_name, squad_type, max_users, priority, 1 if is_active else 0, squad_uuid))
+        conn.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/panel/squads/mapping', methods=['PUT'])
+@require_auth
+def update_squad_mapping():
+    """Обновить привязку сквадов к типам подписок"""
+    data = request.json
+    
+    vpn_squads = data.get('vpn', [])
+    whitelist_squads = data.get('whitelist', [])
+    trial_squads = data.get('trial', [])
+    
+    success = True
+    success = success and database.set_subscription_squads('vpn', vpn_squads)
+    success = success and database.set_subscription_squads('whitelist', whitelist_squads)
+    success = success and database.set_subscription_squads('trial', trial_squads)
+    
+    if success:
+        return jsonify({'success': True})
+    return jsonify({'error': 'Failed to update mapping'}), 500
+
+
+@app.route('/api/panel/squads/counts', methods=['POST'])
+@require_auth
+def sync_squad_counts():
+    """Синхронизировать счётчики пользователей в сквадах"""
+    database.sync_squad_user_counts()
+    return jsonify({'success': True})
+
+
+# ========== Выдача ключа с выбором типа ==========
+
+@app.route('/api/panel/issue-key', methods=['POST'])
+@require_auth
+def issue_key_with_type():
+    """
+    Выдать ключ пользователю с указанием типа подписки.
+    Автоматически выбирает лучший сквад для балансировки.
+    """
+    data = request.json
+    user_id = data.get('user_id')
+    plan_type = data.get('plan_type', 'vpn')  # vpn, whitelist, trial
+    days = data.get('days', 30)
+    traffic_limit_gb = data.get('traffic_limit_gb', 0)  # 0 = безлимит
+    
+    if not user_id:
+        return jsonify({'error': 'user_id required'}), 400
+    
+    user = database.get_user_by_id(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    try:
+        # Выбираем лучший сквад для этого типа подписки
+        best_squad = database.get_best_squad_for_subscription(plan_type)
+        squad_uuids = [best_squad['squad_uuid']] if best_squad else None
+        
+        if not squad_uuids:
+            # Используем дефолтные сквады из настроек
+            squad_uuids = database.get_default_squads(plan_type)
+        
+        # Конвертируем трафик в байты
+        traffic_limit_bytes = int(traffic_limit_gb * 1024 * 1024 * 1024) if traffic_limit_gb > 0 else 0
+        
+        # Создаём подписку через core
+        result = core.create_user_and_subscription(
+            telegram_id=user['telegram_id'],
+            username=user.get('username', ''),
+            days=days,
+            traffic_limit=traffic_limit_bytes,
+            plan_type=plan_type,
+            squad_uuids=squad_uuids
+        )
+        
+        if result:
+            # Обновляем счётчик сквада
+            if best_squad:
+                database.update_squad_user_count(best_squad['squad_uuid'], 1)
+            
+            return jsonify({
+                'success': True,
+                'subscription': result,
+                'squad': best_squad['squad_name'] if best_squad else 'default'
+            })
+        
+        return jsonify({'error': 'Failed to create subscription'}), 500
+    except Exception as e:
+        logger.error(f"Issue key error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':
