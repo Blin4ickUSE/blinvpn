@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Smartphone, Monitor, Tv, CreditCard, History, 
   UserPlus, Gift, ChevronLeft, Copy, Trash2, Edit2, 
@@ -1535,49 +1535,65 @@ export default function App() {
                         </div>
                         </div>
                         
-                        <div className="relative w-full h-8 flex items-center">
+                        <div className="relative w-full h-8 flex items-center" style={{ touchAction: 'none' }}>
                             <input 
                                 type="range" 
                                 min={5} 
                                 max={500}
                                 step={1}
-                                defaultValue={whitelistGB}
-                                onInput={(e) => setWhitelistGB(Number((e.target as HTMLInputElement).value))}
+                                value={whitelistGB}
+                                onChange={(e) => setWhitelistGB(Number(e.target.value))}
                                 className="absolute w-full h-8 bg-transparent appearance-none cursor-pointer z-10"
                                 style={{
                                   WebkitAppearance: 'none',
-                                  background: 'transparent'
+                                  background: 'transparent',
+                                  touchAction: 'none'
                                 }}
                             />
                             <div className="w-full h-2 bg-slate-700 rounded-lg absolute overflow-hidden pointer-events-none">
                                 <div 
-                                    className="h-full bg-blue-600 rounded-lg transition-none" 
+                                    className="h-full bg-blue-600 rounded-lg" 
                                     style={{ width: `${((whitelistGB - 5) / 495) * 100}%` }}
                                 />
                             </div>
                             <style>{`
+                              input[type="range"] {
+                                touch-action: none;
+                                -webkit-tap-highlight-color: transparent;
+                              }
+                              input[type="range"]::-webkit-slider-runnable-track {
+                                height: 8px;
+                                background: transparent;
+                              }
                               input[type="range"]::-webkit-slider-thumb {
                                 -webkit-appearance: none;
-                                width: 24px;
-                                height: 24px;
+                                width: 28px;
+                                height: 28px;
                                 background: white;
                                 border-radius: 50%;
-                                box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                                box-shadow: 0 2px 8px rgba(0,0,0,0.4);
                                 cursor: grab;
+                                margin-top: -10px;
                               }
                               input[type="range"]::-webkit-slider-thumb:active {
                                 cursor: grabbing;
+                                transform: scale(1.1);
                               }
                               input[type="range"]::-moz-range-thumb {
-                                width: 24px;
-                                height: 24px;
+                                width: 28px;
+                                height: 28px;
                                 background: white;
                                 border-radius: 50%;
                                 border: none;
-                                box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                                box-shadow: 0 2px 8px rgba(0,0,0,0.4);
                                 cursor: grab;
                               }
+                              input[type="range"]::-moz-range-thumb:active {
+                                cursor: grabbing;
+                                transform: scale(1.1);
+                              }
                               input[type="range"]::-moz-range-track {
+                                height: 8px;
                                 background: transparent;
                               }
                             `}</style>
@@ -2081,23 +2097,24 @@ export default function App() {
                </div>
             </div>
             
-            <div className="relative w-full h-8 flex items-center">
+            <div className="relative w-full h-8 flex items-center" style={{ touchAction: 'none' }}>
                 <input 
                     type="range" 
                     min={5} 
                     max={500}
                     step={1}
-                    defaultValue={whitelistGB}
-                    onInput={(e) => setWhitelistGB(Number((e.target as HTMLInputElement).value))}
-                    className="absolute w-full h-8 bg-transparent appearance-none cursor-pointer z-10"
+                    value={whitelistGB}
+                    onChange={(e) => setWhitelistGB(Number(e.target.value))}
+                    className="absolute w-full h-8 bg-transparent appearance-none cursor-pointer z-10 slider-whitelist"
                     style={{
                       WebkitAppearance: 'none',
-                      background: 'transparent'
+                      background: 'transparent',
+                      touchAction: 'none'
                     }}
                 />
                 <div className="w-full h-2 bg-slate-700 rounded-lg absolute overflow-hidden pointer-events-none">
                     <div 
-                        className="h-full bg-blue-600 rounded-lg transition-none" 
+                        className="h-full bg-blue-600 rounded-lg" 
                         style={{ width: `${((whitelistGB - 5) / 495) * 100}%` }}
                     />
                 </div>
@@ -2158,37 +2175,98 @@ export default function App() {
   );
   
   const PaymentWaitView = () => {
-    const handlePaymentCheck = async () => {
-      const oldBalance = balance;
-      const result = await refreshUserData();
-      const newBalance = result?.balance ?? oldBalance;
+    const [checking, setChecking] = useState(false);
+    const [pollingActive, setPollingActive] = useState(false);
+    const checkingRef = useRef(false);
+    
+    const doPaymentCheck = async () => {
+      if (checkingRef.current) return;
+      checkingRef.current = true;
+      setChecking(true);
       
-      if (newBalance !== oldBalance) {
-        const depositAmount = newBalance - oldBalance;
-        addHistoryItem('deposit', 'Пополнение баланса', depositAmount);
+      try {
+        const oldBalance = balance;
+        const result = await refreshUserData();
+        const newBalance = result?.balance ?? oldBalance;
         
-        // Если была отложенная покупка - выполняем её
-        if (pendingAction) {
-          const action = pendingAction;
-          setPendingAction(null);
-          setPaymentUrl(null);
+        if (newBalance > oldBalance) {
+          const depositAmount = newBalance - oldBalance;
+          addHistoryItem('deposit', 'Пополнение баланса', depositAmount);
+          setPollingActive(false);
           
-          if (action.type === 'wizard' || action.type === 'legacy_whitelist') {
-            // Переходим к инструкциям после успешной покупки
+          // Если была отложенная покупка - выполняем её
+          if (pendingAction) {
+            const action = pendingAction;
+            const payload = action.payload;
+            
+            // Проверяем, достаточно ли средств теперь
+            if (newBalance >= payload.price) {
+              try {
+                // Создаём подписку
+                const currentUserId = await ensureUserId();
+                if (currentUserId) {
+                  const res = await miniApiFetch('/subscription/create', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                      user_id: currentUserId,
+                      days: action.type === 'wizard' && payload.wizardType === 'vpn' ? payload.wizardPlan?.days : 30,
+                      type: action.type === 'wizard' ? payload.wizardType : 'whitelist',
+                      whitelist_gb: (action.type === 'legacy_whitelist' || payload.wizardType === 'whitelist') ? payload.whitelistGB : undefined,
+                      price: payload.price,
+                    }),
+                  });
+                  
+                  if (res && res.success) {
+                    addHistoryItem('buy_dev', `Подключение: ${payload.name}`, -payload.price);
+                    setPendingAction(null);
+                    setPaymentUrl(null);
+                    setActivePlatform(wizardPlatform);
+                    await refreshAll();
+                    setWizardStep(4);
+                    setView('wizard');
+                    return;
+                  }
+                }
+              } catch (e) {
+                console.error('Failed to create subscription after payment', e);
+              }
+            }
+            
+            // Если не удалось создать подписку - просто переходим к инструкциям
+            setPendingAction(null);
+            setPaymentUrl(null);
             setActivePlatform(wizardPlatform);
             await refreshDevices();
             setView('instruction_view');
           } else {
+            // Просто пополнение баланса - на главную
+            setPaymentUrl(null);
+            await refreshAll();
             setView('home');
           }
-        } else {
-          // Просто пополнение баланса - на главную
-          setPaymentUrl(null);
-          await refreshAll();
-          setView('home');
         }
+      } finally {
+        checkingRef.current = false;
+        setChecking(false);
       }
     };
+    
+    // Автоматическая проверка баланса каждые 3 секунды
+    useEffect(() => {
+      if (!pollingActive) return;
+      
+      const interval = setInterval(() => {
+        doPaymentCheck();
+      }, 3000);
+      
+      return () => clearInterval(interval);
+    }, [pollingActive]);
+    
+    // Запускаем polling при открытии страницы
+    useEffect(() => {
+      setPollingActive(true);
+      return () => setPollingActive(false);
+    }, []);
     
     return (
       <div className="flex flex-col items-center justify-center min-h-[80vh] animate-in zoom-in duration-300 text-center px-4">
@@ -2198,7 +2276,7 @@ export default function App() {
         </div>
         <h2 className="text-2xl font-bold text-white mb-2">Ожидание оплаты</h2>
         <p className="text-slate-400 mb-8 max-w-xs">
-          {pendingAction ? 'Оплатите для завершения покупки.' : 'Нажмите кнопку ниже чтобы перейти к оплате.'}
+          {pendingAction ? 'После оплаты устройство подключится автоматически.' : 'Нажмите кнопку ниже чтобы перейти к оплате.'}
         </p>
         {paymentUrl && (
           <Button onClick={() => {
@@ -2216,13 +2294,16 @@ export default function App() {
             Перейти к оплате
           </Button>
         )}
+        <div className="mt-4 text-xs text-slate-500">
+          {checking ? 'Проверка оплаты...' : 'Автоматическая проверка каждые 3 сек.'}
+        </div>
         <button 
           onClick={() => window.open(SUPPORT_URL, '_blank')} 
           className="mt-4 text-blue-500 text-sm hover:text-blue-300 font-medium flex items-center gap-2"
         >
           <MessageCircle size={16} /> Связаться с поддержкой
         </button>
-        <button onClick={() => { setPaymentUrl(null); setPendingAction(null); setView('home'); }} className="mt-3 text-slate-500 text-sm hover:text-slate-300">
+        <button onClick={() => { setPaymentUrl(null); setPendingAction(null); setPollingActive(false); setView('home'); }} className="mt-3 text-slate-500 text-sm hover:text-slate-300">
           Отменить
         </button>
       </div>
