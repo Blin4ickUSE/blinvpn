@@ -870,10 +870,10 @@ export default function App() {
     return null;
   };
 
-  // Получить Happ зашифрованную ссылку через API
+  // Получить Happ зашифрованную ссылку через наш бэкенд (который проксирует на crypto.happ.su)
   const getHappEncryptedLink = async (subscriptionUrl: string): Promise<string | null> => {
     try {
-      const response = await fetch('https://crypto.happ.su/api.php', {
+      const response = await fetch('/api/encrypt-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: subscriptionUrl })
@@ -881,15 +881,16 @@ export default function App() {
       
       if (response.ok) {
         const data = await response.json();
-        // API возвращает encrypted_link
         if (data && data.encrypted_link) {
+          console.log('Got encrypted link:', data.encrypted_link);
           return data.encrypted_link;
         }
       }
-      console.error('API encryption failed:', response.status);
+      const errorText = await response.text();
+      console.error('Encryption API failed:', response.status, errorText);
       return null;
     } catch (e) {
-      console.error('API encryption failed:', e);
+      console.error('Encryption API error:', e);
       return null;
     }
   };
@@ -926,15 +927,14 @@ export default function App() {
     console.log('Encrypted link:', encryptedLink);
     
     if (!encryptedLink) {
-      handleCopy(subscriptionUrl);
-      alert('Не удалось зашифровать ссылку. Ключ скопирован в буфер обмена.');
+      alert('Не удалось зашифровать ссылку. Попробуйте позже.');
       return;
     }
     
     // Telegram не позволяет открывать не-HTTPS ссылки напрямую,
     // поэтому используем редирект через API
     const redirectUrl = `${window.location.origin}/api/redirect?url=${encodeURIComponent(encryptedLink)}`;
-    console.log('Redirect URL:', redirectUrl);
+    console.log('Opening redirect URL:', redirectUrl);
     
     // Открываем редирект-страницу
     const win = window as any;
