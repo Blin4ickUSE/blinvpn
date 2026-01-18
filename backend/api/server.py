@@ -46,15 +46,14 @@ def redirect_to_happ():
     """Страница редиректа для открытия приложения Happ"""
     from flask import Response
     
-    redirect_url = request.args.get('redirect', '')
-    original_url = request.args.get('original', '')
+    url = request.args.get('url', '')
     
     html = f'''<!DOCTYPE html>
-<html>
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Открытие Happ...</title>
+    <title>Открываем Happ...</title>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
@@ -65,119 +64,90 @@ def redirect_to_happ():
             align-items: center;
             justify-content: center;
             color: #fff;
-            padding: 20px;
         }}
-        .container {{ text-align: center; max-width: 400px; }}
+        @media (prefers-color-scheme: light) {{
+            body {{
+                background: linear-gradient(135deg, #f5f5f7 0%, #e5e7eb 100%);
+                color: #1d1d1f;
+            }}
+            .spinner {{
+                border-color: rgba(0,0,0,0.1);
+                border-top-color: #3b82f6;
+            }}
+            .error {{
+                background: rgba(0,0,0,0.05);
+            }}
+            .btn {{
+                background: #3b82f6;
+                color: #fff;
+            }}
+        }}
+        .container {{ text-align: center; padding: 2rem; }}
         .spinner {{
-            width: 50px; height: 50px;
-            border: 3px solid rgba(255,255,255,0.1);
-            border-top-color: #00d9ff;
+            width: 48px;
+            height: 48px;
+            border: 4px solid rgba(255,255,255,0.2);
+            border-top-color: #fff;
             border-radius: 50%;
             animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
+            margin: 0 auto 1.5rem;
         }}
         @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
-        h2 {{ font-size: 20px; margin-bottom: 10px; }}
-        p {{ color: rgba(255,255,255,0.7); font-size: 14px; margin-bottom: 20px; }}
+        h1 {{ font-size: 1.25rem; font-weight: 500; margin-bottom: 0.5rem; }}
+        p {{ font-size: 0.875rem; opacity: 0.7; }}
+        .error {{
+            display: none;
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: rgba(255,255,255,0.1);
+            border-radius: 8px;
+        }}
+        .error.show {{ display: block; }}
         .btn {{
             display: inline-block;
-            padding: 14px 28px;
-            background: #00d9ff;
-            color: #000;
+            margin-top: 1rem;
+            padding: 0.75rem 1.5rem;
+            background: #fff;
+            color: #1a1a2e;
             text-decoration: none;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 16px;
-            border: none;
-            cursor: pointer;
-            margin: 5px;
-        }}
-        .btn-secondary {{
-            background: rgba(255,255,255,0.1);
-            color: #fff;
-            border: 1px solid rgba(255,255,255,0.2);
-        }}
-        .hidden {{ display: none; }}
-        .manual {{ margin-top: 30px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.1); }}
-        .link-box {{
-            background: rgba(0,0,0,0.3);
-            padding: 12px;
             border-radius: 8px;
-            word-break: break-all;
-            font-family: monospace;
-            font-size: 11px;
-            margin: 10px 0;
-            max-height: 100px;
-            overflow-y: auto;
+            font-weight: 500;
         }}
     </style>
 </head>
 <body>
     <div class="container">
-        <div id="loading">
-            <div class="spinner"></div>
-            <h2>Открываем Happ...</h2>
-            <p>Нажмите кнопку, если приложение не открылось</p>
-        </div>
-        
-        <div id="buttons">
-            <a id="openBtn" class="btn" href="{redirect_url}">📱 Открыть в Happ</a>
-        </div>
-        
-        <div id="manual" class="manual hidden">
-            <p>Скопируйте ссылку и вставьте в приложение Happ:</p>
-            <div id="linkBox" class="link-box">{original_url or redirect_url}</div>
-            <button id="copyBtn" class="btn btn-secondary">Скопировать ссылку</button>
+        <div class="spinner" id="spinner"></div>
+        <h1 id="title">Открываем приложение...</h1>
+        <p id="subtitle">Пожалуйста, подождите</p>
+        <div class="error" id="errorBlock">
+            <p>Если приложение не открылось, нажмите кнопку:</p>
+            <a class="btn" id="manualBtn" href="#">Открыть приложение</a>
         </div>
     </div>
 
     <script>
-        const redirectUrl = "{redirect_url}";
-        const originalUrl = "{original_url}";
-        
-        if (redirectUrl) {{
-            // Пробуем открыть через iframe
-            try {{
-                const iframe = document.createElement('iframe');
-                iframe.style.display = 'none';
-                iframe.src = redirectUrl;
-                document.body.appendChild(iframe);
-            }} catch(e) {{}}
+        (function() {{
+            var url = "{url}";
             
-            // Пробуем через location.href
-            setTimeout(function() {{
-                try {{ window.location.href = redirectUrl; }} catch(e) {{}}
-            }}, 100);
+            if (!url) {{
+                document.getElementById('title').textContent = 'URL не указан';
+                document.getElementById('subtitle').textContent = '';
+                document.getElementById('spinner').style.display = 'none';
+                return;
+            }}
             
-            // Показываем копирование через 2 секунды
+            var manualBtn = document.getElementById('manualBtn');
+            manualBtn.href = url;
+            
+            // Открываем URL напрямую
+            window.location.href = url;
+            
+            // Показываем кнопку через 2 секунды если редирект не сработал
             setTimeout(function() {{
-                document.getElementById('loading').querySelector('.spinner').style.display = 'none';
-                document.getElementById('loading').querySelector('h2').textContent = 'Нажмите кнопку выше';
-                document.getElementById('manual').classList.remove('hidden');
+                document.getElementById('errorBlock').classList.add('show');
             }}, 2000);
-            
-            document.getElementById('copyBtn').addEventListener('click', function() {{
-                const text = originalUrl || redirectUrl;
-                if (navigator.clipboard) {{
-                    navigator.clipboard.writeText(text).then(() => {{
-                        this.textContent = 'Скопировано!';
-                        setTimeout(() => {{ this.textContent = 'Скопировать ссылку'; }}, 2000);
-                    }});
-                }} else {{
-                    const ta = document.createElement('textarea');
-                    ta.value = text;
-                    document.body.appendChild(ta);
-                    ta.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(ta);
-                    this.textContent = 'Скопировано!';
-                    setTimeout(() => {{ this.textContent = 'Скопировать ссылку'; }}, 2000);
-                }}
-            }});
-        }} else {{
-            document.getElementById('loading').innerHTML = '<h2>Ошибка</h2><p>Ссылка не найдена</p>';
-            document.getElementById('buttons').style.display = 'none';
-        }}
+        }})();
     </script>
 </body>
 </html>'''
@@ -700,15 +670,15 @@ def create_subscription():
     
     # Создаем подписку
     if is_trial:
-        # Пробный период - 1 день, 5 ГБ трафика
-        traffic_limit_bytes = int(5 * (1024 ** 3))
+        # Пробный период - 10 ГБ трафика
+        traffic_limit_bytes = int(10 * (1024 ** 3))
         result = core.create_user_and_subscription(
             user['telegram_id'], user.get('username', ''), days,
             traffic_limit=traffic_limit_bytes,
             plan_type='vpn'
         )
     elif plan_type == 'whitelist':
-        # Для whitelist создаем подписку с лимитом трафика
+        # Для whitelist - лимит трафика по выбору пользователя
         traffic_limit_bytes = int(whitelist_gb * (1024 ** 3))
         result = core.create_user_and_subscription(
             user['telegram_id'], user.get('username', ''), days,
@@ -716,8 +686,10 @@ def create_subscription():
             plan_type='whitelist'
         )
     else:
+        # Обычный VPN - безлимитный трафик (0 = unlimited)
         result = core.create_user_and_subscription(
             user['telegram_id'], user.get('username', ''), days,
+            traffic_limit=0,
             plan_type='vpn'
         )
     
