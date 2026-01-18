@@ -3,11 +3,13 @@
 """
 import os
 import logging
+import asyncio
 from typing import Dict, Any, Optional
 from flask import Flask, request, jsonify
 from backend.api import yookassa, heleket, platega
 from backend.database import database
 from backend.core import core
+from backend.api.yookassa_nalog import nalog_service
 
 logger = logging.getLogger(__name__)
 
@@ -65,36 +67,9 @@ def yookassa_webhook():
                 logger.info(f"YooKassa платеж {payment_id} уже обработан")
                 return jsonify({'status': 'ok'}), 200
             
-            # Проверяем, сохранен ли способ оплаты для рекуррентных платежей
+            # Получаем информацию о методе оплаты
             payment_method = object_data.get('payment_method', {})
-            payment_method_id = payment_method.get('id')
-            payment_method_saved = payment_method.get('saved', False)
             payment_method_type = payment_method.get('type', 'bank_card')
-            
-            # Сохраняем способ оплаты, если он был сохранен
-            if payment_method_saved and payment_method_id:
-                conn = database.get_db_connection()
-                cursor = conn.cursor()
-                try:
-                    card_info = payment_method.get('card', {})
-                    cursor.execute("""
-                        INSERT OR REPLACE INTO saved_payment_methods 
-                        (user_id, payment_provider, payment_method_id, payment_method_type, 
-                         card_last4, card_brand, is_active)
-                        VALUES (?, 'YooKassa', ?, ?, ?, ?, 1)
-                    """, (
-                        user_id,
-                        payment_method_id,
-                        payment_method_type,
-                        card_info.get('last4'),
-                        card_info.get('card_type')
-                    ))
-                    conn.commit()
-                    logger.info(f"Сохранен способ оплаты {payment_method_id} для пользователя {user_id}")
-                except Exception as e:
-                    logger.error(f"Ошибка сохранения способа оплаты: {e}")
-                finally:
-                    conn.close()
             
             # Обновляем баланс пользователя
             database.update_user_balance(user_id, amount)
@@ -113,8 +88,6 @@ def yookassa_webhook():
             user = database.get_user_by_id(user_id)
             if user:
                 msg = f"✅ Баланс пополнен на {amount}₽ через YooKassa"
-                if payment_method_saved:
-                    msg += "\n💳 Способ оплаты сохранен для автоплатежей"
                 core.send_notification_to_user(user['telegram_id'], msg)
                 
                 # Уведомление администратору о пополнении
@@ -123,6 +96,22 @@ def yookassa_webhook():
                     'СБП' if payment_method_type == 'sbp' else 'Банковская карта',
                     'YooKassa'
                 )
+                
+                # Создание чека через "Мой Налог" (если включено)
+                if nalog_service.is_configured:
+                    try:
+                        description = f"Пополнение баланса VPN ({amount}₽)"
+                        receipt_uuid = asyncio.run(nalog_service.process_yookassa_payment(
+                            payment_id=payment_id,
+                            amount=amount,
+                            user_id=user_id,
+                            telegram_id=user.get('telegram_id'),
+                            description=description,
+                        ))
+                        if receipt_uuid:
+                            logger.info(f"Создан чек {receipt_uuid} для платежа {payment_id}")
+                    except Exception as e:
+                        logger.error(f"Ошибка создания чека для платежа {payment_id}: {e}")
             
             logger.info(f"YooKassa платеж {payment_id} успешно обработан: {amount}₽ для user {user_id}")
         
