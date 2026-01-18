@@ -261,6 +261,23 @@ def get_user_info():
         }), 403
     
     stats = core.get_referral_stats(user['id'])
+    
+    # Получаем дату последнего вывода на карту
+    last_card_withdrawal = None
+    try:
+        conn = database.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT created_at FROM transactions 
+            WHERE user_id = ? AND type = 'withdrawal_request' AND payment_method = 'Карта'
+            ORDER BY created_at DESC LIMIT 1
+        """, (user['id'],))
+        last_row = cursor.fetchone()
+        if last_row:
+            last_card_withdrawal = last_row['created_at']
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error getting last card withdrawal: {e}")
 
     return jsonify({
         'id': user['id'],
@@ -276,6 +293,7 @@ def get_user_info():
         'referral_rate': stats.get('rate', 20),
         'is_new_user': is_new_user,
         'trial_used': user.get('trial_used', 0),  # Был ли использован пробный период
+        'last_card_withdrawal': last_card_withdrawal,  # Дата последнего вывода на карту
     })
 
 @app.route('/api/payment/create', methods=['POST'])
@@ -1634,23 +1652,64 @@ def request_withdrawal():
     crypto_net = data.get('crypto_net', '')
     crypto_addr = data.get('crypto_addr', '')
     
-    if not telegram_id or not amount or not method:
+    logger.info(f"Withdrawal request: telegram_id={telegram_id}, amount={amount}, method={method}")
+    
+    if not telegram_id or not method:
+        logger.error("Missing required fields: telegram_id or method")
         return jsonify({'error': 'Missing required fields'}), 400
     
-    amount = float(amount)
-    if amount <= 0:
+    try:
+        amount = float(amount)
+    except (ValueError, TypeError):
+        logger.error(f"Invalid amount: {amount}")
         return jsonify({'error': 'Invalid amount'}), 400
+        
+    if amount <= 0:
+        logger.error(f"Amount must be positive: {amount}")
+        return jsonify({'error': 'Invalid amount'}), 400
+    
+    # Минимальный вывод для карты и крипто - 200₽
+    if method in ('card', 'crypto') and amount < 200:
+        return jsonify({'error': 'Минимальная сумма вывода - 200₽'}), 400
     
     user = database.get_user_by_telegram_id(telegram_id)
     if not user:
+        logger.error(f"User not found: {telegram_id}")
         return jsonify({'error': 'User not found'}), 404
     
     partner_balance = user.get('partner_balance', 0)
+    logger.info(f"User partner_balance: {partner_balance}, requested: {amount}")
+    
     if amount > partner_balance:
         return jsonify({'error': 'Insufficient partner balance'}), 400
     
     conn = database.get_db_connection()
     cursor = conn.cursor()
+    
+    # Проверка лимита для вывода на карту - не чаще 1 раза в 30 дней
+    if method == 'card':
+        cursor.execute("""
+            SELECT created_at FROM transactions 
+            WHERE user_id = ? AND type = 'withdrawal_request' AND payment_method = 'Карта' AND status = 'Pending'
+            ORDER BY created_at DESC LIMIT 1
+        """, (user['id'],))
+        last_card_withdrawal = cursor.fetchone()
+        
+        if last_card_withdrawal:
+            from datetime import datetime, timedelta
+            last_date_str = last_card_withdrawal['created_at']
+            try:
+                if isinstance(last_date_str, str):
+                    last_date = datetime.fromisoformat(last_date_str.replace('Z', '+00:00'))
+                else:
+                    last_date = last_date_str
+                
+                days_since = (datetime.now() - last_date.replace(tzinfo=None)).days
+                if days_since < 30:
+                    days_left = 30 - days_since
+                    return jsonify({'error': f'Вывод на карту доступен не чаще 1 раза в 30 дней. Осталось дней: {days_left}'}), 400
+            except Exception as e:
+                logger.error(f"Error parsing last withdrawal date: {e}")
     
     try:
         if method == 'balance':
