@@ -23,7 +23,7 @@ class NalogService:
         self.inn = os.getenv('NALOG_INN', '')
         self.password = os.getenv('NALOG_PASSWORD', '')
         self.token_storage_path = os.getenv('NALOG_TOKEN_PATH', 'data/nalog_token.json')
-        self.service_name = os.getenv('NALOG_SERVICE_NAME', 'VPN подписка')
+        self.service_name = os.getenv('NALOG_SERVICE_NAME', 'Приобретение услуги в RSecktor Pay')
         
         self._client: Optional[NalogClient] = None
         self._initialized = False
