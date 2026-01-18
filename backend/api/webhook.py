@@ -71,8 +71,38 @@ def yookassa_webhook():
             payment_method = object_data.get('payment_method', {})
             payment_method_type = payment_method.get('type', 'bank_card')
             
-            # Обновляем баланс пользователя
-            database.update_user_balance(user_id, amount)
+            # Проверяем авто-скидки на пополнение
+            bonus_amount = 0
+            bonus_name = None
+            try:
+                conn = database.get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM auto_discounts 
+                    WHERE is_active = 1 AND condition_type = 'payment_amount'
+                    ORDER BY CAST(condition_value AS REAL) DESC
+                """)
+                discounts = cursor.fetchall()
+                conn.close()
+                
+                for discount in discounts:
+                    try:
+                        min_amount = float(discount['condition_value'])
+                        if amount >= min_amount:
+                            if discount['discount_type'] == 'percent':
+                                bonus_amount = round(amount * float(discount['discount_value']) / 100, 2)
+                            else:
+                                bonus_amount = float(discount['discount_value'])
+                            bonus_name = discount['name']
+                            break
+                    except (ValueError, TypeError):
+                        continue
+            except Exception as e:
+                logger.error(f"Error checking auto-discounts: {e}")
+            
+            # Обновляем баланс пользователя (с бонусом если есть)
+            total_amount = amount + bonus_amount
+            database.update_user_balance(user_id, total_amount)
             
             # Создаем транзакцию
             conn = database.get_db_connection()
@@ -80,14 +110,25 @@ def yookassa_webhook():
             cursor.execute("""
                 INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id)
                 VALUES (?, 'deposit', ?, 'Success', ?, 'YooKassa', ?)
-            """, (user_id, amount, 'СБП' if payment_method_type == 'sbp' else 'Карта', payment_id))
+            """, (user_id, total_amount, 'СБП' if payment_method_type == 'sbp' else 'Карта', payment_id))
+            
+            # Если был бонус, создаем отдельную транзакцию для него
+            if bonus_amount > 0:
+                cursor.execute("""
+                    INSERT INTO transactions (user_id, type, amount, status, description)
+                    VALUES (?, 'bonus', ?, 'Success', ?)
+                """, (user_id, bonus_amount, f"Бонус: {bonus_name}"))
+            
             conn.commit()
             conn.close()
             
             # Уведомление пользователю
             user = database.get_user_by_id(user_id)
             if user:
-                msg = f"✅ Баланс пополнен на {amount}₽ через YooKassa"
+                if bonus_amount > 0:
+                    msg = f"✅ Баланс пополнен на {amount}₽ + бонус {bonus_amount}₽!"
+                else:
+                    msg = f"✅ Баланс пополнен на {amount}₽ через YooKassa"
                 core.send_notification_to_user(user['telegram_id'], msg)
                 
                 # Уведомление администратору о пополнении
