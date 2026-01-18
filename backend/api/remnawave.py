@@ -340,7 +340,7 @@ class RemnaWaveAPI:
         if active_internal_squads:
             data['activeInternalSquads'] = active_internal_squads
 
-        logger.debug("Создание пользователя в панели: %s", data)
+        logger.info("Создание пользователя в Remnawave: %s", data)
         response = await self._make_request('POST', '/api/users', data)
         user = self._parse_user(response['response'])
         return user
@@ -385,6 +385,15 @@ class RemnaWaveAPI:
         response = await self._make_request('PATCH', '/api/users', data)
         user = self._parse_user(response['response'])
         return user
+    
+    async def delete_user(self, uuid: str) -> bool:
+        """Удалить пользователя из Remnawave"""
+        try:
+            response = await self._make_request('DELETE', f'/api/users/{uuid}')
+            return response.get('response', {}).get('isDeleted', False)
+        except Exception as e:
+            logger.error(f"Error deleting user {uuid}: {e}")
+            return False
     
     async def get_all_users(self, start: int = 0, size: int = 100) -> Dict[str, Any]:
         params = {'start': start, 'size': size}
@@ -588,6 +597,20 @@ class RemnawaveAPI:
         async def _get():
             async with self._api as api:
                 return await api.get_internal_squads()
+        return asyncio.run(_get())
+    
+    def delete_user_sync(self, uuid: str) -> bool:
+        """Удалить пользователя (синхронная обёртка)"""
+        async def _delete():
+            async with self._api as api:
+                return await api.delete_user(uuid)
+        return asyncio.run(_delete())
+    
+    def get_all_users_sync(self, start: int = 0, size: int = 100):
+        """Получить всех пользователей (синхронная обёртка)"""
+        async def _get():
+            async with self._api as api:
+                return await api.get_all_users(start, size)
         return asyncio.run(_get())
 
 
