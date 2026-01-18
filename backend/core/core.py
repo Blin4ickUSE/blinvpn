@@ -119,9 +119,15 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         # Создаем пользователя в БД
         user_id = database.create_user(telegram_id, username, referred_by=referred_by)
         
-        # Получаем сквады по умолчанию для типа подписки, если не указаны явно
+        # Получаем лучший сквад с балансировкой нагрузки, если не указаны явно
         if squad_uuids is None:
-            squad_uuids = database.get_default_squads(plan_type)
+            best_squad = database.get_best_squad_for_subscription(plan_type)
+            if best_squad:
+                squad_uuids = [best_squad['squad_uuid']]
+                logger.info(f"Auto-selected squad {best_squad['squad_name']} for {plan_type} (users: {best_squad['current_users']})")
+            else:
+                # Fallback на дефолтные сквады
+                squad_uuids = database.get_default_squads(plan_type)
         
         logger.info(f"Creating subscription for {telegram_id}, plan_type={plan_type}, squads={squad_uuids}")
         
@@ -204,20 +210,26 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         cursor.execute("SELECT id FROM vpn_keys WHERE user_id = ? AND key_uuid = ?", (user_id, user_uuid))
         existing_key = cursor.fetchone()
         
+        # Определяем squad_uuid для сохранения (первый из списка)
+        assigned_squad_uuid = squad_uuids[0] if squad_uuids else None
+        
         vpn_key_id = None
         if existing_key:
             # Обновляем существующий ключ
             vpn_key_id = existing_key['id']
             cursor.execute("""
-                UPDATE vpn_keys SET status = 'Active', expiry_date = ?, traffic_limit = ?, key_config = ?
+                UPDATE vpn_keys SET status = 'Active', expiry_date = ?, traffic_limit = ?, 
+                       key_config = ?, squad_uuid = ?, plan_type = ?
                 WHERE id = ?
-            """, (expiry_date, traffic_limit, subscription_url, vpn_key_id))
+            """, (expiry_date, traffic_limit, subscription_url, assigned_squad_uuid, plan_type, vpn_key_id))
         else:
             # Создаем новый ключ
             cursor.execute("""
-                INSERT INTO vpn_keys (user_id, key_uuid, key_config, status, expiry_date, devices_limit, traffic_limit)
-                VALUES (?, ?, ?, 'Active', ?, 1, ?)
-            """, (user_id, user_uuid, subscription_url, expiry_date, traffic_limit))
+                INSERT INTO vpn_keys (user_id, key_uuid, key_config, status, expiry_date, 
+                                     devices_limit, traffic_limit, squad_uuid, plan_type)
+                VALUES (?, ?, ?, 'Active', ?, 1, ?, ?, ?)
+            """, (user_id, user_uuid, subscription_url, expiry_date, traffic_limit, 
+                  assigned_squad_uuid, plan_type))
             vpn_key_id = cursor.lastrowid
         
         # Создаем или обновляем устройство для отображения в приложении
@@ -244,13 +256,19 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         conn.commit()
         conn.close()
         
+        # Обновляем счётчик пользователей в скваде
+        if assigned_squad_uuid:
+            database.update_squad_user_count(assigned_squad_uuid, 1)
+        
         # Уведомление администратору убрано - оставляем только для пополнений и запросов на вывод
         
         return {
             'user_id': user_id,
             'remnawave_uuid': user_uuid,
             'subscription_url': subscription_url,
-            'subscription': subscription_data
+            'subscription': subscription_data,
+            'squad_uuid': assigned_squad_uuid,
+            'plan_type': plan_type
         }
     except Exception as e:
         logger.error(f"Error creating user and subscription: {e}")
