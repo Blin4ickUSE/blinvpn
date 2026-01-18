@@ -39,6 +39,38 @@ def require_auth(f):
     wrapper.__name__ = f.__name__
     return wrapper
 
+# ========== Шифрование ссылки для Happ ==========
+
+@app.route('/api/encrypt-link', methods=['POST'])
+def encrypt_link_for_happ():
+    """Проксирует запрос на шифрование ссылки через crypto.happ.su"""
+    import requests as req
+    
+    data = request.get_json()
+    url = data.get('url') if data else None
+    
+    if not url:
+        return jsonify({'error': 'URL is required'}), 400
+    
+    try:
+        response = req.post(
+            'https://crypto.happ.su/api.php',
+            json={'url': url},
+            headers={'Content-Type': 'application/json'},
+            timeout=10
+        )
+        
+        if response.ok:
+            result = response.json()
+            if result and result.get('encrypted_link'):
+                return jsonify({'encrypted_link': result['encrypted_link']})
+        
+        logger.error(f"Happ encryption API failed: {response.status_code} - {response.text}")
+        return jsonify({'error': 'Encryption failed'}), 500
+    except Exception as e:
+        logger.error(f"Happ encryption API error: {e}")
+        return jsonify({'error': str(e)}), 500
+
 # ========== Редирект для открытия Happ ==========
 
 @app.route('/api/redirect')
