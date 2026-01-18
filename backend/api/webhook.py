@@ -100,13 +100,13 @@ def yookassa_webhook():
                 # Создание чека через "Мой Налог" (если включено)
                 if nalog_service.is_configured:
                     try:
-                        description = f"Пополнение баланса VPN ({amount}₽)"
+                        # Используем дефолтное описание из service_name (настроено через панель или переменную окружения)
                         receipt_uuid = asyncio.run(nalog_service.process_yookassa_payment(
                             payment_id=payment_id,
                             amount=amount,
                             user_id=user_id,
                             telegram_id=user.get('telegram_id'),
-                            description=description,
+                            description=None,  # Используется service_name по умолчанию
                         ))
                         if receipt_uuid:
                             logger.info(f"Создан чек {receipt_uuid} для платежа {payment_id}")
