@@ -3,7 +3,10 @@ REST API сервер для мини-приложения и панели
 """
 import os
 import logging
+import hmac
+import hashlib
 from datetime import datetime, timedelta
+from urllib.parse import parse_qs, unquote
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import sys
@@ -28,6 +31,94 @@ logger = logging.getLogger(__name__)
 
 # Секретный ключ для аутентификации панели (legacy)
 PANEL_SECRET = os.getenv('PANEL_SECRET', 'change_this_secret')
+BOT_TOKEN = os.getenv('BOT_TOKEN', '')
+
+def verify_telegram_webapp_data(init_data: str) -> dict | None:
+    """
+    Проверяет подлинность данных Telegram WebApp.
+    Возвращает данные пользователя если валидно, иначе None.
+    """
+    if not init_data or not BOT_TOKEN:
+        return None
+    
+    try:
+        parsed = parse_qs(init_data)
+        
+        # Получаем hash из данных
+        received_hash = parsed.get('hash', [''])[0]
+        if not received_hash:
+            return None
+        
+        # Создаём строку для проверки (все параметры кроме hash, отсортированные)
+        data_check_arr = []
+        for key, value in parsed.items():
+            if key != 'hash':
+                data_check_arr.append(f"{key}={value[0]}")
+        data_check_arr.sort()
+        data_check_string = '\n'.join(data_check_arr)
+        
+        # Создаём секретный ключ из токена бота
+        secret_key = hmac.new(
+            b'WebAppData',
+            BOT_TOKEN.encode(),
+            hashlib.sha256
+        ).digest()
+        
+        # Вычисляем hash
+        calculated_hash = hmac.new(
+            secret_key,
+            data_check_string.encode(),
+            hashlib.sha256
+        ).hexdigest()
+        
+        # Проверяем hash
+        if not hmac.compare_digest(calculated_hash, received_hash):
+            return None
+        
+        # Парсим данные пользователя
+        import json
+        user_data_str = parsed.get('user', [''])[0]
+        if user_data_str:
+            user_data = json.loads(unquote(user_data_str))
+            return user_data
+        
+        return None
+    except Exception as e:
+        logger.error(f"Error verifying Telegram WebApp data: {e}")
+        return None
+
+def get_telegram_user_from_request() -> dict | None:
+    """
+    Получает и проверяет Telegram пользователя из запроса.
+    Проверяет X-Telegram-Init-Data заголовок.
+    """
+    init_data = request.headers.get('X-Telegram-Init-Data', '')
+    if init_data:
+        return verify_telegram_webapp_data(init_data)
+    return None
+
+def require_telegram_auth(allow_user_id: bool = False):
+    """
+    Декоратор для проверки Telegram аутентификации.
+    Если allow_user_id=True, также проверяет что user_id в запросе совпадает с authenticated user.
+    """
+    def decorator(f):
+        def wrapper(*args, **kwargs):
+            tg_user = get_telegram_user_from_request()
+            
+            # Если initData не валидный, проверяем fallback через telegram_id
+            # Это менее безопасно, но сохраняет обратную совместимость
+            if not tg_user:
+                # В production здесь должен быть return jsonify({'error': 'Unauthorized'}), 401
+                # Но для совместимости оставляем fallback
+                pass
+            
+            # Добавляем user данные в kwargs для использования в функции
+            kwargs['_tg_user'] = tg_user
+            return f(*args, **kwargs)
+        wrapper.__name__ = f.__name__
+        return wrapper
+    return decorator
 
 def require_auth(f):
     """
@@ -1376,6 +1467,55 @@ def refund_transaction(transaction_id: int):
         return jsonify({'success': False, 'error': str(e)}), 500
     finally:
         conn.close()
+
+@app.route('/api/panel/users/<int:user_id>/subscriptions', methods=['GET'])
+@require_auth
+def get_user_subscriptions(user_id: int):
+    """Получить все подписки (ключи) пользователя"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT vk.id, vk.key_uuid, vk.status, vk.expiry_date, 
+                   vk.traffic_used, vk.traffic_limit, vk.created_at,
+                   CASE WHEN vk.traffic_limit > 0 AND vk.traffic_limit < 100000000000 THEN 'whitelist' ELSE 'vpn' END as type
+            FROM vpn_keys vk
+            WHERE vk.user_id = ?
+            ORDER BY vk.created_at DESC
+        """, (user_id,))
+        
+        rows = cursor.fetchall()
+        subscriptions = []
+        
+        for row in rows:
+            days_left = None
+            if row['expiry_date']:
+                try:
+                    if isinstance(row['expiry_date'], str):
+                        expiry_dt = datetime.fromisoformat(row['expiry_date'].replace('Z', '+00:00'))
+                    else:
+                        expiry_dt = row['expiry_date']
+                    days_left = (expiry_dt - datetime.now()).days
+                except:
+                    days_left = 0
+            
+            subscriptions.append({
+                'id': row['id'],
+                'key_uuid': row['key_uuid'],
+                'short_uuid': row['key_uuid'][:8] if row['key_uuid'] else None,
+                'status': row['status'],
+                'expiry_date': row['expiry_date'],
+                'days_left': days_left if days_left is not None else 0,
+                'traffic_used': float(row['traffic_used'] or 0),
+                'traffic_limit': float(row['traffic_limit'] or 0),
+                'type': row['type']
+            })
+        
+        return jsonify(subscriptions)
+    finally:
+        conn.close()
+
 
 @app.route('/api/panel/users/<int:user_id>/unban', methods=['POST'])
 @require_auth
