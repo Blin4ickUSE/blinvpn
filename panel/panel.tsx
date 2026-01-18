@@ -892,21 +892,66 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
 };
 
 // ==========================================
-// 5. LOGIN FORM COMPONENT
+// 5. LOGIN FORM COMPONENT (Логин/Пароль или Legacy PANEL_SECRET)
 // ==========================================
 
 function LoginForm({ onLogin }: { onLogin: (secret: string) => void }) {
+  const [authMode, setAuthMode] = useState<'credentials' | 'legacy'>('credentials');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [secret, setSecret] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [initInfo, setInitInfo] = useState<{username?: string; password?: string; newAdmin?: boolean} | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Проверяем инициализацию при загрузке
+  useEffect(() => {
+    fetch('/api/panel/auth/init')
+      .then(res => res.json())
+      .then(data => {
+        if (data.new_admin && data.password) {
+          setInitInfo({
+            username: data.username,
+            password: data.password,
+            newAdmin: true
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleCredentialsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
     try {
-      // Проверяем секрет, делая тестовый запрос
+      const res = await fetch('/api/panel/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.session_token) {
+        setPanelSecret(data.session_token);
+        onLogin(data.session_token);
+      } else {
+        setError(data.error || 'Неверные учетные данные');
+      }
+    } catch (err) {
+      setError('Ошибка подключения к серверу');
+    }
+    setLoading(false);
+  };
+
+  const handleLegacySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
       const res = await fetch('/api/panel/stats/summary', {
         headers: {
           'Authorization': `Bearer ${secret}`,
@@ -940,50 +985,131 @@ function LoginForm({ onLogin }: { onLogin: (secret: string) => void }) {
             <Lock size={32} className="text-white" />
           </div>
           <h1 className="text-2xl font-bold text-white">BlinVPN Panel</h1>
-          <p className="text-gray-400 mt-2">Введите секретный ключ для входа</p>
+          <p className="text-gray-400 mt-2">Войдите для доступа к панели</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-400 mb-2">
-              Секретный ключ (PANEL_SECRET)
-            </label>
-            <input
-              type="password"
-              value={secret}
-              onChange={(e) => setSecret(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
-              placeholder="Введите ключ из .env файла"
-              required
-            />
+        {/* Уведомление о новом админе */}
+        {initInfo?.newAdmin && (
+          <div className="bg-green-500/10 border border-green-500/30 text-green-400 px-4 py-3 rounded-lg text-sm mb-6">
+            <p className="font-bold mb-2">Создан администратор!</p>
+            <p>Логин: <code className="bg-green-900/30 px-1 rounded">{initInfo.username}</code></p>
+            <p>Пароль: <code className="bg-green-900/30 px-1 rounded">{initInfo.password}</code></p>
+            <p className="mt-2 text-xs text-green-500">Сохраните эти данные! Пароль показывается только один раз.</p>
           </div>
+        )}
 
-          {error && (
-            <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg text-sm">
-              {error}
-            </div>
-          )}
-
+        {/* Переключатель режима */}
+        <div className="flex bg-gray-800 rounded-lg p-1 mb-6">
           <button
-            type="submit"
-            disabled={loading || !secret}
-            className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-blue-900/30"
+            onClick={() => setAuthMode('credentials')}
+            className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${
+              authMode === 'credentials' 
+                ? 'bg-blue-600 text-white' 
+                : 'text-gray-400 hover:text-white'
+            }`}
           >
-            {loading ? (
-              <span className="flex items-center justify-center">
-                <Loader size={20} className="animate-spin mr-2" />
-                Проверка...
-              </span>
-            ) : (
-              'Войти'
-            )}
+            Логин/Пароль
           </button>
-        </form>
+          <button
+            onClick={() => setAuthMode('legacy')}
+            className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${
+              authMode === 'legacy' 
+                ? 'bg-blue-600 text-white' 
+                : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            PANEL_SECRET
+          </button>
+        </div>
 
-        <p className="text-gray-500 text-xs text-center mt-6">
-          Секретный ключ находится в файле .env<br/>
-          переменная PANEL_SECRET
-        </p>
+        {authMode === 'credentials' ? (
+          <form onSubmit={handleCredentialsSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-400 mb-2">Логин</label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                placeholder="admin"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-400 mb-2">Пароль</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                placeholder="••••••••"
+                required
+              />
+            </div>
+
+            {error && (
+              <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg text-sm">
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading || !username || !password}
+              className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-blue-900/30"
+            >
+              {loading ? (
+                <span className="flex items-center justify-center">
+                  <Loader size={20} className="animate-spin mr-2" />
+                  Вход...
+                </span>
+              ) : (
+                'Войти'
+              )}
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={handleLegacySubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-400 mb-2">
+                Секретный ключ (PANEL_SECRET)
+              </label>
+              <input
+                type="password"
+                value={secret}
+                onChange={(e) => setSecret(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                placeholder="Введите ключ из .env файла"
+                required
+              />
+            </div>
+
+            {error && (
+              <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg text-sm">
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading || !secret}
+              className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-blue-900/30"
+            >
+              {loading ? (
+                <span className="flex items-center justify-center">
+                  <Loader size={20} className="animate-spin mr-2" />
+                  Проверка...
+                </span>
+              ) : (
+                'Войти'
+              )}
+            </button>
+
+            <p className="text-gray-500 text-xs text-center mt-2">
+              Ключ находится в файле .env (PANEL_SECRET)
+            </p>
+          </form>
+        )}
       </div>
     </div>
   );
@@ -1322,6 +1448,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
                 { category: "Пользователи", items: [{ name: "Пользователи", icon: Users }, { name: "Ключи", icon: Key }] },
                 { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Тарифы", icon: Tag }] },
                 { category: "Поддержка", items: [{ name: "Тикеты", icon: MessageSquare }] },
+                { category: "Система", items: [{ name: "Сквады", icon: Zap }] },
                 { category: "Другое", items: [{ name: "Публичные страницы", icon: Globe }, { name: "Настройки", icon: Settings }] }
             ].map((section, idx) => (
                 <div key={idx}>
@@ -1350,6 +1477,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             {activePage === 'Рассылка' && <MailingPage onToast={addToast} />}
             {activePage === 'Тарифы' && <TariffsPage promos={promos} plans={plans} setPlans={setPlans} onToast={addToast} />}
             {activePage === 'Тикеты' && <TicketsPage tickets={tickets} activeTicketId={activeTicketId} setActiveTicketId={setActiveTicketId} ticketMsg={ticketMsg} setTicketMsg={setTicketMsg} setSelectedUser={setSelectedUser} users={users} onToast={addToast} />}
+            {activePage === 'Сквады' && <SquadsPage onToast={addToast} />}
             {activePage === 'Публичные страницы' && <PublicPages onToast={addToast} />}
             {activePage === 'Настройки' && <SettingsPage onToast={addToast} />}
         </div>
@@ -3171,6 +3299,325 @@ const BackupSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: 
                     </button>
                 </div>
             </div>
+        </div>
+    );
+};
+
+// ==========================================
+// SQUADS PAGE - Управление сквадами
+// ==========================================
+
+interface SquadsPageProps {
+    onToast: (title: string, msg: string, type: ToastType) => void;
+}
+
+interface SquadConfig {
+    id: number;
+    squad_uuid: string;
+    squad_name: string;
+    squad_type: string;
+    max_users: number;
+    current_users: number;
+    is_active: boolean;
+    priority: number;
+}
+
+const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
+    const [squads, setSquads] = useState<SquadConfig[]>([]);
+    const [mapping, setMapping] = useState<{vpn: string[], whitelist: string[], trial: string[]}>({vpn: [], whitelist: [], trial: []});
+    const [loading, setLoading] = useState(true);
+    const [syncing, setSyncing] = useState(false);
+    const [editingSquad, setEditingSquad] = useState<SquadConfig | null>(null);
+
+    const loadSquads = async () => {
+        try {
+            const data = await apiFetch('/panel/squads');
+            if (data) {
+                setSquads(data.squads || []);
+                setMapping(data.mapping || {vpn: [], whitelist: [], trial: []});
+            }
+        } catch (e) {
+            onToast('Ошибка', 'Не удалось загрузить сквады', 'error');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => { loadSquads(); }, []);
+
+    const handleSync = async () => {
+        setSyncing(true);
+        try {
+            const result = await apiFetch('/panel/squads/sync', { method: 'POST' });
+            if (result?.success) {
+                onToast('Успех', `Синхронизировано ${result.count} сквадов`, 'success');
+                loadSquads();
+            } else {
+                onToast('Ошибка', result?.error || 'Ошибка синхронизации', 'error');
+            }
+        } catch (e) {
+            onToast('Ошибка', 'Не удалось синхронизировать', 'error');
+        } finally {
+            setSyncing(false);
+        }
+    };
+
+    const handleSaveSquad = async (squad: SquadConfig) => {
+        try {
+            const result = await apiFetch(`/panel/squads/${squad.squad_uuid}`, {
+                method: 'PUT',
+                body: JSON.stringify({
+                    squad_name: squad.squad_name,
+                    squad_type: squad.squad_type,
+                    max_users: squad.max_users,
+                    priority: squad.priority,
+                    is_active: squad.is_active
+                })
+            });
+            if (result?.success) {
+                onToast('Успех', 'Сквад обновлён', 'success');
+                setEditingSquad(null);
+                loadSquads();
+            }
+        } catch (e) {
+            onToast('Ошибка', 'Не удалось сохранить', 'error');
+        }
+    };
+
+    const handleSaveMapping = async () => {
+        try {
+            const result = await apiFetch('/panel/squads/mapping', {
+                method: 'PUT',
+                body: JSON.stringify(mapping)
+            });
+            if (result?.success) {
+                onToast('Успех', 'Привязки сохранены', 'success');
+            }
+        } catch (e) {
+            onToast('Ошибка', 'Не удалось сохранить привязки', 'error');
+        }
+    };
+
+    const toggleSquadMapping = (type: 'vpn' | 'whitelist' | 'trial', uuid: string) => {
+        setMapping(prev => {
+            const current = prev[type] || [];
+            if (current.includes(uuid)) {
+                return { ...prev, [type]: current.filter(u => u !== uuid) };
+            } else {
+                return { ...prev, [type]: [...current, uuid] };
+            }
+        });
+    };
+
+    const getSquadTypeColor = (type: string) => {
+        switch(type) {
+            case 'vpn': return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
+            case 'whitelist': return 'bg-green-500/20 text-green-400 border-green-500/30';
+            case 'trial': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
+            default: return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
+        }
+    };
+
+    if (loading) {
+        return <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-blue-500" size={32} /></div>;
+    }
+
+    return (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            {/* Header */}
+            <div className="flex justify-between items-center">
+                <div>
+                    <h1 className="text-2xl font-bold text-white">Сквады (Распределение нагрузки)</h1>
+                    <p className="text-gray-400 mt-1">Управление распределением пользователей по серверам</p>
+                </div>
+                <button
+                    onClick={handleSync}
+                    disabled={syncing}
+                    className="flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
+                >
+                    {syncing ? <Loader className="animate-spin mr-2" size={18} /> : <RefreshCw size={18} className="mr-2" />}
+                    Синхронизировать с Remnawave
+                </button>
+            </div>
+
+            {/* Squads Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {squads.map(squad => (
+                    <div 
+                        key={squad.squad_uuid} 
+                        className={`bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-all ${!squad.is_active ? 'opacity-50' : ''}`}
+                    >
+                        <div className="flex justify-between items-start mb-3">
+                            <div>
+                                <h3 className="font-bold text-white">{squad.squad_name}</h3>
+                                <span className={`inline-block mt-1 px-2 py-0.5 text-xs font-medium rounded border ${getSquadTypeColor(squad.squad_type)}`}>
+                                    {squad.squad_type.toUpperCase()}
+                                </span>
+                            </div>
+                            <button 
+                                onClick={() => setEditingSquad(squad)}
+                                className="text-gray-400 hover:text-white p-1"
+                            >
+                                <Edit2 size={16} />
+                            </button>
+                        </div>
+                        
+                        <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                                <span className="text-gray-400">Пользователей:</span>
+                                <span className="text-white font-medium">
+                                    {squad.current_users} {squad.max_users > 0 && `/ ${squad.max_users}`}
+                                </span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-gray-400">Приоритет:</span>
+                                <span className="text-white">{squad.priority}</span>
+                            </div>
+                            {squad.max_users > 0 && (
+                                <div className="w-full bg-gray-800 rounded-full h-2 mt-2">
+                                    <div 
+                                        className="bg-blue-500 h-2 rounded-full transition-all"
+                                        style={{ width: `${Math.min(100, (squad.current_users / squad.max_users) * 100)}%` }}
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {squads.length === 0 && (
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
+                    <Zap size={48} className="mx-auto text-gray-600 mb-4" />
+                    <h3 className="text-lg font-bold text-white mb-2">Нет сквадов</h3>
+                    <p className="text-gray-400 mb-4">Синхронизируйте сквады с Remnawave</p>
+                    <button onClick={handleSync} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium">
+                        Синхронизировать
+                    </button>
+                </div>
+            )}
+
+            {/* Squad Mapping */}
+            {squads.length > 0 && (
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                    <h2 className="text-lg font-bold text-white mb-4">Привязка сквадов к типам подписок</h2>
+                    <p className="text-gray-400 text-sm mb-6">
+                        Выберите, на какие сквады будут распределяться пользователи для каждого типа подписки.
+                        Система автоматически выберет сквад с наименьшей нагрузкой.
+                    </p>
+                    
+                    <div className="space-y-6">
+                        {(['vpn', 'whitelist', 'trial'] as const).map(type => (
+                            <div key={type}>
+                                <h3 className="font-medium text-white mb-3 flex items-center">
+                                    <span className={`w-3 h-3 rounded-full mr-2 ${
+                                        type === 'vpn' ? 'bg-blue-500' : 
+                                        type === 'whitelist' ? 'bg-green-500' : 'bg-yellow-500'
+                                    }`} />
+                                    {type === 'vpn' ? 'Обычный VPN' : type === 'whitelist' ? 'Обход белых списков' : 'Пробный период'}
+                                </h3>
+                                <div className="flex flex-wrap gap-2">
+                                    {squads.filter(s => s.is_active).map(squad => (
+                                        <button
+                                            key={squad.squad_uuid}
+                                            onClick={() => toggleSquadMapping(type, squad.squad_uuid)}
+                                            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${
+                                                mapping[type]?.includes(squad.squad_uuid)
+                                                    ? 'bg-blue-600 border-blue-500 text-white'
+                                                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600'
+                                            }`}
+                                        >
+                                            {squad.squad_name}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    <button 
+                        onClick={handleSaveMapping}
+                        className="mt-6 px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium transition-colors"
+                    >
+                        Сохранить привязки
+                    </button>
+                </div>
+            )}
+
+            {/* Edit Squad Modal */}
+            {editingSquad && (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setEditingSquad(null)}>
+                    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+                        <h2 className="text-xl font-bold text-white mb-4">Редактирование сквада</h2>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-400 mb-2">Название</label>
+                                <input
+                                    type="text"
+                                    value={editingSquad.squad_name}
+                                    onChange={e => setEditingSquad({...editingSquad, squad_name: e.target.value})}
+                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-400 mb-2">Тип</label>
+                                <select
+                                    value={editingSquad.squad_type}
+                                    onChange={e => setEditingSquad({...editingSquad, squad_type: e.target.value})}
+                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
+                                >
+                                    <option value="vpn">VPN (обычный)</option>
+                                    <option value="whitelist">Whitelist (LTE)</option>
+                                    <option value="trial">Trial (пробный)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-400 mb-2">Макс. пользователей (0 = без лимита)</label>
+                                <input
+                                    type="number"
+                                    value={editingSquad.max_users}
+                                    onChange={e => setEditingSquad({...editingSquad, max_users: parseInt(e.target.value) || 0})}
+                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-400 mb-2">Приоритет</label>
+                                <input
+                                    type="number"
+                                    value={editingSquad.priority}
+                                    onChange={e => setEditingSquad({...editingSquad, priority: parseInt(e.target.value) || 0})}
+                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
+                                />
+                            </div>
+                            <div className="flex items-center">
+                                <input
+                                    type="checkbox"
+                                    checked={editingSquad.is_active}
+                                    onChange={e => setEditingSquad({...editingSquad, is_active: e.target.checked})}
+                                    className="mr-2"
+                                />
+                                <label className="text-gray-400">Активен</label>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-3 mt-6">
+                            <button
+                                onClick={() => setEditingSquad(null)}
+                                className="flex-1 px-4 py-2 bg-gray-800 text-gray-300 rounded-lg font-medium hover:bg-gray-700 transition-colors"
+                            >
+                                Отмена
+                            </button>
+                            <button
+                                onClick={() => handleSaveSquad(editingSquad)}
+                                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-500 transition-colors"
+                            >
+                                Сохранить
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
