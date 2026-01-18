@@ -337,6 +337,13 @@ PLATEGA_API_URL=https://api.platega.com
 PLATEGA_MERCHANT_ID=
 PLATEGA_SECRET_KEY=
 
+# Мой Налог (автоматические чеки для самозанятых)
+NALOG_ENABLED=false
+NALOG_INN=
+NALOG_PASSWORD=
+NALOG_TOKEN_PATH=data/nalog_token.json
+NALOG_SERVICE_NAME=Приобретение услуги в RSecktor Pay
+
 # ===== Системные настройки =====
 PANEL_SECRET=${PANEL_SECRET}
 
