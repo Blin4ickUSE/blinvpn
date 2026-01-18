@@ -286,9 +286,9 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
 ];
 
 const WITHDRAW_METHODS = [
-  { id: 'balance', name: 'На баланс', icon: <Wallet size={20} />, min: 0 },
-  { id: 'card', name: 'На карту', icon: <CreditCard size={20} />, min: 1 },
-  { id: 'crypto', name: 'Криптокошелек', icon: <img src="https://cryptologos.cc/logos/tether-usdt-logo.svg?v=026" className="w-5 h-5 invert" alt="USDT" />, min: 1 },
+  { id: 'balance', name: 'На баланс', icon: <Wallet size={20} />, min: 1 },
+  { id: 'card', name: 'На карту', icon: <CreditCard size={20} />, min: 200 },
+  { id: 'crypto', name: 'Криптокошелек', icon: <img src="https://cryptologos.cc/logos/tether-usdt-logo.svg?v=026" className="w-5 h-5 invert" alt="USDT" />, min: 200 },
 ];
 
 const PLATFORMS: { id: PlatformId; name: string; icon: React.ReactNode }[] = [
@@ -587,9 +587,10 @@ export default function App() {
   const [newName, setNewName] = useState('');
 
   // Referral Data
-  const [referrals, setReferrals] = useState({ count: 0, earned: 0 });
+  const [referrals, setReferrals] = useState({ count: 0, earned: 0, partnerBalance: 0 });
   const [referralList, setReferralList] = useState<ReferralUser[]>([]);
   const [selectedReferral, setSelectedReferral] = useState<ReferralUser | null>(null);
+  const [lastCardWithdrawal, setLastCardWithdrawal] = useState<string | null>(null);
   const [withdrawState, setWithdrawState] = useState({ 
     step: 1, 
     amount: '', 
@@ -598,7 +599,6 @@ export default function App() {
     bank: '', 
     cryptoNet: '', 
     cryptoAddr: '',
-    lastCardWithdraw: null as number | null
   });
 
   // TopUp State
@@ -722,8 +722,12 @@ export default function App() {
           setIsTrialUsed(userData.trial_used === 1 || userData.trial_used === true);
           setReferrals({
             count: userData.referrals_count || 0,
-            earned: userData.referral_earned || userData.partner_balance || 0,
+            earned: userData.referral_earned || 0,
+            partnerBalance: userData.partner_balance || 0,
           });
+          if (userData.last_card_withdrawal) {
+            setLastCardWithdrawal(userData.last_card_withdrawal);
+          }
         }
 
         // Устройства
@@ -836,8 +840,12 @@ export default function App() {
         setIsTrialUsed(userData.trial_used === 1 || userData.trial_used === true);
         setReferrals({
           count: userData.referrals_count || 0,
-          earned: userData.referral_earned || userData.partner_balance || 0,
+          earned: userData.referral_earned || 0,
+          partnerBalance: userData.partner_balance || 0,
         });
+        if (userData.last_card_withdrawal) {
+          setLastCardWithdrawal(userData.last_card_withdrawal);
+        }
       }
     } catch (e) {
       console.error('Failed to refresh user data', e);
@@ -1036,17 +1044,28 @@ export default function App() {
   };
 
   const handleWithdrawNext = async () => {
-    const { step, amount, method, lastCardWithdraw } = withdrawState;
+    const { step, amount, method } = withdrawState;
     const numAmount = Number(amount);
 
     if (step === 1) {
       if (!amount || numAmount <= 0) return alert("Введите сумму");
-      if (numAmount > referrals.earned) return alert("Недостаточно средств на реферальном балансе");
+      if (numAmount > referrals.partnerBalance) return alert("Недостаточно средств на реферальном балансе");
       setWithdrawState(prev => ({ ...prev, step: 2 }));
     } else if (step === 2) {
       if (!method) return alert("Выберите метод");
       if (method === 'card' || method === 'crypto') {
-        if (numAmount < 1) return alert("Минимальная сумма вывода на карту/крипто - 1₽");
+        if (numAmount < 200) return alert("Минимальная сумма вывода на карту/крипто - 200₽");
+        
+        // Проверка 30-дневного лимита для карты
+        if (method === 'card' && lastCardWithdrawal) {
+          const lastDate = new Date(lastCardWithdrawal);
+          const now = new Date();
+          const daysSince = Math.floor((now.getTime() - lastDate.getTime()) / (24 * 60 * 60 * 1000));
+          if (daysSince < 30) {
+            const daysLeft = 30 - daysSince;
+            return alert(`Вывод на карту доступен не чаще 1 раза в 30 дней. Осталось дней: ${daysLeft}`);
+          }
+        }
       }
       setWithdrawState(prev => ({ ...prev, step: 3 }));
     } else if (step === 3) {
@@ -1060,17 +1079,10 @@ export default function App() {
         
         if (method === 'card') {
           if (!withdrawState.phone || !withdrawState.bank) return alert("Заполните все поля");
-          
-          const now = Date.now();
-          if (lastCardWithdraw && now - lastCardWithdraw < 24 * 60 * 60 * 1000) {
-             return alert("Вывод на карту доступен не чаще 1 раза в 24 часа.");
-          }
-          
           requestData.phone = withdrawState.phone;
           requestData.bank = withdrawState.bank;
         } else if (method === 'crypto') {
           if (!withdrawState.cryptoNet || !withdrawState.cryptoAddr) return alert("Заполните все поля");
-          
           requestData.crypto_net = withdrawState.cryptoNet;
           requestData.crypto_addr = withdrawState.cryptoAddr;
         }
@@ -1085,13 +1097,13 @@ export default function App() {
             setBalance(prev => prev + numAmount);
             addHistoryItem('ref_out', 'Вывод на баланс', numAmount);
           } else if (method === 'card') {
+            setLastCardWithdrawal(new Date().toISOString());
             addHistoryItem('ref_req', 'Заявка на вывод (Карта)', 0);
-            setWithdrawState(prev => ({ ...prev, lastCardWithdraw: Date.now() }));
           } else if (method === 'crypto') {
             addHistoryItem('ref_req', 'Заявка на вывод (Crypto)', 0);
           }
           
-          setReferrals(prev => ({ ...prev, earned: prev.earned - numAmount }));
+          setReferrals(prev => ({ ...prev, partnerBalance: prev.partnerBalance - numAmount }));
           setWithdrawState(prev => ({ ...prev, step: 4 }));
         } else {
           alert(result?.error || 'Не удалось выполнить вывод');
@@ -2363,14 +2375,18 @@ export default function App() {
       
       <div className="bg-gradient-to-br from-green-900/40 to-slate-900 border border-green-500/20 p-6 rounded-2xl mb-6 text-center">
         <div className="text-slate-400 text-sm mb-1">Доступно для вывода</div>
-        <div className="text-4xl font-bold text-green-500 mb-4">{formatMoney(referrals.earned)}</div>
+        <div className="text-4xl font-bold text-green-500 mb-4">{formatMoney(referrals.partnerBalance)}</div>
         
-        <button 
-          onClick={openWithdrawModal}
-          className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-full font-bold text-sm shadow-lg shadow-green-900/40 mb-4 transition-transform active:scale-95"
-        >
-          Вывести средства
-        </button>
+        {referrals.partnerBalance > 0 ? (
+          <button 
+            onClick={openWithdrawModal}
+            className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-full font-bold text-sm shadow-lg shadow-green-900/40 mb-4 transition-transform active:scale-95"
+          >
+            Вывести средства
+          </button>
+        ) : (
+          <div className="text-slate-500 text-sm mb-4">Пригласите друзей, чтобы заработать</div>
+        )}
 
         <div className="grid grid-cols-2 gap-4 border-t border-white/10 pt-4">
           <div>
@@ -2483,7 +2499,11 @@ export default function App() {
                     setReferrals({
                       count: data.referrals_count ?? referrals.count,
                       earned: data.referral_earned ?? referrals.earned,
+                      partnerBalance: data.partner_balance ?? referrals.partnerBalance,
                     });
+                    if (data.last_card_withdrawal) {
+                      setLastCardWithdrawal(data.last_card_withdrawal);
+                    }
                   }
                 } else {
                   alert(res.error || 'Промокод не найден');
@@ -2576,7 +2596,12 @@ export default function App() {
       >
         {withdrawState.step === 1 && (
           <div className="space-y-4">
-            <div className="text-sm text-slate-400">Доступно: <span className="text-green-500 font-bold">{referrals.earned} ₽</span></div>
+            <div className="text-sm text-slate-400">Доступно: <span className="text-green-500 font-bold">{referrals.partnerBalance} ₽</span></div>
+            {referrals.partnerBalance < 200 && (
+              <div className="p-3 bg-yellow-900/20 border border-yellow-500/30 rounded-xl text-yellow-400 text-sm">
+                Минимальная сумма для вывода на карту или крипто — 200₽. На баланс можно вывести любую сумму.
+              </div>
+            )}
             <input
               type="number"
               placeholder="Сумма вывода"
