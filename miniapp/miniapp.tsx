@@ -870,25 +870,8 @@ export default function App() {
     return null;
   };
 
-  // RSA-4096 Public Key for fallback encryption
-  const RSA_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
-MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAlBetA0wjbaj+h7oJ/d/h
-pNrXvAcuhOdFGEFcfCxSWyLzWk4SAQ05gtaEGZyetTax2uqagi9HT6lapUSUe2S8
-nMLJf5K+LEs9TYrhhBdx/B0BGahA+lPJa7nUwp7WfUmSF4hir+xka5ApHjzkAQn6
-cdG6FKtSPgq1rYRPd1jRf2maEHwiP/e/jqdXLPP0SFBjWTMt/joUDgE7v/IGGB0L
-Q7mGPAlgmxwUHVqP4bJnZ//5sNLxWMjtYHOYjaV+lixNSfhFM3MdBndjpkmgSfmg
-D5uYQYDL29TDk6Eu+xetUEqry8ySPjUbNWdDXCglQWMxDGjaqYXMWgxBA1UKjUBW
-wbgr5yKTJ7mTqhlYEC9D5V/LOnKd6pTSvaMxkHXwk8hBWvUNWAxzAf5JZ7EVE3jt
-0j682+/hnmL/hymUE44yMG1gCcWvSpB3BTlKoMnl4yrTakmdkbASeFRkN3iMRewa
-IenvMhzJh1fq7xwX94otdd5eLB2vRFavrnhOcN2JJAkKTnx9dwQwFpGEkg+8U613
-+Tfm/f82l56fFeoFN98dD2mUFLFZoeJ5CG81ZeXrH83niI0joX7rtoAZIPWzq3Y1
-Zb/Zq+kK2hSIhphY172Uvs8X2Qp2ac9UoTPM71tURsA9IvPNvUwSIo/aKlX5KE3I
-VE0tje7twWXL5Gb1sfcXRzsCAwEAAQ==
------END PUBLIC KEY-----`;
-
-  // Получить Happ зашифрованную ссылку
+  // Получить Happ зашифрованную ссылку через API
   const getHappEncryptedLink = async (subscriptionUrl: string): Promise<string | null> => {
-    // Сначала пробуем API
     try {
       const response = await fetch('https://crypto.happ.su/api.php', {
         method: 'POST',
@@ -898,73 +881,15 @@ VE0tje7twWXL5Gb1sfcXRzsCAwEAAQ==
       
       if (response.ok) {
         const data = await response.json();
-        if (data && (data.link || data.url)) {
-          return data.link || data.url;
+        // API возвращает encrypted_link
+        if (data && data.encrypted_link) {
+          return data.encrypted_link;
         }
       }
+      console.error('API encryption failed:', response.status);
+      return null;
     } catch (e) {
-      console.error('API encryption failed, trying local RSA:', e);
-    }
-    
-    // Fallback на локальное RSA шифрование
-    try {
-      const pemToArrayBuffer = (pem: string) => {
-        const b64 = pem
-          .replace(/-----BEGIN PUBLIC KEY-----/, '')
-          .replace(/-----END PUBLIC KEY-----/, '')
-          .replace(/\s/g, '');
-        const binary = atob(b64);
-        const buffer = new ArrayBuffer(binary.length);
-        const view = new Uint8Array(buffer);
-        for (let i = 0; i < binary.length; i++) {
-          view[i] = binary.charCodeAt(i);
-        }
-        return buffer;
-      };
-
-      const keyBuffer = pemToArrayBuffer(RSA_PUBLIC_KEY);
-      const publicKey = await crypto.subtle.importKey(
-        'spki',
-        keyBuffer,
-        { name: 'RSA-OAEP', hash: 'SHA-256' },
-        false,
-        ['encrypt']
-      );
-      
-      const encoder = new TextEncoder();
-      const dataBuffer = encoder.encode(subscriptionUrl);
-      
-      // RSA-OAEP with SHA-256: max ~446 bytes for 4096-bit key
-      const maxChunkSize = 446;
-      const chunks: Uint8Array[] = [];
-      
-      for (let i = 0; i < dataBuffer.length; i += maxChunkSize) {
-        const chunk = dataBuffer.slice(i, i + maxChunkSize);
-        const encryptedChunk = await crypto.subtle.encrypt(
-          { name: 'RSA-OAEP' },
-          publicKey,
-          chunk
-        );
-        chunks.push(new Uint8Array(encryptedChunk));
-      }
-      
-      const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-      const combined = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const chunk of chunks) {
-        combined.set(chunk, offset);
-        offset += chunk.length;
-      }
-      
-      // URL-safe base64
-      const base64 = btoa(String.fromCharCode(...combined))
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=/g, '');
-      
-      return 'happ://crypt4/' + base64;
-    } catch (e) {
-      console.error('Local RSA encryption failed:', e);
+      console.error('API encryption failed:', e);
       return null;
     }
   };
@@ -1007,21 +932,17 @@ VE0tje7twWXL5Gb1sfcXRzsCAwEAAQ==
     }
     
     // Telegram не позволяет открывать не-HTTPS ссылки напрямую,
-    // поэтому используем редирект через API (который точно обслуживается бэкендом)
-    const redirectUrl = `${window.location.origin}/api/redirect?redirect=${encodeURIComponent(encryptedLink)}&original=${encodeURIComponent(subscriptionUrl)}`;
+    // поэтому используем редирект через API
+    const redirectUrl = `${window.location.origin}/api/redirect?url=${encodeURIComponent(encryptedLink)}`;
     console.log('Redirect URL:', redirectUrl);
-    console.log('Encrypted link:', encryptedLink);
-    console.log('Original URL:', subscriptionUrl);
     
     // Открываем редирект-страницу
     const win = window as any;
     if (win.Telegram?.WebApp?.openLink) {
       // openLink открывает во внешнем браузере - там сработает редирект на happ://
-      console.log('Using Telegram.WebApp.openLink');
       win.Telegram.WebApp.openLink(redirectUrl);
     } else {
       // Fallback - открываем в новом окне
-      console.log('Using window.open fallback');
       window.open(redirectUrl, '_blank');
     }
   };
