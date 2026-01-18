@@ -581,8 +581,10 @@ def get_user_devices():
             else:
                 added_formatted = datetime.now().strftime('%d.%m.%Y')
             
-            # Рассчитываем оставшиеся дни
+            # Рассчитываем оставшееся время с точностью до минуты
             days_left = None
+            hours_left = None
+            is_expired = False
             expiry_date_str = None
             if row['expiry_date']:
                 try:
@@ -590,12 +592,34 @@ def get_user_devices():
                         expiry_dt = datetime.fromisoformat(row['expiry_date'].replace('Z', '+00:00'))
                     else:
                         expiry_dt = row['expiry_date']
-                    days_left = (expiry_dt - datetime.now()).days
+                    
+                    # Убираем timezone info для корректного сравнения
+                    if expiry_dt.tzinfo:
+                        expiry_dt = expiry_dt.replace(tzinfo=None)
+                    
+                    now = datetime.now()
+                    diff = expiry_dt - now
+                    total_seconds = diff.total_seconds()
+                    
+                    if total_seconds <= 0:
+                        is_expired = True
+                        days_left = 0
+                        hours_left = 0
+                    else:
+                        # Округляем вверх - если осталось хотя бы 1 секунда, это ещё не истекло
+                        import math
+                        total_hours = total_seconds / 3600
+                        days_left = int(total_hours / 24)
+                        hours_left = int(math.ceil(total_hours % 24))
+                        # Если меньше 1 дня, но есть часы - показываем 0 дней
+                        if days_left == 0 and hours_left > 0:
+                            days_left = 0  # Покажем часы
+                    
                     expiry_date_str = expiry_dt.isoformat()
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Error parsing expiry_date: {e}")
             
-            # Короткий UUID для отображения (первые 3 символа)
+            # Короткий UUID для отображения (первые 8 символов)
             short_uuid = row['key_uuid'][:8] if row['key_uuid'] else None
             
             devices.append({
@@ -608,6 +632,8 @@ def get_user_devices():
                 'short_uuid': short_uuid,
                 'key_status': row['key_status'],
                 'days_left': days_left,
+                'hours_left': hours_left,
+                'is_expired': is_expired,
                 'expiry_date': expiry_date_str,
                 'traffic_used': row['traffic_used'],
                 'traffic_limit': row['traffic_limit']
@@ -1489,16 +1515,33 @@ def get_user_subscriptions(user_id: int):
         subscriptions = []
         
         for row in rows:
-            days_left = None
+            days_left = 0
+            hours_left = 0
+            is_expired = False
             if row['expiry_date']:
                 try:
                     if isinstance(row['expiry_date'], str):
                         expiry_dt = datetime.fromisoformat(row['expiry_date'].replace('Z', '+00:00'))
                     else:
                         expiry_dt = row['expiry_date']
-                    days_left = (expiry_dt - datetime.now()).days
+                    
+                    if expiry_dt.tzinfo:
+                        expiry_dt = expiry_dt.replace(tzinfo=None)
+                    
+                    diff = expiry_dt - datetime.now()
+                    total_seconds = diff.total_seconds()
+                    
+                    if total_seconds <= 0:
+                        is_expired = True
+                        days_left = 0
+                        hours_left = 0
+                    else:
+                        import math
+                        total_hours = total_seconds / 3600
+                        days_left = int(total_hours / 24)
+                        hours_left = int(math.ceil(total_hours % 24))
                 except:
-                    days_left = 0
+                    is_expired = True
             
             subscriptions.append({
                 'id': row['id'],
