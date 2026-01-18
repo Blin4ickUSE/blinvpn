@@ -605,7 +605,7 @@ export default function App() {
   // TopUp State
   const [topupStep, setTopupStep] = useState(1); 
   const [topupAmount, setTopupAmount] = useState(0);
-  const [customAmount, setCustomAmount] = useState('');
+  // customAmount удалён - используем uncontrolled input для производительности
   const [selectedMethod, setSelectedMethod] = useState<string | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<string | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>(PAYMENT_METHODS_DEFAULT);
@@ -1517,21 +1517,52 @@ export default function App() {
                         </div>
                         </div>
                         
-                        <div className="relative w-full h-6 flex items-center touch-none">
+                        <div className="relative w-full h-8 flex items-center">
                             <input 
                                 type="range" 
-                                min="5" 
-                                max="500"
-                                value={whitelistGB}
-                                onChange={(e) => setWhitelistGB(Number(e.target.value))}
-                                className="absolute w-full h-6 bg-transparent appearance-none cursor-pointer z-20 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:cursor-grab [&::-webkit-slider-thumb]:active:cursor-grabbing [&::-moz-range-thumb]:w-6 [&::-moz-range-thumb]:h-6 [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:shadow-lg [&::-moz-range-thumb]:cursor-grab"
+                                min={5} 
+                                max={500}
+                                step={1}
+                                defaultValue={whitelistGB}
+                                onInput={(e) => setWhitelistGB(Number((e.target as HTMLInputElement).value))}
+                                className="absolute w-full h-8 bg-transparent appearance-none cursor-pointer z-10"
+                                style={{
+                                  WebkitAppearance: 'none',
+                                  background: 'transparent'
+                                }}
                             />
                             <div className="w-full h-2 bg-slate-700 rounded-lg absolute overflow-hidden pointer-events-none">
                                 <div 
-                                    className="h-full bg-blue-600 rounded-lg" 
+                                    className="h-full bg-blue-600 rounded-lg transition-none" 
                                     style={{ width: `${((whitelistGB - 5) / 495) * 100}%` }}
-                                ></div>
+                                />
                             </div>
+                            <style>{`
+                              input[type="range"]::-webkit-slider-thumb {
+                                -webkit-appearance: none;
+                                width: 24px;
+                                height: 24px;
+                                background: white;
+                                border-radius: 50%;
+                                box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                                cursor: grab;
+                              }
+                              input[type="range"]::-webkit-slider-thumb:active {
+                                cursor: grabbing;
+                              }
+                              input[type="range"]::-moz-range-thumb {
+                                width: 24px;
+                                height: 24px;
+                                background: white;
+                                border-radius: 50%;
+                                border: none;
+                                box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                                cursor: grab;
+                              }
+                              input[type="range"]::-moz-range-track {
+                                background: transparent;
+                              }
+                            `}</style>
                         </div>
 
                         <div className="flex justify-between text-xs text-slate-500 mt-2">
@@ -1840,7 +1871,11 @@ export default function App() {
               {PRESET_AMOUNTS.map(amount => (
                 <button
                   key={amount}
-                  onClick={() => { setTopupAmount(amount); setCustomAmount(''); }}
+                  onClick={() => { 
+                    setTopupAmount(amount); 
+                    const input = document.getElementById('topup-custom-input') as HTMLInputElement;
+                    if (input) input.value = '';
+                  }}
                   className={`py-4 rounded-xl text-sm font-bold transition-all border ${
                     topupAmount === amount 
                     ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/40 transform scale-105' 
@@ -1855,14 +1890,15 @@ export default function App() {
             <div className="relative">
               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">₽</span>
               <input
-                type="text"
+                id="topup-custom-input"
+                type="tel"
                 inputMode="numeric"
-                pattern="[0-9]*"
+                autoComplete="off"
                 placeholder="Другая сумма..."
-                value={customAmount}
-                onChange={(e) => { 
-                  const val = e.target.value.replace(/[^0-9]/g, '');
-                  setCustomAmount(val); 
+                onInput={(e) => { 
+                  const target = e.target as HTMLInputElement;
+                  const val = target.value.replace(/[^0-9]/g, '');
+                  target.value = val;
                   setTopupAmount(Number(val) || 0); 
                 }}
                 className="w-full bg-slate-900 border border-slate-700 rounded-xl p-4 pl-10 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder:text-slate-600"
@@ -2090,20 +2126,25 @@ export default function App() {
                </div>
             </div>
             
-            <div className="relative w-full h-6 flex items-center touch-none">
+            <div className="relative w-full h-8 flex items-center">
                 <input 
                     type="range" 
-                    min="5" 
-                    max="500" 
-                    value={whitelistGB}
-                    onChange={(e) => setWhitelistGB(Number(e.target.value))}
-                    className="absolute w-full h-6 bg-transparent appearance-none cursor-pointer z-20 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:cursor-grab [&::-webkit-slider-thumb]:active:cursor-grabbing [&::-moz-range-thumb]:w-6 [&::-moz-range-thumb]:h-6 [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:shadow-lg [&::-moz-range-thumb]:cursor-grab"
+                    min={5} 
+                    max={500}
+                    step={1}
+                    defaultValue={whitelistGB}
+                    onInput={(e) => setWhitelistGB(Number((e.target as HTMLInputElement).value))}
+                    className="absolute w-full h-8 bg-transparent appearance-none cursor-pointer z-10"
+                    style={{
+                      WebkitAppearance: 'none',
+                      background: 'transparent'
+                    }}
                 />
                 <div className="w-full h-2 bg-slate-700 rounded-lg absolute overflow-hidden pointer-events-none">
                     <div 
-                        className="h-full bg-blue-600 rounded-lg" 
+                        className="h-full bg-blue-600 rounded-lg transition-none" 
                         style={{ width: `${((whitelistGB - 5) / 495) * 100}%` }}
-                    ></div>
+                    />
                 </div>
             </div>
 
