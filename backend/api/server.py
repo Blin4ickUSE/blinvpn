@@ -1412,7 +1412,12 @@ def create_key():
     traffic_gb = data.get('traffic', 100)  # В ГБ
     devices = data.get('devices', 5)
     is_trial = data.get('is_trial', False)
-    squad_uuids = data.get('squads', [])  # Список UUID сквадов
+    plan_type = data.get('plan_type', 'vpn')
+    # Если сквады не указаны явно, получаем по умолчанию для типа подписки
+    squad_uuids = data.get('squads')
+    if squad_uuids is None or len(squad_uuids) == 0:
+        squad_uuids = database.get_default_squads(plan_type)
+        logger.info(f"Using default squads for {plan_type}: {squad_uuids}")
     
     if not user_id:
         return jsonify({'error': 'user_id обязателен'}), 400
@@ -1454,6 +1459,7 @@ def create_key():
             expire_at = datetime.now() + timedelta(days=days)
             
             # Обновляем пользователя
+            logger.info(f"Updating Remnawave user {remnawave_user.uuid} with squads: {squad_uuids}")
             updated_user = remnawave.remnawave_api.update_user_sync(
                 uuid=remnawave_user.uuid,
                 expire_at=expire_at,
@@ -1464,6 +1470,7 @@ def create_key():
             remnawave_user = updated_user
         else:
             # Создаём нового пользователя в Remnawave с санитизированным username
+            logger.info(f"Creating Remnawave user {username} with squads: {squad_uuids}")
             try:
                 remnawave_user = remnawave.remnawave_api.create_user_with_params(
                     telegram_id=telegram_id,
@@ -2803,6 +2810,18 @@ def get_remnawave_squads():
         return jsonify(squads)
     except Exception as e:
         logger.error(f"Error fetching Remnawave squads: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/panel/remnawave/sync', methods=['POST'])
+@require_auth
+def sync_remnawave_keys():
+    """Синхронизировать ключи с Remnawave - удалить из БД ключи, которых нет в Remnawave"""
+    try:
+        result = core.sync_keys_with_remnawave()
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error syncing with Remnawave: {e}")
         return jsonify({'error': str(e)}), 500
 
 
