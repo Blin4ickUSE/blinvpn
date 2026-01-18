@@ -519,11 +519,32 @@ interface KeyEditModalProps {
     onClose: () => void;
     onSave: (id: number, expiry: number) => void;
     onDelete: (id: number) => void;
+    onBlock?: (id: number, blocked: boolean) => void;
 }
 
-const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, onDelete }) => {
+const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, onDelete, onBlock }) => {
     const [expiryDays, setExpiryDays] = useState(keyItem.expiry);
     const [confirmDelete, setConfirmDelete] = useState(false);
+    const [isBlocked, setIsBlocked] = useState(keyItem.status === 'Blocked' || keyItem.status === 'blocked');
+    const [blockLoading, setBlockLoading] = useState(false);
+
+    const handleToggleBlock = async () => {
+        setBlockLoading(true);
+        try {
+            const newStatus = !isBlocked;
+            await fetch(`/api/panel/keys/${keyItem.id}/block`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('panel_token') || localStorage.getItem('panel_session')}` },
+                body: JSON.stringify({ blocked: newStatus })
+            });
+            setIsBlocked(newStatus);
+            if (onBlock) onBlock(keyItem.id, newStatus);
+        } catch (e) {
+            console.error('Failed to toggle block', e);
+        } finally {
+            setBlockLoading(false);
+        }
+    };
 
     return (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200" onClick={onClose}>
@@ -537,6 +558,27 @@ const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, o
                     <div className="space-y-6">
                         <div className="p-3 bg-gray-950 rounded-xl border border-gray-800 font-mono text-xs text-gray-400 break-all select-all">
                             {keyItem.key}
+                        </div>
+                        
+                        {/* Статус блокировки */}
+                        <div className="flex items-center justify-between p-3 bg-gray-950 rounded-xl border border-gray-800">
+                            <div>
+                                <div className="text-sm text-white font-medium">Блокировка ключа</div>
+                                <div className="text-xs text-gray-500">
+                                    {isBlocked ? 'Ключ заблокирован вручную' : 'Ключ активен'}
+                                </div>
+                            </div>
+                            <button 
+                                onClick={handleToggleBlock}
+                                disabled={blockLoading}
+                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                                    isBlocked 
+                                        ? 'bg-green-600/10 hover:bg-green-600/20 text-green-400 border border-green-600/20' 
+                                        : 'bg-red-600/10 hover:bg-red-600/20 text-red-400 border border-red-600/20'
+                                } ${blockLoading ? 'opacity-50' : ''}`}
+                            >
+                                {blockLoading ? '...' : (isBlocked ? 'Разблокировать' : 'Заблокировать')}
+                            </button>
                         </div>
                         
                         <div>
@@ -1449,7 +1491,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
                 { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Тарифы", icon: Tag }] },
                 { category: "Поддержка", items: [{ name: "Тикеты", icon: MessageSquare }] },
                 { category: "Система", items: [{ name: "Сквады", icon: Zap }] },
-                { category: "Другое", items: [{ name: "Публичные страницы", icon: Globe }, { name: "Настройки", icon: Settings }] }
+                { category: "Другое", items: [{ name: "Настройки", icon: Settings }] }
             ].map((section, idx) => (
                 <div key={idx}>
                     <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">{section.category}</h3>
@@ -1478,7 +1520,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             {activePage === 'Тарифы' && <TariffsPage promos={promos} plans={plans} setPlans={setPlans} onToast={addToast} />}
             {activePage === 'Тикеты' && <TicketsPage tickets={tickets} activeTicketId={activeTicketId} setActiveTicketId={setActiveTicketId} ticketMsg={ticketMsg} setTicketMsg={setTicketMsg} setSelectedUser={setSelectedUser} users={users} onToast={addToast} />}
             {activePage === 'Сквады' && <SquadsPage onToast={addToast} />}
-            {activePage === 'Публичные страницы' && <PublicPages onToast={addToast} />}
+            {/* Публичные страницы удалены */}
             {activePage === 'Настройки' && <SettingsPage onToast={addToast} />}
         </div>
       </main>
