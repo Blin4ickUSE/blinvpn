@@ -329,6 +329,72 @@ def init_database():
             )
         """)
         
+        # Таблица конфигурации сквадов для распределения нагрузки
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS squad_configs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                squad_uuid TEXT NOT NULL,
+                squad_name TEXT NOT NULL,
+                squad_type TEXT NOT NULL,
+                max_users INTEGER DEFAULT 0,
+                current_users INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                priority INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(squad_uuid)
+            )
+        """)
+        
+        # Таблица привязки типов подписок к сквадам
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS subscription_squad_mapping (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subscription_type TEXT NOT NULL,
+                squad_uuid TEXT NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(subscription_type, squad_uuid)
+            )
+        """)
+        
+        # Таблица администраторов панели (логин/пароль)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS panel_admins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                last_login TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Таблица сессий панели
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS panel_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER NOT NULL,
+                session_token TEXT UNIQUE NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (admin_id) REFERENCES panel_admins(id)
+            )
+        """)
+        
+        # Миграция: добавляем squad_uuid в vpn_keys если его нет
+        try:
+            cursor.execute("ALTER TABLE vpn_keys ADD COLUMN squad_uuid TEXT")
+        except sqlite3.OperationalError:
+            pass
+        
+        # Миграция: добавляем plan_type в vpn_keys если его нет
+        try:
+            cursor.execute("ALTER TABLE vpn_keys ADD COLUMN plan_type TEXT DEFAULT 'vpn'")
+        except sqlite3.OperationalError:
+            pass
+        
         # Миграция: добавляем поля в mailings если их нет
         try:
             cursor.execute("ALTER TABLE mailings ADD COLUMN button_type TEXT")
@@ -746,6 +812,371 @@ def get_referrer_info(user_id: int) -> Optional[Dict]:
         
         row = cursor.fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+# ========== Функции для работы со сквадами ==========
+
+def get_all_squad_configs() -> List[Dict[str, Any]]:
+    """Получить все конфигурации сквадов"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT * FROM squad_configs ORDER BY squad_type, priority DESC")
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_squads_by_type(squad_type: str) -> List[Dict[str, Any]]:
+    """Получить сквады определенного типа"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT * FROM squad_configs 
+            WHERE squad_type = ? AND is_active = 1
+            ORDER BY priority DESC, current_users ASC
+        """, (squad_type,))
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_squads_for_subscription(subscription_type: str) -> List[Dict[str, Any]]:
+    """Получить сквады для типа подписки (vpn, whitelist, trial)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT sc.* FROM squad_configs sc
+            JOIN subscription_squad_mapping ssm ON sc.squad_uuid = ssm.squad_uuid
+            WHERE ssm.subscription_type = ? 
+              AND ssm.is_active = 1 
+              AND sc.is_active = 1
+            ORDER BY sc.priority DESC, sc.current_users ASC
+        """, (subscription_type,))
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_best_squad_for_subscription(subscription_type: str) -> Optional[Dict[str, Any]]:
+    """
+    Выбрать лучший сквад для новой подписки (балансировка нагрузки).
+    Выбирает сквад с наименьшим количеством пользователей из доступных.
+    """
+    squads = get_squads_for_subscription(subscription_type)
+    if not squads:
+        return None
+    
+    # Фильтруем сквады, которые не достигли лимита
+    available_squads = [s for s in squads if s['max_users'] == 0 or s['current_users'] < s['max_users']]
+    if not available_squads:
+        # Если все сквады заполнены, берём тот, где меньше всего пользователей
+        available_squads = squads
+    
+    # Выбираем сквад с минимальным количеством пользователей
+    return min(available_squads, key=lambda s: s['current_users'])
+
+
+def update_squad_user_count(squad_uuid: str, delta: int = 1) -> bool:
+    """Обновить счётчик пользователей в скваде"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE squad_configs 
+            SET current_users = MAX(0, current_users + ?), updated_at = CURRENT_TIMESTAMP
+            WHERE squad_uuid = ?
+        """, (delta, squad_uuid))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def upsert_squad_config(squad_uuid: str, squad_name: str, squad_type: str, 
+                        max_users: int = 0, priority: int = 0) -> bool:
+    """Создать или обновить конфигурацию сквада"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO squad_configs (squad_uuid, squad_name, squad_type, max_users, priority)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(squad_uuid) DO UPDATE SET
+                squad_name = excluded.squad_name,
+                squad_type = excluded.squad_type,
+                max_users = excluded.max_users,
+                priority = excluded.priority,
+                updated_at = CURRENT_TIMESTAMP
+        """, (squad_uuid, squad_name, squad_type, max_users, priority))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Error upserting squad config: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def set_subscription_squads(subscription_type: str, squad_uuids: List[str]) -> bool:
+    """Установить сквады для типа подписки"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Удаляем старые привязки
+        cursor.execute("DELETE FROM subscription_squad_mapping WHERE subscription_type = ?", 
+                      (subscription_type,))
+        
+        # Добавляем новые
+        for squad_uuid in squad_uuids:
+            cursor.execute("""
+                INSERT INTO subscription_squad_mapping (subscription_type, squad_uuid)
+                VALUES (?, ?)
+            """, (subscription_type, squad_uuid))
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Error setting subscription squads: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def get_subscription_squad_mapping() -> Dict[str, List[str]]:
+    """Получить маппинг типов подписок на сквады"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT subscription_type, squad_uuid 
+            FROM subscription_squad_mapping 
+            WHERE is_active = 1
+        """)
+        
+        result = {'vpn': [], 'whitelist': [], 'trial': []}
+        for row in cursor.fetchall():
+            sub_type = row['subscription_type']
+            if sub_type in result:
+                result[sub_type].append(row['squad_uuid'])
+        return result
+    finally:
+        conn.close()
+
+
+def sync_squad_user_counts() -> None:
+    """Синхронизировать счётчики пользователей в сквадах с реальными данными"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Получаем реальные подсчёты из vpn_keys
+        cursor.execute("""
+            SELECT squad_uuid, COUNT(*) as cnt
+            FROM vpn_keys
+            WHERE squad_uuid IS NOT NULL AND status = 'Active'
+            GROUP BY squad_uuid
+        """)
+        
+        counts = {row['squad_uuid']: row['cnt'] for row in cursor.fetchall()}
+        
+        # Обновляем все сквады
+        cursor.execute("SELECT squad_uuid FROM squad_configs")
+        for row in cursor.fetchall():
+            uuid = row['squad_uuid']
+            count = counts.get(uuid, 0)
+            cursor.execute("""
+                UPDATE squad_configs 
+                SET current_users = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE squad_uuid = ?
+            """, (count, uuid))
+        
+        conn.commit()
+        logger.info("Squad user counts synchronized")
+    except Exception as e:
+        logger.error(f"Error syncing squad user counts: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+
+# ========== Функции авторизации панели ==========
+
+def create_panel_admin(username: str, password: str) -> Optional[int]:
+    """Создать администратора панели"""
+    import hashlib
+    import secrets
+    
+    # Хешируем пароль с солью
+    salt = secrets.token_hex(16)
+    password_hash = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+    full_hash = f"{salt}:{password_hash}"
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO panel_admins (username, password_hash)
+            VALUES (?, ?)
+        """, (username, full_hash))
+        conn.commit()
+        return cursor.lastrowid
+    except sqlite3.IntegrityError:
+        return None
+    finally:
+        conn.close()
+
+
+def verify_panel_admin(username: str, password: str) -> Optional[Dict[str, Any]]:
+    """Проверить логин/пароль администратора панели"""
+    import hashlib
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, username, password_hash, is_active 
+            FROM panel_admins 
+            WHERE username = ? AND is_active = 1
+        """, (username,))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        # Проверяем пароль
+        stored_hash = row['password_hash']
+        salt, expected_hash = stored_hash.split(':', 1)
+        computed_hash = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+        
+        if computed_hash != expected_hash:
+            return None
+        
+        # Обновляем время последнего входа
+        cursor.execute("""
+            UPDATE panel_admins 
+            SET last_login = CURRENT_TIMESTAMP 
+            WHERE id = ?
+        """, (row['id'],))
+        conn.commit()
+        
+        return {'id': row['id'], 'username': row['username']}
+    finally:
+        conn.close()
+
+
+def create_panel_session(admin_id: int) -> Optional[str]:
+    """Создать сессию для администратора"""
+    import secrets
+    
+    session_token = secrets.token_urlsafe(32)
+    expires_at = datetime.now() + timedelta(days=7)
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Удаляем старые сессии этого админа
+        cursor.execute("DELETE FROM panel_sessions WHERE admin_id = ?", (admin_id,))
+        
+        # Создаём новую сессию
+        cursor.execute("""
+            INSERT INTO panel_sessions (admin_id, session_token, expires_at)
+            VALUES (?, ?, ?)
+        """, (admin_id, session_token, expires_at.isoformat()))
+        conn.commit()
+        return session_token
+    except Exception as e:
+        logger.error(f"Error creating panel session: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def verify_panel_session(session_token: str) -> Optional[Dict[str, Any]]:
+    """Проверить сессию панели"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT ps.*, pa.username
+            FROM panel_sessions ps
+            JOIN panel_admins pa ON ps.admin_id = pa.id
+            WHERE ps.session_token = ? 
+              AND ps.expires_at > CURRENT_TIMESTAMP
+              AND pa.is_active = 1
+        """, (session_token,))
+        
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def delete_panel_session(session_token: str) -> bool:
+    """Удалить сессию панели (выход)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM panel_sessions WHERE session_token = ?", (session_token,))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_or_create_default_admin() -> Dict[str, str]:
+    """
+    Получить или создать дефолтного администратора.
+    Возвращает логин и пароль (пароль только при создании).
+    """
+    import secrets
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Проверяем, есть ли хоть один админ
+        cursor.execute("SELECT id, username FROM panel_admins WHERE is_active = 1 LIMIT 1")
+        row = cursor.fetchone()
+        
+        if row:
+            return {'username': row['username'], 'password': None, 'exists': True}
+        
+        # Создаём дефолтного админа
+        username = 'admin'
+        password = secrets.token_urlsafe(12)
+        
+        admin_id = create_panel_admin(username, password)
+        if admin_id:
+            return {'username': username, 'password': password, 'exists': False}
+        
+        return {'username': None, 'password': None, 'exists': False}
+    finally:
+        conn.close()
+
+
+def update_admin_password(admin_id: int, new_password: str) -> bool:
+    """Изменить пароль администратора"""
+    import hashlib
+    import secrets
+    
+    salt = secrets.token_hex(16)
+    password_hash = hashlib.sha256(f"{salt}:{new_password}".encode()).hexdigest()
+    full_hash = f"{salt}:{password_hash}"
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE panel_admins 
+            SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (full_hash, admin_id))
+        conn.commit()
+        return cursor.rowcount > 0
     finally:
         conn.close()
 
