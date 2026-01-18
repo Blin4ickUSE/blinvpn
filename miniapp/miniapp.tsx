@@ -5,7 +5,7 @@ import {
   CheckCircle, Clock, Globe, Shield, Zap, Plus,
   LogOut, Download, Apple, Command, User, ChevronDown, 
   ArrowRight, Frown, BookOpen, Crown, ChevronRight, Wallet, Sliders, X,
-  Rocket, AlertTriangle, FileText
+  Rocket, AlertTriangle, FileText, ExternalLink
 } from 'lucide-react';
 
 // ==========================================
@@ -261,35 +261,39 @@ function calculateWhitelistPrice(gb: number, subscriptionFee: number = 100, pric
 }
 
 // Платежные методы загружаются из API с комиссиями, но оставляем дефолтные
+// ВРЕМЕННО: только СБП через YooKassa
 const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
-  { 
-    id: 'card', 
-    name: 'Банковская карта', 
-    icon: '💳', 
-    feePercent: 0  // Без комиссии по умолчанию
-  },
+  // КАРТА ВРЕМЕННО ОТКЛЮЧЕНА
+  // { 
+  //   id: 'card', 
+  //   name: 'Банковская карта', 
+  //   icon: '💳', 
+  //   feePercent: 0  
+  // },
   { 
     id: 'sbp', 
     name: 'СБП', 
     icon: '⚡', 
     feePercent: 0, 
     variants: [
-      { id: 'platega', name: 'Platega', feePercent: 0 },
+      // { id: 'platega', name: 'Platega', feePercent: 0 }, // ВРЕМЕННО ОТКЛЮЧЕНО
       { id: 'yookassa', name: 'YooKassa', feePercent: 0 }
     ]
   },
-  { 
-    id: 'crypto', 
-    name: 'Криптовалюта', 
-    icon: '🪙', 
-    feePercent: 0 
-  },
+  // КРИПТОВАЛЮТА ОТКЛЮЧЕНА
+  // { 
+  //   id: 'crypto', 
+  //   name: 'Криптовалюта', 
+  //   icon: '🪙', 
+  //   feePercent: 0 
+  // },
 ];
 
 const WITHDRAW_METHODS = [
   { id: 'balance', name: 'На баланс', icon: <Wallet size={20} />, min: 1 },
   { id: 'card', name: 'На карту', icon: <CreditCard size={20} />, min: 200 },
-  { id: 'crypto', name: 'Криптокошелек', icon: <img src="https://cryptologos.cc/logos/tether-usdt-logo.svg?v=026" className="w-5 h-5 invert" alt="USDT" />, min: 200 },
+  // КРИПТОВАЛЮТА ОТКЛЮЧЕНА
+  // { id: 'crypto', name: 'Криптокошелек', icon: <img src="https://cryptologos.cc/logos/tether-usdt-logo.svg?v=026" className="w-5 h-5 invert" alt="USDT" />, min: 200 },
 ];
 
 const PLATFORMS: { id: PlatformId; name: string; icon: React.ReactNode }[] = [
@@ -605,10 +609,10 @@ export default function App() {
   // TopUp State
   const [topupStep, setTopupStep] = useState(1); 
   const [topupAmount, setTopupAmount] = useState(0);
-  // customAmount удалён - используем uncontrolled input для производительности
   const [selectedMethod, setSelectedMethod] = useState<string | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<string | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>(PAYMENT_METHODS_DEFAULT);
+  const [paymentUrl, setPaymentUrl] = useState<string | null>(null); // URL для оплаты
   
   // Pending Purchase
   const [pendingAction, setPendingAction] = useState<{ type: string, payload: any } | null>(null);
@@ -1871,11 +1875,7 @@ export default function App() {
               {PRESET_AMOUNTS.map(amount => (
                 <button
                   key={amount}
-                  onClick={() => { 
-                    setTopupAmount(amount); 
-                    const input = document.getElementById('topup-custom-input') as HTMLInputElement;
-                    if (input) input.value = '';
-                  }}
+                  onClick={() => setTopupAmount(amount)}
                   className={`py-4 rounded-xl text-sm font-bold transition-all border ${
                     topupAmount === amount 
                     ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/40 transform scale-105' 
@@ -1885,24 +1885,6 @@ export default function App() {
                   {amount} ₽
                 </button>
               ))}
-            </div>
-            
-            <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">₽</span>
-              <input
-                id="topup-custom-input"
-                type="tel"
-                inputMode="numeric"
-                autoComplete="off"
-                placeholder="Другая сумма..."
-                onInput={(e) => { 
-                  const target = e.target as HTMLInputElement;
-                  const val = target.value.replace(/[^0-9]/g, '');
-                  target.value = val;
-                  setTopupAmount(Number(val) || 0); 
-                }}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-4 pl-10 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder:text-slate-600"
-              />
             </div>
           </div>
           
@@ -2019,41 +2001,36 @@ export default function App() {
                 }
                 try {
                   const total = getPaymentTotal();
-                  let methodKey = 'yookassa';
-                  if (selectedMethod === 'crypto') methodKey = 'heleket';
-                  if (selectedMethod === 'sbp' && selectedVariant === 'platega') methodKey = 'platega';
-
-                  // Проверяем, нужно ли сохранить способ оплаты (только для YooKassa, не для крипты)
-                  const savePaymentMethod = selectedMethod !== 'crypto' && useAutoPay && !selectedPaymentMethodId;
+                  // ВРЕМЕННО: только YooKassa СБП
+                  const methodKey = 'yookassa_sbp';
                   
                   const res = await miniApiFetch('/payment/create', {
                     method: 'POST',
                     body: JSON.stringify({
                       user_id: userId,
                       amount: total,
-                      method: methodKey,
-                      provider: selectedVariant,
-                      save_payment_method: savePaymentMethod
+                      method: methodKey
                     }),
                   });
 
-                  // Если способ оплаты сохранен, обновляем список
-                  if (res.payment_method_id && res.payment_method_saved) {
-                    // Перезагружаем список сохраненных способов оплаты
-                    const methods = await miniApiFetch(`/user/payment-methods?telegram_id=${telegramId}`);
-                    if (Array.isArray(methods)) {
-                      setSavedPaymentMethods(methods);
-                    }
-                  }
-
                   const payUrl = res.confirmation_url || res.payment_url;
                   if (payUrl) {
-                    window.open(payUrl, '_blank');
+                    setPaymentUrl(payUrl);
+                    // Открываем ссылку через Telegram API (работает на телефонах)
+                    try {
+                      if (window.Telegram?.WebApp?.openLink) {
+                        window.Telegram.WebApp.openLink(payUrl);
+                      } else {
+                        window.open(payUrl, '_blank');
+                      }
+                    } catch {
+                      window.open(payUrl, '_blank');
+                    }
                   }
                   setView('wait_payment');
                 } catch (e) {
                   console.error(e);
-                  alert('Не удалось создать платёж, попробуйте другой метод');
+                  alert('Не удалось создать платёж, попробуйте позже');
                 }
               }}
             >
@@ -2218,24 +2195,42 @@ export default function App() {
     <div className="flex flex-col items-center justify-center min-h-[80vh] animate-in zoom-in duration-300 text-center px-4">
       <div className="w-20 h-20 rounded-full bg-blue-600/10 flex items-center justify-center mb-6 relative">
         <div className="absolute inset-0 rounded-full border-4 border-blue-600 border-t-transparent animate-spin"></div>
-        <div className="font-bold text-blue-500 text-lg">...</div>
+        <div className="font-bold text-blue-500 text-lg">₽</div>
       </div>
       <h2 className="text-2xl font-bold text-white mb-2">Ожидание оплаты</h2>
       <p className="text-slate-400 mb-8 max-w-xs">
-        Перейдите по ссылке оплаты и завершите платеж. После успешного зачисления баланс обновится автоматически.
+        Нажмите кнопку ниже чтобы перейти к оплате. После успешного зачисления баланс обновится автоматически.
       </p>
-      <Button onClick={async () => {
-        const oldBalance = balance;
-        await refreshUserData();
-        // Если баланс изменился - добавляем в историю
-        if (balance !== oldBalance) {
-          addHistoryItem('deposit', 'Пополнение баланса', balance - oldBalance);
-        }
-        setView('home');
-      }}>
-        Проверить оплату
-      </Button>
-      <button onClick={() => setView('home')} className="mt-4 text-slate-500 text-sm hover:text-slate-300">
+      {paymentUrl && (
+        <Button onClick={() => {
+          try {
+            if (window.Telegram?.WebApp?.openLink) {
+              window.Telegram.WebApp.openLink(paymentUrl);
+            } else {
+              window.open(paymentUrl, '_blank');
+            }
+          } catch {
+            window.open(paymentUrl, '_blank');
+          }
+        }}>
+          <ExternalLink size={18} className="mr-2" />
+          Перейти к оплате
+        </Button>
+      )}
+      <button 
+        onClick={async () => {
+          const oldBalance = balance;
+          await refreshUserData();
+          if (balance !== oldBalance) {
+            addHistoryItem('deposit', 'Пополнение баланса', balance - oldBalance);
+            setView('payment_success');
+          }
+        }} 
+        className="mt-4 text-blue-500 text-sm hover:text-blue-300 font-medium"
+      >
+        Я оплатил, проверить баланс
+      </button>
+      <button onClick={() => { setPaymentUrl(null); setView('home'); }} className="mt-3 text-slate-500 text-sm hover:text-slate-300">
         Отменить
       </button>
     </div>
