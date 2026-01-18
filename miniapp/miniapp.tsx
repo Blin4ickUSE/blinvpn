@@ -94,6 +94,11 @@ interface Device {
   name: string;
   type: PlatformId | string;
   added: string;
+  key_uuid?: string;
+  short_uuid?: string;
+  key_status?: string;
+  days_left?: number;
+  expiry_date?: string;
 }
 
 interface HistoryItem {
@@ -742,7 +747,12 @@ export default function App() {
             id: d.id,
             name: d.name,
             type: d.type,
-            added: d.added
+            added: d.added,
+            key_uuid: d.key_uuid,
+            short_uuid: d.short_uuid,
+            key_status: d.key_status,
+            days_left: d.days_left,
+            expiry_date: d.expiry_date
           }));
           setDevices(devicesList);
           
@@ -817,7 +827,12 @@ export default function App() {
           id: d.id,
           name: d.name,
           type: d.type,
-          added: d.added
+          added: d.added,
+          key_uuid: d.key_uuid,
+          short_uuid: d.short_uuid,
+          key_status: d.key_status,
+          days_left: d.days_left,
+          expiry_date: d.expiry_date
         }));
         setDevices(devicesList);
 
@@ -1139,7 +1154,7 @@ export default function App() {
             payload: { whitelistGB: finalGB, useAutoPay, selectedPaymentMethodId, price, name } 
         });
         setTopupAmount(price - balance);
-        setTopupStep(1); 
+        setTopupStep(2); // Сразу к способу оплаты
         setView('topup');
       }
       return;
@@ -1232,36 +1247,12 @@ export default function App() {
             payload: { wizardType, wizardPlan, whitelistGB, useAutoPay, selectedPaymentMethodId, price, name }
         });
         setTopupAmount(price - balance);
-        setTopupStep(1); 
+        setTopupStep(2); // Сразу к способу оплаты
         setView('topup');
       }
       return;
     }
 
-    // Если используется автоплатеж для whitelist, создаем платеж с сохраненным способом оплаты
-    if (wizardType === 'whitelist' && useAutoPay && selectedPaymentMethodId) {
-      try {
-        await miniApiFetch('/subscription/create', {
-          method: 'POST',
-          body: JSON.stringify({
-            user_id: currentUserId,
-            days: 30,
-            type: 'whitelist',
-            whitelist_gb: whitelistGB,
-            use_auto_pay: true,
-            payment_method_id: selectedPaymentMethodId,
-            price: price,
-          }),
-        });
-        addHistoryItem('buy_dev', name, -price);
-        await refreshAll();
-        setWizardStep(4);
-      } catch (e) {
-        console.error('Failed to create subscription with auto pay', e);
-        alert('Ошибка создания подписки с автоплатежом');
-      }
-      return;
-    }
     
     try {
       const res = await miniApiFetch('/subscription/create', {
@@ -1430,6 +1421,19 @@ export default function App() {
 
       {wizardStep === 1 && (
         <div className="flex-1">
+            {devices.length > 0 && (
+              <button 
+                onClick={() => setView('devices')}
+                className="w-full mb-4 py-3 px-4 bg-slate-800/80 hover:bg-slate-700 border border-slate-600 rounded-xl flex items-center justify-between transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <Smartphone size={20} className="text-blue-400" />
+                  <span className="text-white font-medium">Мои устройства</span>
+                  <span className="bg-blue-600 text-white text-xs px-2 py-0.5 rounded-full">{devices.length}</span>
+                </div>
+                <ChevronRight size={20} className="text-slate-400" />
+              </button>
+            )}
             <p className="text-slate-400 text-sm mb-6 text-center">На каком устройстве вы планируете использовать VPN?</p>
             <div className="grid grid-cols-2 gap-4">
                 {PLATFORMS.map(p => (
@@ -1596,79 +1600,12 @@ export default function App() {
                         </div>
                     </div>
 
-                    <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-6">
-                        <div className="text-sm text-slate-400 mb-3 font-bold">Автоплатежи:</div>
-                        <>
-                            {savedPaymentMethods.length > 0 && (
-                                    <div className="mb-3 space-y-2">
-                                        {savedPaymentMethods.map((method) => (
-                                            <div key={method.id} className="flex items-center justify-between p-3 bg-slate-900 rounded-lg border border-slate-700">
-                                                <div className="flex items-center gap-3">
-                                                    <input
-                                                        type="radio"
-                                                        name="saved_payment"
-                                                        checked={selectedPaymentMethodId === method.payment_method_id}
-                                                        onChange={() => {
-                                                            setSelectedPaymentMethodId(method.payment_method_id);
-                                                            setUseAutoPay(true);
-                                                        }}
-                                                        className="w-4 h-4 text-blue-600"
-                                                    />
-                                                    <div>
-                                                        <div className="text-white font-medium">
-                                                            {method.card_brand || 'Карта'} *{method.card_last4 || '****'}
-                                                        </div>
-                                                        <div className="text-xs text-slate-500">Сохраненная карта</div>
-                                                    </div>
-                                                </div>
-                                                <button
-                                                    onClick={async (e) => {
-                                                        e.stopPropagation();
-                                                        if (window.confirm('Удалить сохраненную карту?')) {
-                                                            try {
-                                                                await miniApiFetch(`/user/payment-methods/${method.id}?telegram_id=${telegramId}`, {
-                                                                    method: 'DELETE'
-                                                                });
-                                                                setSavedPaymentMethods(prev => prev.filter(m => m.id !== method.id));
-                                                                if (selectedPaymentMethodId === method.payment_method_id) {
-                                                                    setSelectedPaymentMethodId(null);
-                                                                    setUseAutoPay(false);
-                                                                }
-                                                            } catch (e) {
-                                                                console.error('Failed to delete payment method', e);
-                                                            }
-                                                        }
-                                                    }}
-                                                    className="text-red-400 hover:text-red-300 p-1"
-                                                >
-                                                    <Trash2 size={16} />
-                                                </button>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                                <label className="flex items-center justify-between cursor-pointer">
-                                    <div className="flex items-center gap-3">
-                                        <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${useAutoPay && !selectedPaymentMethodId ? 'bg-blue-600 border-blue-600' : 'border-slate-500'}`}>
-                                            {useAutoPay && !selectedPaymentMethodId && <CheckCircle size={14} className="text-white" />}
-                                        </div>
-                                        <div>
-                                            <div className="text-white font-medium">Сохранить карту для автоплатежей</div>
-                                            <div className="text-xs text-slate-500">При следующей оплате карта будет сохранена</div>
-                                        </div>
-                                    </div>
-                                    <input 
-                                        type="checkbox" 
-                                        className="hidden" 
-                                        checked={useAutoPay && !selectedPaymentMethodId} 
-                                        onChange={() => {
-                                            if (!selectedPaymentMethodId) {
-                                                setUseAutoPay(!useAutoPay);
-                                            }
-                                        }}
-                                    />
-                                </label>
-                        </>
+                    {/* Авто-списание с баланса - нельзя отменить */}
+                    <div className="bg-blue-500/10 border border-blue-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
+                        <Zap className="text-blue-400 shrink-0 mt-0.5" size={18} />
+                        <div className="text-blue-300 text-xs leading-relaxed">
+                            <b>Авто-продление:</b> Подписка автоматически продлевается каждый месяц. Средства списываются с баланса.
+                        </div>
                     </div>
 
                     <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
@@ -1729,7 +1666,7 @@ export default function App() {
                             payload: { wizardType, wizardPlan, whitelistGB, useAutoPay, selectedPaymentMethodId, price, name: wizardType === 'vpn' ? `VPN (${wizardPlan?.duration})` : `Whitelist (${whitelistGB} ГБ)` }
                         });
                         setTopupAmount(price - balance);
-                        setTopupStep(1); 
+                        setTopupStep(2); // Сразу к способу оплаты
                         setView('topup');
                     }}>
                         Пополнить на {(wizardType === 'vpn' ? (wizardPlan?.price || 0) : calculateWhitelistPrice(whitelistGB)) - balance} ₽
@@ -1813,7 +1750,16 @@ export default function App() {
                 </div>
                 <div>
                   <div className="font-bold text-white">{device.name}</div>
-                  <div className="text-xs text-slate-500">Добавлен: {device.added}</div>
+                  <div className="text-xs text-blue-400 font-mono">
+                    VPN: #{device.short_uuid || device.key_uuid?.slice(0, 8) || 'N/A'}
+                  </div>
+                  {device.days_left !== undefined && device.days_left !== null ? (
+                    <div className={`text-xs font-medium ${device.days_left <= 3 ? 'text-red-400' : 'text-slate-400'}`}>
+                      {device.days_left <= 0 ? 'Истекла' : `Осталось ${device.days_left} дн.`}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-500">Бессрочно</div>
+                  )}
                 </div>
               </div>
               <div className="flex gap-2">
@@ -2139,24 +2085,12 @@ export default function App() {
              <div className="text-2xl font-bold text-white">{calculateWhitelistPrice(whitelistGB)} ₽</div>
           </div>
 
-          <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-6">
-             <div className="text-sm text-slate-400 mb-3 font-bold">Автоплатежи:</div>
-             <label className="flex items-center justify-between cursor-pointer">
-                 <div className="flex items-center gap-3">
-                     <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${useAutoPay && !selectedPaymentMethodId ? 'bg-blue-600 border-blue-600' : 'border-slate-500'}`}>
-                         {useAutoPay && !selectedPaymentMethodId && <CheckCircle size={14} className="text-white" />}
-                     </div>
-                     <div>
-                         <div className="text-white font-medium">Сохранить карту для автоплатежей</div>
-                         <div className="text-xs text-slate-500">Рекуррентные платежи</div>
-                     </div>
-                 </div>
-                 <input type="checkbox" className="hidden" checked={useAutoPay && !selectedPaymentMethodId} onChange={() => {
-                     if (!selectedPaymentMethodId) {
-                         setUseAutoPay(!useAutoPay);
-                     }
-                 }} />
-             </label>
+          {/* Авто-списание с баланса */}
+          <div className="bg-blue-500/10 border border-blue-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
+              <Zap className="text-blue-400 shrink-0 mt-0.5" size={18} />
+              <div className="text-blue-300 text-xs leading-relaxed">
+                  <b>Авто-продление:</b> Подписка автоматически продлевается каждый месяц. Средства списываются с баланса.
+              </div>
           </div>
 
           <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
@@ -2191,50 +2125,77 @@ export default function App() {
     </div>
   );
   
-  const PaymentWaitView = () => (
-    <div className="flex flex-col items-center justify-center min-h-[80vh] animate-in zoom-in duration-300 text-center px-4">
-      <div className="w-20 h-20 rounded-full bg-blue-600/10 flex items-center justify-center mb-6 relative">
-        <div className="absolute inset-0 rounded-full border-4 border-blue-600 border-t-transparent animate-spin"></div>
-        <div className="font-bold text-blue-500 text-lg">₽</div>
-      </div>
-      <h2 className="text-2xl font-bold text-white mb-2">Ожидание оплаты</h2>
-      <p className="text-slate-400 mb-8 max-w-xs">
-        Нажмите кнопку ниже чтобы перейти к оплате. После успешного зачисления баланс обновится автоматически.
-      </p>
-      {paymentUrl && (
-        <Button onClick={() => {
-          try {
-            if (window.Telegram?.WebApp?.openLink) {
-              window.Telegram.WebApp.openLink(paymentUrl);
-            } else {
+  const PaymentWaitView = () => {
+    const handlePaymentCheck = async () => {
+      const oldBalance = balance;
+      await refreshUserData();
+      const newBalance = balance;
+      
+      if (newBalance !== oldBalance) {
+        const depositAmount = newBalance - oldBalance;
+        addHistoryItem('deposit', 'Пополнение баланса', depositAmount);
+        
+        // Если была отложенная покупка - выполняем её
+        if (pendingAction) {
+          const action = pendingAction;
+          setPendingAction(null);
+          setPaymentUrl(null);
+          
+          if (action.type === 'wizard' || action.type === 'legacy_whitelist') {
+            // Переходим к инструкциям после успешной покупки
+            setActivePlatform(wizardPlatform);
+            await refreshDevices();
+            setView('instruction_view');
+          } else {
+            setView('home');
+          }
+        } else {
+          // Просто пополнение баланса - на главную
+          setPaymentUrl(null);
+          await refreshAll();
+          setView('home');
+        }
+      }
+    };
+    
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[80vh] animate-in zoom-in duration-300 text-center px-4">
+        <div className="w-20 h-20 rounded-full bg-blue-600/10 flex items-center justify-center mb-6 relative">
+          <div className="absolute inset-0 rounded-full border-4 border-blue-600 border-t-transparent animate-spin"></div>
+          <div className="font-bold text-blue-500 text-lg">₽</div>
+        </div>
+        <h2 className="text-2xl font-bold text-white mb-2">Ожидание оплаты</h2>
+        <p className="text-slate-400 mb-8 max-w-xs">
+          {pendingAction ? 'Оплатите для завершения покупки.' : 'Нажмите кнопку ниже чтобы перейти к оплате.'}
+        </p>
+        {paymentUrl && (
+          <Button onClick={() => {
+            try {
+              if (window.Telegram?.WebApp?.openLink) {
+                window.Telegram.WebApp.openLink(paymentUrl);
+              } else {
+                window.open(paymentUrl, '_blank');
+              }
+            } catch {
               window.open(paymentUrl, '_blank');
             }
-          } catch {
-            window.open(paymentUrl, '_blank');
-          }
-        }}>
-          <ExternalLink size={18} className="mr-2" />
-          Перейти к оплате
-        </Button>
-      )}
-      <button 
-        onClick={async () => {
-          const oldBalance = balance;
-          await refreshUserData();
-          if (balance !== oldBalance) {
-            addHistoryItem('deposit', 'Пополнение баланса', balance - oldBalance);
-            setView('payment_success');
-          }
-        }} 
-        className="mt-4 text-blue-500 text-sm hover:text-blue-300 font-medium"
-      >
-        Я оплатил, проверить баланс
-      </button>
-      <button onClick={() => { setPaymentUrl(null); setView('home'); }} className="mt-3 text-slate-500 text-sm hover:text-slate-300">
-        Отменить
-      </button>
-    </div>
-  );
+          }}>
+            <ExternalLink size={18} className="mr-2" />
+            Перейти к оплате
+          </Button>
+        )}
+        <button 
+          onClick={handlePaymentCheck} 
+          className="mt-4 text-blue-500 text-sm hover:text-blue-300 font-medium"
+        >
+          Я оплатил, проверить баланс
+        </button>
+        <button onClick={() => { setPaymentUrl(null); setPendingAction(null); setView('home'); }} className="mt-3 text-slate-500 text-sm hover:text-slate-300">
+          Отменить
+        </button>
+      </div>
+    );
+  };
 
   const PaymentSuccessView = () => (
     <div className="flex flex-col items-center justify-center min-h-[80vh] animate-in zoom-in duration-500 text-center px-4">
