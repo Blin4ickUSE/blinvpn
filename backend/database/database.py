@@ -657,6 +657,99 @@ def get_user_by_referral_code(referral_code: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
+def credit_referral_income(user_id: int, purchase_amount: float, description: str = None) -> Optional[Dict]:
+    """
+    Начислить доход рефереру при покупке реферала.
+    
+    Args:
+        user_id: ID пользователя, который совершил покупку (реферал)
+        purchase_amount: Сумма покупки
+        description: Описание для транзакции
+        
+    Returns:
+        Dict с информацией о начислении или None если реферера нет
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Получаем пользователя и его реферера
+        cursor.execute("""
+            SELECT u.id, u.username, u.referred_by,
+                   r.id as referrer_id, r.telegram_id as referrer_telegram_id,
+                   r.partner_rate, r.username as referrer_username
+            FROM users u
+            LEFT JOIN users r ON u.referred_by = r.id
+            WHERE u.id = ?
+        """, (user_id,))
+        
+        row = cursor.fetchone()
+        if not row or not row['referrer_id']:
+            return None  # Нет реферера
+        
+        referrer_id = row['referrer_id']
+        referrer_telegram_id = row['referrer_telegram_id']
+        partner_rate = row['partner_rate'] or 20  # По умолчанию 20%
+        referral_username = row['username'] or f"id{user_id}"
+        
+        # Вычисляем доход реферера
+        income = purchase_amount * (partner_rate / 100)
+        
+        if income <= 0:
+            return None
+        
+        # Начисляем доход рефереру
+        cursor.execute("""
+            UPDATE users 
+            SET partner_balance = partner_balance + ?,
+                total_earned = total_earned + ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (income, income, referrer_id))
+        
+        # Создаем транзакцию для реферера (доход)
+        trans_description = description or f"Доход от реферала @{referral_username}: {partner_rate}% от {purchase_amount}₽"
+        cursor.execute("""
+            INSERT INTO transactions (user_id, type, amount, status, description)
+            VALUES (?, 'referral_income', ?, 'Success', ?)
+        """, (referrer_id, income, trans_description))
+        
+        conn.commit()
+        
+        return {
+            'referrer_id': referrer_id,
+            'referrer_telegram_id': referrer_telegram_id,
+            'income': income,
+            'rate': partner_rate,
+            'purchase_amount': purchase_amount
+        }
+    except Exception as e:
+        logger.error(f"Error crediting referral income: {e}")
+        conn.rollback()
+        return None
+    finally:
+        conn.close()
+
+
+def get_referrer_info(user_id: int) -> Optional[Dict]:
+    """Получить информацию о реферере пользователя"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT r.id, r.telegram_id, r.username, r.full_name
+            FROM users u
+            JOIN users r ON u.referred_by = r.id
+            WHERE u.id = ?
+        """, (user_id,))
+        
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 # Инициализация при импорте
 if __name__ != "__main__":
     init_database()
