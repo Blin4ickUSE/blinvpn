@@ -31,7 +31,28 @@ class NalogService:
     @property
     def is_configured(self) -> bool:
         """Проверка настройки сервиса"""
+        # Перечитываем настройки из окружения при каждой проверке
+        self._reload_config()
         return self.enabled and bool(self.inn and self.password)
+    
+    def _reload_config(self) -> None:
+        """Перезагрузить настройки из переменных окружения"""
+        new_enabled = os.getenv('NALOG_ENABLED', 'false').lower() == 'true'
+        new_inn = os.getenv('NALOG_INN', '')
+        new_password = os.getenv('NALOG_PASSWORD', '')
+        new_token_path = os.getenv('NALOG_TOKEN_PATH', 'data/nalog_token.json')
+        new_service_name = os.getenv('NALOG_SERVICE_NAME', 'Приобретение услуги в RSecktor Pay')
+        
+        # Если настройки изменились, сбрасываем клиент
+        if (self.inn != new_inn or self.password != new_password or 
+            self.token_storage_path != new_token_path):
+            self._client = None
+        
+        self.enabled = new_enabled
+        self.inn = new_inn
+        self.password = new_password
+        self.token_storage_path = new_token_path
+        self.service_name = new_service_name
     
     def _get_client(self) -> NalogClient:
         """Получить или создать клиент"""
