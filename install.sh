@@ -589,6 +589,11 @@ ${BOLD}Webhooks:${NC}
   Heleket:  ${YELLOW}https://${DOMAIN}${PORT_SUFFIX}/heleket${NC}
   Platega:  ${YELLOW}https://${DOMAIN}${PORT_SUFFIX}/platega${NC}
 
+${BOLD}Авторизация в панели:${NC}
+  ${CYAN}При первом входе в панель будут автоматически созданы${NC}
+  ${CYAN}логин и пароль администратора. Сохраните их!${NC}
+  ${CYAN}Также можно войти через PANEL_SECRET из .env файла.${NC}
+
 ${YELLOW}⚠️  Не забудьте обновить Web App URL в BotFather:${NC}
 ${CYAN}   https://${DOMAIN}${PORT_SUFFIX}${NC}
 
