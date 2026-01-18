@@ -1688,11 +1688,27 @@ def get_user_referrals():
             history_rows = cursor.fetchall()
             history = []
             for h in history_rows:
+                amount = abs(float(h["amount"] or 0))
+                trans_type = h["type"]
+                description = h["description"] or ""
+                
+                # Формируем понятное описание
+                if trans_type == 'subscription':
+                    title = f"Покупка подписки: {round(amount, 2)}₽"
+                elif trans_type == 'trial':
+                    title = "Активация пробного периода"
+                else:
+                    title = description or f"Транзакция: {round(amount, 2)}₽"
+                
+                # Вычисляем доход реферера
+                referrer_income = round(amount * rate, 2)
+                
                 history.append({
-                    "type": h["type"],
-                    "amount": abs(float(h["amount"] or 0)),
+                    "type": trans_type,
+                    "title": title,
+                    "amount": round(amount, 2),
+                    "income": referrer_income,
                     "date": h["created_at"] or "",
-                    "description": h["description"] or ""
                 })
 
             referrals.append(
@@ -1700,8 +1716,8 @@ def get_user_referrals():
                     "id": ref_id,
                     "name": r["full_name"] or r["username"] or f"id{ref_id}",
                     "date": r["registration_date"] or "",
-                    "spent": total_spent,
-                    "myProfit": my_profit,
+                    "spent": round(total_spent, 2),
+                    "myProfit": round(my_profit, 2),
                     "history": history,
                 }
             )
@@ -1740,24 +1756,26 @@ def get_referral_income_history():
         
         for row in rows:
             trans_type = row['type']
+            amount = round(float(row['amount'] or 0), 2)
+            description = row['description'] or ''
             
             if trans_type == 'referral_income':
-                title = '💰 Реферальный доход'
+                title = f'💰 Реферальный доход: +{amount}₽'
                 icon = 'income'
             elif trans_type == 'transfer':
-                title = '🔄 Перевод на баланс'
+                title = f'🔄 Перевод на баланс: {amount}₽'
                 icon = 'transfer'
             else:
-                title = '💸 Заявка на вывод'
+                title = f'💸 Заявка на вывод: {amount}₽'
                 icon = 'withdrawal'
             
             history.append({
                 'id': row['id'],
                 'type': icon,
                 'title': title,
-                'amount': float(row['amount'] or 0),
+                'amount': amount,
                 'status': row['status'],
-                'description': row['description'],
+                'description': description,
                 'date': row['created_at']
             })
         
