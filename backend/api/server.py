@@ -2752,26 +2752,36 @@ def update_settings():
     try:
         # Обновляем настройки в БД
         for key, value in data.items():
-            if key not in ['MINIAPP_URL', 'PANEL_URL', 'API_URL', 'BOT_USERNAME', 'TRIAL_HOURS', 'MIN_TOPUP_AMOUNT', 'MAX_TOPUP_AMOUNT']:
-                cursor.execute("""
-                    INSERT OR REPLACE INTO system_settings (setting_key, setting_value, updated_at)
-                    VALUES (?, ?, CURRENT_TIMESTAMP)
-                """, (key, str(value)))
-                
-                # Обновляем переменные окружения для настроек "Мой Налог"
-                if key == 'NALOG_ENABLED':
-                    os.environ['NALOG_ENABLED'] = str(value)
-                elif key == 'NALOG_INN':
-                    os.environ['NALOG_INN'] = str(value)
-                elif key == 'NALOG_PASSWORD':
-                    os.environ['NALOG_PASSWORD'] = str(value)
-                elif key == 'NALOG_TOKEN_PATH':
-                    os.environ['NALOG_TOKEN_PATH'] = str(value)
-                elif key == 'NALOG_SERVICE_NAME':
-                    os.environ['NALOG_SERVICE_NAME'] = str(value)
+            # Сохраняем все настройки в БД
+            cursor.execute("""
+                INSERT OR REPLACE INTO system_settings (setting_key, setting_value, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+            """, (key, str(value)))
+            
+            # Обновляем переменные окружения для настроек "Мой Налог"
+            if key == 'NALOG_ENABLED':
+                os.environ['NALOG_ENABLED'] = str(value).lower()
+            elif key == 'NALOG_INN':
+                os.environ['NALOG_INN'] = str(value)
+            elif key == 'NALOG_PASSWORD':
+                os.environ['NALOG_PASSWORD'] = str(value)
+            elif key == 'NALOG_TOKEN_PATH':
+                os.environ['NALOG_TOKEN_PATH'] = str(value)
+            elif key == 'NALOG_SERVICE_NAME':
+                os.environ['NALOG_SERVICE_NAME'] = str(value)
+            # Обновляем переменные окружения для основных настроек
+            elif key == 'TRIAL_HOURS':
+                os.environ['TRIAL_HOURS'] = str(value)
+            elif key == 'MIN_TOPUP_AMOUNT':
+                os.environ['MIN_TOPUP_AMOUNT'] = str(value)
+            elif key == 'MAX_TOPUP_AMOUNT':
+                os.environ['MAX_TOPUP_AMOUNT'] = str(value)
         
         conn.commit()
         return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Error updating settings: {e}")
+        return jsonify({'error': str(e)}), 500
     finally:
         conn.close()
 
@@ -2978,7 +2988,12 @@ def create_backup():
     from datetime import datetime
     
     try:
-        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'blinvpn.db')
+        # Используем тот же путь что и в database.py
+        db_path = os.getenv('DB_PATH', 'data.db')
+        
+        # Если путь относительный, делаем его абсолютным
+        if not os.path.isabs(db_path):
+            db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), db_path)
         
         if not os.path.exists(db_path):
             return jsonify({'error': 'Database file not found'}), 404
