@@ -465,7 +465,8 @@ def get_user_devices():
     try:
         cursor.execute("""
             SELECT d.id, d.name, d.platform, d.added_date, d.is_active,
-                   vk.key_config, vk.key_uuid, vk.status as key_status
+                   vk.key_config, vk.key_uuid, vk.status as key_status, vk.expiry_date,
+                   vk.traffic_used, vk.traffic_limit
             FROM devices d
             LEFT JOIN vpn_keys vk ON d.vpn_key_id = vk.id
             WHERE d.user_id = ? AND d.is_active = 1
@@ -489,6 +490,23 @@ def get_user_devices():
             else:
                 added_formatted = datetime.now().strftime('%d.%m.%Y')
             
+            # Рассчитываем оставшиеся дни
+            days_left = None
+            expiry_date_str = None
+            if row['expiry_date']:
+                try:
+                    if isinstance(row['expiry_date'], str):
+                        expiry_dt = datetime.fromisoformat(row['expiry_date'].replace('Z', '+00:00'))
+                    else:
+                        expiry_dt = row['expiry_date']
+                    days_left = (expiry_dt - datetime.now()).days
+                    expiry_date_str = expiry_dt.isoformat()
+                except:
+                    pass
+            
+            # Короткий UUID для отображения (первые 3 символа)
+            short_uuid = row['key_uuid'][:8] if row['key_uuid'] else None
+            
             devices.append({
                 'id': row['id'],
                 'name': row['name'] or 'Устройство',
@@ -496,7 +514,12 @@ def get_user_devices():
                 'added': added_formatted,
                 'key_config': row['key_config'],
                 'key_uuid': row['key_uuid'],
-                'key_status': row['key_status']
+                'short_uuid': short_uuid,
+                'key_status': row['key_status'],
+                'days_left': days_left,
+                'expiry_date': expiry_date_str,
+                'traffic_used': row['traffic_used'],
+                'traffic_limit': row['traffic_limit']
             })
         
         return jsonify(devices)
@@ -1631,6 +1654,65 @@ def create_key():
         import traceback
         traceback.print_exc()
         return jsonify({'error': f'Ошибка создания ключа: {str(e)}'}), 500
+
+
+@app.route('/api/panel/keys/<int:key_id>/block', methods=['POST'])
+@require_auth
+def toggle_key_block(key_id):
+    """Заблокировать/разблокировать ключ вручную"""
+    data = request.json
+    blocked = data.get('blocked', True)
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Обновляем статус ключа
+        new_status = 'Blocked' if blocked else 'Active'
+        cursor.execute("""
+            UPDATE vpn_keys 
+            SET status = ?, last_used = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (new_status, key_id))
+        
+        if cursor.rowcount == 0:
+            return jsonify({'error': 'Ключ не найден'}), 404
+        
+        conn.commit()
+        
+        # Если блокируем, также отключаем в Remnawave
+        cursor.execute("SELECT key_uuid FROM vpn_keys WHERE id = ?", (key_id,))
+        row = cursor.fetchone()
+        
+        if row and row['key_uuid']:
+            try:
+                import asyncio
+                from backend.api import remnawave
+                
+                async def update_remnawave():
+                    api = remnawave.get_remnawave_api()
+                    async with api as rw_api:
+                        if blocked:
+                            await rw_api.disable_user(row['key_uuid'])
+                        else:
+                            await rw_api.enable_user(row['key_uuid'])
+                
+                asyncio.run(update_remnawave())
+                logger.info(f"Key {key_id} {'blocked' if blocked else 'unblocked'} in Remnawave")
+            except Exception as e:
+                logger.error(f"Failed to update key status in Remnawave: {e}")
+        
+        return jsonify({
+            'success': True,
+            'key_id': key_id,
+            'status': new_status,
+            'blocked': blocked
+        })
+    except Exception as e:
+        logger.error(f"Error toggling key block: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
 
 
 @app.route('/api/user/referrals', methods=['GET'])
