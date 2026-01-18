@@ -849,12 +849,13 @@ export default function App() {
     }
   };
 
-  const refreshUserData = async () => {
-    if (!telegramId) return;
+  const refreshUserData = async (): Promise<{ balance: number } | null> => {
+    if (!telegramId) return null;
     try {
       const userData = await miniApiFetch(`/user/info?telegram_id=${telegramId}`);
       if (userData) {
-        setBalance(userData.balance || 0);
+        const newBalance = userData.balance || 0;
+        setBalance(newBalance);
         setUserId(userData.id);
         setUsername(userData.username || `User_${telegramId}`);
         setIsTrialUsed(userData.trial_used === 1 || userData.trial_used === true);
@@ -866,9 +867,12 @@ export default function App() {
         if (userData.last_card_withdrawal) {
           setLastCardWithdrawal(userData.last_card_withdrawal);
         }
+        return { balance: newBalance };
       }
+      return null;
     } catch (e) {
       console.error('Failed to refresh user data', e);
+      return null;
     }
   };
 
@@ -1741,11 +1745,13 @@ export default function App() {
     <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
       <Header title="Мои устройства" onBack={() => setView('home')} />
       <div className="flex-1 space-y-4">
-        {devices.map(device => (
-          <div key={device.id} className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+        {devices.map(device => {
+          const isExpired = device.days_left !== undefined && device.days_left !== null && device.days_left <= 0;
+          return (
+          <div key={device.id} className={`rounded-xl p-4 border ${isExpired ? 'bg-red-900/20 border-red-500/50' : 'bg-slate-800 border-slate-700'}`}>
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-4">
-                <div className="w-10 h-10 rounded-lg bg-slate-700 flex items-center justify-center text-slate-300">
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isExpired ? 'bg-red-900/30 text-red-400' : 'bg-slate-700 text-slate-300'}`}>
                   {device.type === 'ios' || device.type === 'android' ? <Smartphone size={20} /> : <Monitor size={20} />}
                 </div>
                 <div>
@@ -1777,14 +1783,23 @@ export default function App() {
                 </button>
               </div>
             </div>
-            <button 
-              onClick={() => { setActivePlatform(device.type); setView('instruction_view'); }}
-              className="w-full bg-slate-700/50 hover:bg-slate-700 py-2 rounded-lg text-sm text-blue-400 flex items-center justify-center gap-2 transition-colors border border-slate-600/50"
-            >
-              <BookOpen size={16} /> Инструкция по подключению
-            </button>
+            {isExpired ? (
+              <button 
+                onClick={() => { setActivePlatform(device.type); setWizardStep(1); setView('wizard'); }}
+                className="w-full bg-red-600 hover:bg-red-500 py-2 rounded-lg text-sm text-white font-medium flex items-center justify-center gap-2 transition-colors"
+              >
+                <Zap size={16} /> Продлить подписку
+              </button>
+            ) : (
+              <button 
+                onClick={() => { setActivePlatform(device.type); setView('instruction_view'); }}
+                className="w-full bg-slate-700/50 hover:bg-slate-700 py-2 rounded-lg text-sm text-blue-400 flex items-center justify-center gap-2 transition-colors border border-slate-600/50"
+              >
+                <BookOpen size={16} /> Инструкция по подключению
+              </button>
+            )}
           </div>
-        ))}
+        );})}
         {devices.length === 0 && (
           <div className="text-center py-10 text-slate-500">Нет подключенных устройств</div>
         )}
@@ -2128,8 +2143,8 @@ export default function App() {
   const PaymentWaitView = () => {
     const handlePaymentCheck = async () => {
       const oldBalance = balance;
-      await refreshUserData();
-      const newBalance = balance;
+      const result = await refreshUserData();
+      const newBalance = result?.balance ?? oldBalance;
       
       if (newBalance !== oldBalance) {
         const depositAmount = newBalance - oldBalance;
