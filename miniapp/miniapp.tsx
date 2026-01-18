@@ -5,7 +5,7 @@ import {
   CheckCircle, Clock, Globe, Shield, Zap, Plus,
   LogOut, Download, Apple, Command, User, ChevronDown, 
   ArrowRight, Frown, BookOpen, Crown, ChevronRight, Wallet, Sliders, X,
-  Rocket, AlertTriangle, FileText, ExternalLink
+  Rocket, AlertTriangle, FileText, ExternalLink, MessageCircle
 } from 'lucide-react';
 
 // ==========================================
@@ -98,6 +98,8 @@ interface Device {
   short_uuid?: string;
   key_status?: string;
   days_left?: number;
+  hours_left?: number;
+  is_expired?: boolean;
   expiry_date?: string;
 }
 
@@ -752,6 +754,8 @@ export default function App() {
             short_uuid: d.short_uuid,
             key_status: d.key_status,
             days_left: d.days_left,
+            hours_left: d.hours_left,
+            is_expired: d.is_expired,
             expiry_date: d.expiry_date
           }));
           setDevices(devicesList);
@@ -832,6 +836,8 @@ export default function App() {
           short_uuid: d.short_uuid,
           key_status: d.key_status,
           days_left: d.days_left,
+          hours_left: d.hours_left,
+          is_expired: d.is_expired,
           expiry_date: d.expiry_date
         }));
         setDevices(devicesList);
@@ -1746,7 +1752,18 @@ export default function App() {
       <Header title="Мои устройства" onBack={() => setView('home')} />
       <div className="flex-1 space-y-4">
         {devices.map(device => {
-          const isExpired = device.days_left !== undefined && device.days_left !== null && device.days_left <= 0;
+          const isExpired = device.is_expired === true;
+          // Формируем текст оставшегося времени
+          const getTimeLeftText = () => {
+            if (isExpired) return 'Истекла';
+            if (device.days_left === undefined || device.days_left === null) return null;
+            if (device.days_left > 0) return `Осталось ${device.days_left} дн.`;
+            if (device.hours_left && device.hours_left > 0) return `Осталось ${device.hours_left} ч.`;
+            return 'Менее часа';
+          };
+          const timeLeftText = getTimeLeftText();
+          const isLowTime = !isExpired && (device.days_left !== undefined && device.days_left <= 3);
+          
           return (
           <div key={device.id} className={`rounded-xl p-4 border ${isExpired ? 'bg-red-900/20 border-red-500/50' : 'bg-slate-800 border-slate-700'}`}>
             <div className="flex items-center justify-between mb-4">
@@ -1759,9 +1776,9 @@ export default function App() {
                   <div className="text-xs text-blue-400 font-mono">
                     VPN: #{device.short_uuid || device.key_uuid?.slice(0, 8) || 'N/A'}
                   </div>
-                  {device.days_left !== undefined && device.days_left !== null ? (
-                    <div className={`text-xs font-medium ${device.days_left <= 3 ? 'text-red-400' : 'text-slate-400'}`}>
-                      {device.days_left <= 0 ? 'Истекла' : `Осталось ${device.days_left} дн.`}
+                  {timeLeftText ? (
+                    <div className={`text-xs font-medium ${isExpired || isLowTime ? 'text-red-400' : 'text-slate-400'}`}>
+                      {timeLeftText}
                     </div>
                   ) : (
                     <div className="text-xs text-slate-500">Бессрочно</div>
@@ -2200,10 +2217,10 @@ export default function App() {
           </Button>
         )}
         <button 
-          onClick={handlePaymentCheck} 
-          className="mt-4 text-blue-500 text-sm hover:text-blue-300 font-medium"
+          onClick={() => window.open(SUPPORT_URL, '_blank')} 
+          className="mt-4 text-blue-500 text-sm hover:text-blue-300 font-medium flex items-center gap-2"
         >
-          Я оплатил, проверить баланс
+          <MessageCircle size={16} /> Связаться с поддержкой
         </button>
         <button onClick={() => { setPaymentUrl(null); setPendingAction(null); setView('home'); }} className="mt-3 text-slate-500 text-sm hover:text-slate-300">
           Отменить
