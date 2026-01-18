@@ -106,9 +106,10 @@ interface HistoryItem {
 
 interface ReferralTransaction {
   date: string;
-  action: string;
-  sum: number;
-  profit: number;
+  title: string;
+  type: string;
+  amount: number;
+  income: number;
 }
 
 interface ReferralUser {
@@ -2340,11 +2341,11 @@ export default function App() {
         <div className="grid grid-cols-2 gap-4 mb-6">
            <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
               <div className="text-xs text-slate-400 mb-1">Потратил всего</div>
-              <div className="text-xl font-bold text-white">{selectedReferral.spent} ₽</div>
+              <div className="text-xl font-bold text-white">{selectedReferral.spent.toFixed(2)} ₽</div>
            </div>
            <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
               <div className="text-xs text-slate-400 mb-1">Вы получили</div>
-              <div className="text-xl font-bold text-green-500">+{selectedReferral.myProfit} ₽</div>
+              <div className="text-xl font-bold text-green-500">+{selectedReferral.myProfit.toFixed(2)} ₽</div>
            </div>
         </div>
 
@@ -2353,12 +2354,12 @@ export default function App() {
            {selectedReferral.history.length > 0 ? selectedReferral.history.map((h, idx) => (
               <div key={idx} className="bg-slate-800/50 p-3 rounded-xl border border-slate-800 flex justify-between items-center">
                  <div>
-                    <div className="font-medium text-slate-200">{h.action}</div>
+                    <div className="font-medium text-slate-200">{h.title}</div>
                     <div className="text-xs text-slate-500">{h.date}</div>
                  </div>
                  <div className="text-right">
-                    <div className="text-slate-300">{h.sum} ₽</div>
-                    <div className="text-xs text-green-500 font-bold">+{h.profit} ₽</div>
+                    <div className="text-slate-300">{h.amount.toFixed(2)} ₽</div>
+                    <div className="text-xs text-green-500 font-bold">+{h.income.toFixed(2)} ₽</div>
                  </div>
               </div>
            )) : (
@@ -2375,7 +2376,7 @@ export default function App() {
       
       <div className="bg-gradient-to-br from-green-900/40 to-slate-900 border border-green-500/20 p-6 rounded-2xl mb-6 text-center">
         <div className="text-slate-400 text-sm mb-1">Доступно для вывода</div>
-        <div className="text-4xl font-bold text-green-500 mb-4">{formatMoney(referrals.partnerBalance)}</div>
+        <div className="text-4xl font-bold text-green-500 mb-4">{referrals.partnerBalance.toFixed(2)} ₽</div>
         
         {referrals.partnerBalance > 0 ? (
           <button 
@@ -2447,7 +2448,7 @@ export default function App() {
                 <div className="flex items-center gap-2">
                    <div className="text-right">
                      <div className="text-xs text-slate-500">Доход</div>
-                     <div className="text-sm font-bold text-green-500">+{user.myProfit} ₽</div>
+                     <div className="text-sm font-bold text-green-500">+{user.myProfit.toFixed(2)} ₽</div>
                    </div>
                    <ChevronRight size={16} className="text-slate-600" />
                 </div>
@@ -2596,7 +2597,7 @@ export default function App() {
       >
         {withdrawState.step === 1 && (
           <div className="space-y-4">
-            <div className="text-sm text-slate-400">Доступно: <span className="text-green-500 font-bold">{referrals.partnerBalance} ₽</span></div>
+            <div className="text-sm text-slate-400">Доступно: <span className="text-green-500 font-bold">{referrals.partnerBalance.toFixed(2)} ₽</span></div>
             {referrals.partnerBalance < 200 && (
               <div className="p-3 bg-yellow-900/20 border border-yellow-500/30 rounded-xl text-yellow-400 text-sm">
                 Минимальная сумма для вывода на карту или крипто — 200₽. На баланс можно вывести любую сумму.
