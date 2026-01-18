@@ -821,8 +821,41 @@ interface UserDetailModalProps {
     onToast: (title: string, msg: string, type: ToastType) => void;
 }
 
+interface UserSubscription {
+  id: number;
+  key_uuid: string;
+  short_uuid: string;
+  status: string;
+  expiry_date: string;
+  days_left: number;
+  traffic_used: number;
+  traffic_limit: number;
+  type: string;
+}
+
 const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToast }) => {
   const [activeAction, setActiveAction] = useState<string | null>(null);
+  const [subscriptions, setSubscriptions] = useState<UserSubscription[]>([]);
+  const [loadingSubs, setLoadingSubs] = useState(true);
+  const [selectedSubId, setSelectedSubId] = useState<number | null>(null);
+  
+  // Загружаем подписки пользователя
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const data = await apiFetch(`/panel/users/${user.id}/subscriptions`);
+        if (Array.isArray(data)) {
+          setSubscriptions(data);
+          if (data.length > 0) setSelectedSubId(data[0].id);
+        }
+      } catch (e) {
+        console.error('Failed to load subscriptions', e);
+      } finally {
+        setLoadingSubs(false);
+      }
+    })();
+  }, [user]);
   
   if (!user) return null;
   const trafficPercent = (user.traffic / user.maxTraffic) * 100;
@@ -833,9 +866,12 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
       try {
         await apiFetch(`/panel/users/${user.id}/action`, {
           method: 'POST',
-          body: JSON.stringify({ action: activeAction, value, notify })
+          body: JSON.stringify({ action: activeAction, value, notify, subscription_id: selectedSubId })
         });
         onToast('Успешно', `Действие выполнено`, 'success');
+        // Перезагружаем подписки
+        const data = await apiFetch(`/panel/users/${user.id}/subscriptions`);
+        if (Array.isArray(data)) setSubscriptions(data);
       } catch (e) {
         onToast('Ошибка', 'Не удалось выполнить действие', 'error');
       }
@@ -855,6 +891,21 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
       onToast('Ошибка', 'Не удалось отправить уведомление', 'error');
     }
   };
+  
+  const handleBlockSubscription = async (subId: number, block: boolean) => {
+    try {
+      await apiFetch(`/panel/keys/${subId}/block`, {
+        method: 'POST',
+        body: JSON.stringify({ blocked: block })
+      });
+      onToast('Успешно', block ? 'Подписка заблокирована' : 'Подписка разблокирована', 'success');
+      // Перезагружаем подписки
+      const data = await apiFetch(`/panel/users/${user.id}/subscriptions`);
+      if (Array.isArray(data)) setSubscriptions(data);
+    } catch (e) {
+      onToast('Ошибка', 'Не удалось изменить статус подписки', 'error');
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto" onClick={onClose}>
@@ -872,10 +923,67 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
                         <div className="text-3xl font-bold text-white mb-4">{user.balance} ₽</div>
                         <div className="grid grid-cols-2 gap-3"><button onClick={() => handleAction('ADD_BALANCE')} className="bg-green-600/10 hover:bg-green-600/20 text-green-400 border border-green-600/20 py-2 rounded-lg text-sm font-medium transition-colors flex justify-center items-center"><ArrowUpRight size={14} className="mr-2"/> Начислить</button><button onClick={() => handleAction('SUB_BALANCE')} className="bg-red-600/10 hover:bg-red-600/20 text-red-400 border border-red-600/20 py-2 rounded-lg text-sm font-medium transition-colors flex justify-center items-center"><ArrowDownLeft size={14} className="mr-2"/> Списать</button></div>
                     </div>
-                    {/* Subscription */}
+                    {/* Subscriptions List */}
                     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                         <h3 className="text-lg font-bold text-gray-200 flex items-center"><Zap size={18} className="mr-2 text-blue-400"/> Подписка</h3>
-                         <div className="space-y-4"><div className="flex justify-between text-sm"><span className="text-gray-400">Статус</span><span className={`font-medium ${user.status === 'Active' ? 'text-green-400' : 'text-red-400'}`}>{user.status}</span></div><div className="flex justify-between text-sm"><span className="text-gray-400">Оплачено до</span><span className="text-white">{user.paidUntil}</span></div><div><div className="flex justify-between text-xs mb-1"><span className="text-gray-400 flex items-center"><Database size={10} className="mr-1"/> Трафик</span><span className="text-gray-300">{user.traffic} / {user.maxTraffic} GB</span></div><div className="w-full bg-gray-800 rounded-full h-2"><div className="bg-blue-500 h-2 rounded-full" style={{ width: `${trafficPercent}%` }}></div></div></div><div><div className="flex justify-between text-xs mb-1"><span className="text-gray-400 flex items-center"><Smartphone size={10} className="mr-1"/> Устройства</span><span className="text-gray-300">{user.devices} / {user.maxDevices}</span></div><div className="w-full bg-gray-800 rounded-full h-2"><div className="bg-purple-500 h-2 rounded-full" style={{ width: `${devicesPercent}%` }}></div></div></div></div>
+                         <h3 className="text-lg font-bold text-gray-200 flex items-center mb-4">
+                           <Zap size={18} className="mr-2 text-blue-400"/> Подписки ({subscriptions.length})
+                         </h3>
+                         {loadingSubs ? (
+                           <div className="text-center py-4 text-gray-500">Загрузка...</div>
+                         ) : subscriptions.length === 0 ? (
+                           <div className="text-center py-4 text-gray-500">Нет активных подписок</div>
+                         ) : (
+                           <div className="space-y-3 max-h-[300px] overflow-y-auto">
+                             {subscriptions.map((sub) => (
+                               <div 
+                                 key={sub.id} 
+                                 onClick={() => setSelectedSubId(sub.id)}
+                                 className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                                   selectedSubId === sub.id 
+                                     ? 'bg-blue-600/10 border-blue-500/50' 
+                                     : 'bg-gray-950 border-gray-800 hover:border-gray-700'
+                                 }`}
+                               >
+                                 <div className="flex justify-between items-start mb-2">
+                                   <div>
+                                     <div className="font-mono text-xs text-blue-400">#{sub.short_uuid || sub.key_uuid?.slice(0,8)}</div>
+                                     <div className="text-xs text-gray-500 mt-0.5">{sub.type === 'whitelist' ? 'Обход списков' : 'VPN'}</div>
+                                   </div>
+                                   <span className={`text-xs px-2 py-0.5 rounded ${
+                                     sub.status === 'Active' ? 'bg-green-500/20 text-green-400' : 
+                                     sub.status === 'Blocked' ? 'bg-red-500/20 text-red-400' : 
+                                     'bg-gray-500/20 text-gray-400'
+                                   }`}>{sub.status}</span>
+                                 </div>
+                                 <div className="flex justify-between text-xs">
+                                   <span className={sub.days_left <= 3 ? 'text-red-400' : 'text-gray-400'}>
+                                     {sub.days_left <= 0 ? 'Истекла' : `Осталось ${sub.days_left} дн.`}
+                                   </span>
+                                   <span className="text-gray-500">
+                                     {sub.traffic_limit > 0 
+                                       ? `${(sub.traffic_used / (1024**3)).toFixed(1)} / ${(sub.traffic_limit / (1024**3)).toFixed(0)} ГБ`
+                                       : 'Безлимит'
+                                     }
+                                   </span>
+                                 </div>
+                                 {selectedSubId === sub.id && (
+                                   <div className="mt-3 pt-3 border-t border-gray-800 flex gap-2">
+                                     <button 
+                                       onClick={(e) => { e.stopPropagation(); handleBlockSubscription(sub.id, sub.status !== 'Blocked'); }}
+                                       className={`flex-1 py-1.5 rounded text-xs font-medium ${
+                                         sub.status === 'Blocked'
+                                           ? 'bg-green-600/10 text-green-400 border border-green-600/20 hover:bg-green-600/20'
+                                           : 'bg-red-600/10 text-red-400 border border-red-600/20 hover:bg-red-600/20'
+                                       }`}
+                                     >
+                                       {sub.status === 'Blocked' ? 'Разблокировать' : 'Заблокировать'}
+                                     </button>
+                                   </div>
+                                 )}
+                               </div>
+                             ))}
+                           </div>
+                         )}
                     </div>
                     {/* PARTNER SECTION */}
                     {user.isPartner && (
