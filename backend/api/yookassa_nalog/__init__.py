@@ -4,6 +4,6 @@
 """
 
 from .client import NalogClient
-from .service import NalogService
+from .service import NalogService, nalog_service
 
-__all__ = ['NalogClient', 'NalogService']
+__all__ = ['NalogClient', 'NalogService', 'nalog_service']
