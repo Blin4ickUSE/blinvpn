@@ -2735,6 +2735,18 @@ def update_settings():
                     INSERT OR REPLACE INTO system_settings (setting_key, setting_value, updated_at)
                     VALUES (?, ?, CURRENT_TIMESTAMP)
                 """, (key, str(value)))
+                
+                # Обновляем переменные окружения для настроек "Мой Налог"
+                if key == 'NALOG_ENABLED':
+                    os.environ['NALOG_ENABLED'] = str(value)
+                elif key == 'NALOG_INN':
+                    os.environ['NALOG_INN'] = str(value)
+                elif key == 'NALOG_PASSWORD':
+                    os.environ['NALOG_PASSWORD'] = str(value)
+                elif key == 'NALOG_TOKEN_PATH':
+                    os.environ['NALOG_TOKEN_PATH'] = str(value)
+                elif key == 'NALOG_SERVICE_NAME':
+                    os.environ['NALOG_SERVICE_NAME'] = str(value)
         
         conn.commit()
         return jsonify({'success': True})
