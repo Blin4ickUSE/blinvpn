@@ -3419,8 +3419,9 @@ def sync_squads():
         import asyncio
         
         async def do_sync():
-            async with remnawave.get_api() as api:
-                rw_squads = await api.get_internal_squads()
+            api = remnawave.get_remnawave_api()
+            async with api as rw_api:
+                rw_squads = await rw_api.get_internal_squads()
                 
                 synced = []
                 for squad in rw_squads:
