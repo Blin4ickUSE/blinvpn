@@ -263,7 +263,7 @@ server {
     }
 
     location / {
-        proxy_pass http://127.0.0.1:9473;
+        proxy_pass http://127.0.0.1:9742;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -357,7 +357,7 @@ API_URL=https://${domain}${port_suffix}/api
 API_PORT=8000
 WEBHOOK_PORT=5000
 MINIAPP_PORT=9741
-PANEL_PORT=9473
+PANEL_PORT=9742
 SSL_PORT=${ssl_port}
 
 # Database
