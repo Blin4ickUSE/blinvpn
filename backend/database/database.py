@@ -239,6 +239,7 @@ def init_database():
                 max_gb INTEGER DEFAULT 500,
                 auto_pay_enabled INTEGER DEFAULT 1,
                 auto_pay_threshold_mb INTEGER DEFAULT 100,
+                pricing_type TEXT DEFAULT 'fixed',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -419,6 +420,12 @@ def init_database():
         # Миграция: добавляем target_type в промокоды (all/vpn/whitelist)
         try:
             cursor.execute("ALTER TABLE promocodes ADD COLUMN target_type TEXT DEFAULT 'all'")
+        except sqlite3.OperationalError:
+            pass
+        
+        # Миграция: добавляем pricing_type в whitelist_settings
+        try:
+            cursor.execute("ALTER TABLE whitelist_settings ADD COLUMN pricing_type TEXT DEFAULT 'fixed'")
         except sqlite3.OperationalError:
             pass
         
