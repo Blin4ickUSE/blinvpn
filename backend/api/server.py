@@ -29,6 +29,13 @@ CORS(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def format_datetime_msk(dt: datetime = None) -> str:
+    """Форматировать datetime в ISO формат без миллисекунд (для МСК)"""
+    if dt is None:
+        dt = datetime.now()
+    return dt.strftime('%Y-%m-%dT%H:%M:%S')
+
 # Секретный ключ для аутентификации панели (legacy)
 PANEL_SECRET = os.getenv('PANEL_SECRET', 'change_this_secret')
 BOT_TOKEN = os.getenv('BOT_TOKEN', '')
@@ -374,8 +381,8 @@ def get_user_info():
                 else:
                     logger.warning(f"Referral rate limit exceeded for referrer {ref}")
         
-        # Обновляем first_name если он был передан и еще не сохранен
-        if first_name and not user.get('full_name'):
+        # Обновляем first_name если он изменился (всегда актуальное имя из Telegram)
+        if first_name and first_name != user.get('full_name'):
             database.update_user_full_name(telegram_id, first_name)
             user = database.get_user_by_telegram_id(telegram_id)
     
@@ -615,7 +622,7 @@ def get_user_devices():
                         if days_left == 0 and hours_left > 0:
                             days_left = 0  # Покажем часы
                     
-                    expiry_date_str = expiry_dt.isoformat()
+                    expiry_date_str = format_datetime_msk(expiry_dt)
                 except Exception as e:
                     logger.error(f"Error parsing expiry_date: {e}")
             
@@ -1007,8 +1014,8 @@ def create_promocode():
 
     cursor.execute(
         """
-        INSERT INTO promocodes (code, type, value, uses_limit, expires_at, is_active)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO promocodes (code, type, value, uses_limit, expires_at, is_active, target_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             data.get('code', '').upper(),
@@ -1017,6 +1024,7 @@ def create_promocode():
             data.get('uses_limit'),
             data.get('expires_at'),
             1 if data.get('is_active', 1) else 0,
+            data.get('target_type', 'all'),  # all, vpn, whitelist
         ),
     )
 
@@ -1050,6 +1058,7 @@ def update_promocode(promo_id: int):
         'uses_limit': 'uses_limit',
         'expires_at': 'expires_at',
         'is_active': 'is_active',
+        'target_type': 'target_type',  # all, vpn, whitelist
     }
 
     for key, column in mapping.items():
@@ -1817,7 +1826,7 @@ def create_key():
         conn = database.get_db_connection()
         cursor = conn.cursor()
         
-        expiry_date = (datetime.now() + timedelta(days=days)).isoformat()
+        expiry_date = format_datetime_msk(datetime.now() + timedelta(days=days))
         key_uuid = remnawave_user.uuid if hasattr(remnawave_user, 'uuid') else remnawave_user.get('uuid')
         subscription_url = remnawave_user.subscription_url if hasattr(remnawave_user, 'subscription_url') else remnawave_user.get('subscription_url', '')
         
@@ -2001,7 +2010,7 @@ def update_key(key_id: int):
         values = []
         
         if new_expiry_days is not None:
-            new_expiry_date = (datetime.now() + timedelta(days=int(new_expiry_days))).isoformat()
+            new_expiry_date = format_datetime_msk(datetime.now() + timedelta(days=int(new_expiry_days)))
             updates.append("expiry_date = ?")
             values.append(new_expiry_date)
         
@@ -2717,10 +2726,39 @@ def get_promocodes_stats():
     finally:
         conn.close()
 
+@app.route('/api/tariffs', methods=['GET'])
+def get_public_tariffs():
+    """Публичный API для получения тарифов (для мини-приложения)"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT * FROM tariff_plans
+            WHERE is_active = 1
+            ORDER BY plan_type, sort_order
+        """)
+        rows = cursor.fetchall()
+        plans = []
+        for row in rows:
+            plans.append({
+                'id': row['id'],
+                'plan_type': row['plan_type'],
+                'name': row['name'],
+                'price': float(row['price']),
+                'duration_days': row['duration_days'],
+                'is_active': bool(row['is_active']),
+                'sort_order': row['sort_order']
+            })
+        return jsonify(plans)
+    finally:
+        conn.close()
+
+
 @app.route('/api/panel/tariffs', methods=['GET'])
 @require_auth
 def get_tariffs():
-    """Получить тарифные планы"""
+    """Получить тарифные планы (для панели)"""
     conn = database.get_db_connection()
     cursor = conn.cursor()
     
@@ -3470,7 +3508,14 @@ def get_remnawave_squads():
                 return [{'uuid': s.uuid, 'name': s.name, 'members_count': s.members_count} for s in internal_squads]
         
         squads = asyncio.run(fetch_squads())
-        return jsonify(squads)
+        # Убираем дубликаты по UUID
+        seen_uuids = set()
+        unique_squads = []
+        for sq in squads:
+            if sq['uuid'] not in seen_uuids:
+                seen_uuids.add(sq['uuid'])
+                unique_squads.append(sq)
+        return jsonify(unique_squads)
     except Exception as e:
         logger.error(f"Error fetching Remnawave squads: {e}")
         return jsonify({'error': str(e)}), 500
@@ -4010,6 +4055,262 @@ def issue_key_with_type():
         return jsonify({'error': str(e)}), 500
 
 
+# Функция создания автоматического бэкапа
+def auto_backup():
+    """Создать автоматический бэкап и отправить администратору"""
+    import shutil
+    import tempfile
+    
+    try:
+        # Проверяем, включены ли бэкапы
+        conn = database.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT enabled FROM backup_settings ORDER BY id DESC LIMIT 1")
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row or not row['enabled']:
+            logger.info("Auto backup skipped - disabled in settings")
+            return
+        
+        db_path = os.path.join(os.path.dirname(__file__), '..', 'database', 'blinvpn.db')
+        if not os.path.exists(db_path):
+            logger.error("Database file not found for auto backup")
+            return
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_name = f'blinvpn_auto_backup_{timestamp}.db'
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backup_path = os.path.join(temp_dir, backup_name)
+            shutil.copy2(db_path, backup_path)
+            
+            # Создаем zip архив
+            shutil.make_archive(backup_path, 'zip', temp_dir, backup_name)
+            
+            # Отправляем администратору
+            admin_id = os.getenv('TELEGRAM_ADMIN_ID')
+            bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+            
+            if admin_id and bot_token:
+                import requests
+                with open(f'{backup_path}.zip', 'rb') as f:
+                    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+                    response = requests.post(
+                        url,
+                        data={
+                            'chat_id': admin_id,
+                            'caption': f'🗄️ Автоматический бэкап БД\n📅 {datetime.now().strftime("%d.%m.%Y %H:%M")} МСК'
+                        },
+                        files={'document': (f'{backup_name}.zip', f, 'application/zip')},
+                        timeout=60
+                    )
+                    if response.status_code == 200:
+                        logger.info(f"Auto backup sent successfully")
+                    else:
+                        logger.error(f"Failed to send auto backup: {response.text}")
+        
+        # Обновляем время последнего бэкапа
+        conn = database.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE backup_settings SET last_backup = CURRENT_TIMESTAMP")
+        conn.commit()
+        conn.close()
+        
+    except Exception as e:
+        logger.error(f"Auto backup error: {e}")
+
+
+# ===== TOOLS ENDPOINTS =====
+
+@app.route('/api/panel/export/<data_type>', methods=['GET'])
+@require_auth
+def export_data(data_type: str):
+    """Экспорт данных в JSON"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        if data_type == 'users':
+            cursor.execute("SELECT * FROM users ORDER BY id")
+        elif data_type == 'keys':
+            cursor.execute("SELECT * FROM vpn_keys ORDER BY id")
+        elif data_type == 'transactions':
+            cursor.execute("SELECT * FROM transactions ORDER BY id DESC LIMIT 10000")
+        else:
+            return jsonify({'error': 'Invalid data type'}), 400
+        
+        rows = cursor.fetchall()
+        data = [dict(row) for row in rows]
+        return jsonify({'data': data})
+    finally:
+        conn.close()
+
+@app.route('/api/panel/diagnostics', methods=['GET'])
+@require_auth
+def get_diagnostics():
+    """Диагностика системы"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    issues = []
+    
+    try:
+        # Количество пользователей
+        cursor.execute("SELECT COUNT(*) FROM users")
+        users_count = cursor.fetchone()[0]
+        
+        # Количество ключей
+        cursor.execute("SELECT COUNT(*) FROM vpn_keys")
+        keys_count = cursor.fetchone()[0]
+        
+        # Активные ключи
+        cursor.execute("SELECT COUNT(*) FROM vpn_keys WHERE status = 'Active' AND expires_at > datetime('now')")
+        active_keys = cursor.fetchone()[0]
+        
+        # Истёкшие ключи
+        cursor.execute("SELECT COUNT(*) FROM vpn_keys WHERE expires_at < datetime('now')")
+        expired_keys = cursor.fetchone()[0]
+        
+        # Забаненные пользователи
+        cursor.execute("SELECT COUNT(*) FROM users WHERE status = 'Banned'")
+        banned_users = cursor.fetchone()[0]
+        
+        # Проверка Remnawave
+        remnawave_status = 'OK'
+        try:
+            rw_squads = remnawave.get_all_squads()
+            if not rw_squads:
+                remnawave_status = 'Нет сквадов'
+                issues.append('Remnawave: нет доступных сквадов')
+        except Exception as e:
+            remnawave_status = 'Ошибка'
+            issues.append(f'Remnawave: {str(e)[:50]}')
+        
+        # Проверка проблем
+        if expired_keys > 100:
+            issues.append(f'Много истёкших ключей: {expired_keys}')
+        
+        cursor.execute("SELECT COUNT(*) FROM users WHERE balance < 0")
+        negative_balance = cursor.fetchone()[0]
+        if negative_balance > 0:
+            issues.append(f'Пользователей с отрицательным балансом: {negative_balance}')
+        
+        return jsonify({
+            'users_count': users_count,
+            'keys_count': keys_count,
+            'active_keys': active_keys,
+            'expired_keys': expired_keys,
+            'banned_users': banned_users,
+            'remnawave_status': remnawave_status,
+            'issues': issues
+        })
+    finally:
+        conn.close()
+
+@app.route('/api/panel/tools/cleanup-expired', methods=['POST'])
+@require_auth
+def cleanup_expired_keys():
+    """Удалить истёкшие ключи старше 30 дней"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Получаем ключи для удаления
+        cursor.execute("""
+            SELECT key_uuid FROM vpn_keys 
+            WHERE expires_at < datetime('now', '-30 days')
+        """)
+        keys_to_delete = [row[0] for row in cursor.fetchall()]
+        
+        # Удаляем из Remnawave
+        deleted = 0
+        for key_uuid in keys_to_delete:
+            try:
+                remnawave.delete_user(key_uuid)
+                deleted += 1
+            except:
+                pass
+        
+        # Удаляем из базы
+        cursor.execute("""
+            DELETE FROM vpn_keys 
+            WHERE expires_at < datetime('now', '-30 days')
+        """)
+        conn.commit()
+        
+        return jsonify({'success': True, 'deleted': deleted})
+    finally:
+        conn.close()
+
+@app.route('/api/panel/remnawave/sync', methods=['POST'])
+@require_auth
+def sync_remnawave_keys():
+    """Синхронизировать ключи с Remnawave"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    synced = 0
+    
+    try:
+        # Получаем все ключи из БД
+        cursor.execute("SELECT id, key_uuid, user_id FROM vpn_keys WHERE key_uuid IS NOT NULL")
+        local_keys = cursor.fetchall()
+        
+        for key in local_keys:
+            key_id, key_uuid, user_id = key
+            try:
+                # Получаем данные из Remnawave
+                rw_user = remnawave.get_user_by_uuid(key_uuid)
+                if rw_user:
+                    # Обновляем локальные данные
+                    traffic_used = rw_user.get('usedTrafficBytes', 0)
+                    traffic_limit = rw_user.get('trafficLimitBytes', 0)
+                    
+                    cursor.execute("""
+                        UPDATE vpn_keys 
+                        SET traffic_used = ?, traffic_limit = ?
+                        WHERE id = ?
+                    """, (traffic_used, traffic_limit, key_id))
+                    synced += 1
+            except:
+                continue
+        
+        conn.commit()
+        return jsonify({'success': True, 'synced': synced})
+    finally:
+        conn.close()
+
+
+# Запуск планировщика для автоматических бэкапов
+def start_backup_scheduler():
+    """Запустить планировщик для бэкапов в 02:00 МСК"""
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        import pytz
+        
+        scheduler = BackgroundScheduler()
+        moscow_tz = pytz.timezone('Europe/Moscow')
+        
+        # Бэкап каждый день в 02:00 МСК
+        scheduler.add_job(
+            auto_backup,
+            CronTrigger(hour=2, minute=0, timezone=moscow_tz),
+            id='auto_backup',
+            name='Daily backup at 02:00 MSK',
+            replace_existing=True
+        )
+        
+        scheduler.start()
+        logger.info("Backup scheduler started - daily at 02:00 MSK")
+        
+    except ImportError:
+        logger.warning("APScheduler not installed, auto backups disabled. Install with: pip install apscheduler pytz")
+    except Exception as e:
+        logger.error(f"Failed to start backup scheduler: {e}")
+
+
 if __name__ == '__main__':
+    # Запускаем планировщик бэкапов
+    start_backup_scheduler()
     app.run(host='0.0.0.0', port=int(os.getenv('API_PORT', 8000)))
 
