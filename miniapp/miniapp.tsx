@@ -35,6 +35,18 @@ async function miniApiFetch(path: string, options: RequestInit = {}): Promise<an
       ...(options.headers || {}),
     },
   });
+  
+  // Обработка бана (статус 403)
+  if (res.status === 403) {
+    try {
+      const data = await res.json();
+      if (data.banned) {
+        return { _banned: true, reason: data.reason || 'Аккаунт заблокирован' };
+      }
+    } catch {}
+    throw new Error('Access denied');
+  }
+  
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `Request failed with status ${res.status}`);
@@ -257,14 +269,13 @@ const VPN_PLANS_DEFAULT: Plan[] = [
 const PRESET_AMOUNTS = [100, 250, 500, 1000, 2000, 5000]; // Минимум 50₽, максимум 100,000₽
 
 /**
- * Рассчитывает цену за whitelist bypass: абонентская плата (100₽) + 15₽/ГБ
- * Диапазон: 5-500 ГБ
+ * Whitelist bypass - фиксированная цена 299₽/месяц, 100ГБ трафика
  */
-function calculateWhitelistPrice(gb: number, subscriptionFee: number = 100, pricePerGb: number = 15): number {
-  if (gb < 5) gb = 5;
-  if (gb > 500) gb = 500;
-  
-  return subscriptionFee + (gb * pricePerGb);
+const WHITELIST_PRICE = 299;
+const WHITELIST_GB = 100;
+
+function calculateWhitelistPrice(): number {
+  return WHITELIST_PRICE;
 }
 
 // Платежные методы загружаются из API с комиссиями, но оставляем дефолтные
@@ -283,8 +294,17 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
     icon: '⚡', 
     feePercent: 0, 
     variants: [
-      // { id: 'platega', name: 'Platega', feePercent: 0 }, // ВРЕМЕННО ОТКЛЮЧЕНО
-      { id: 'yookassa', name: 'YooKassa', feePercent: 0 }
+      { id: 'platega_sbp', name: 'Platega', feePercent: 0 },
+      { id: 'yookassa_sbp', name: 'YooKassa', feePercent: 0 }
+    ]
+  },
+  { 
+    id: 'card', 
+    name: 'Банковская карта', 
+    icon: '💳', 
+    feePercent: 0, 
+    variants: [
+      { id: 'platega_card', name: 'Platega', feePercent: 0 }
     ]
   },
   // КРИПТОВАЛЮТА ОТКЛЮЧЕНА
@@ -598,6 +618,14 @@ export default function App() {
   const [currentDevice, setCurrentDevice] = useState<Device | null>(null);
   const [newName, setNewName] = useState('');
 
+  // Ban Status
+  const [isBanned, setIsBanned] = useState(false);
+  const [banReason, setBanReason] = useState<string>('');
+
+  // Onboarding (Tutorial)
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState(0);
+
   // Referral Data
   const [referrals, setReferrals] = useState({ count: 0, earned: 0, partnerBalance: 0 });
   const [referralList, setReferralList] = useState<ReferralUser[]>([]);
@@ -624,12 +652,14 @@ export default function App() {
   // Pending Purchase
   const [pendingAction, setPendingAction] = useState<{ type: string, payload: any } | null>(null);
 
+  // VPN Plans - загружаются из API, fallback на дефолтные
+  const [vpnPlans, setVpnPlans] = useState<Plan[]>(VPN_PLANS_DEFAULT);
+
   // Connection Wizard State
   const [wizardStep, setWizardStep] = useState(1); // 1: Platform, 2: Plan (VPN/Whitelist), 3: Payment/Confirm, 4: Instructions
   const [wizardPlatform, setWizardPlatform] = useState<PlatformId>('android');
   const [wizardPlan, setWizardPlan] = useState<Plan | null>(null);
   const [wizardType, setWizardType] = useState<'vpn' | 'whitelist'>('vpn'); 
-  const [whitelistGB, setWhitelistGB] = useState(10); 
   const [useAutoPay, setUseAutoPay] = useState(false);
   const [savedPaymentMethods, setSavedPaymentMethods] = useState<any[]>([]);
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<string | null>(null);
@@ -725,6 +755,14 @@ export default function App() {
           userUrl += `&ref=${referralId}`;
         }
         const userData = await miniApiFetch(userUrl);
+        
+        // Проверяем бан
+        if (userData && userData._banned) {
+          setIsBanned(true);
+          setBanReason(userData.reason || 'Аккаунт заблокирован');
+          return; // Не загружаем остальные данные
+        }
+        
         if (userData) {
           setUserId(userData.id);
           setBalance(userData.balance || 0);
@@ -739,6 +777,12 @@ export default function App() {
           });
           if (userData.last_card_withdrawal) {
             setLastCardWithdrawal(userData.last_card_withdrawal);
+          }
+          
+          // Показываем онбординг для новых пользователей (без устройств и ключей)
+          const onboardingShown = localStorage.getItem(`onboarding_${tgId}`);
+          if (!onboardingShown && !userData.trial_used && userData.balance === 0) {
+            setShowOnboarding(true);
           }
         }
 
@@ -786,6 +830,35 @@ export default function App() {
           }
         } catch (e) {
           console.error('Failed to load public pages, using defaults', e);
+        }
+
+        // Загружаем тарифы из API
+        try {
+          const tariffsData = await miniApiFetch('/tariffs');
+          if (Array.isArray(tariffsData) && tariffsData.length > 0) {
+            // Конвертируем формат API в формат Plan
+            const plans: Plan[] = [
+              // Всегда добавляем триал первым
+              { id: 'trial', duration: 'Пробный тариф', price: 0, highlight: true, days: 1, isTrial: true }
+            ];
+            tariffsData.forEach((t: any) => {
+              if (t.plan_type === 'vpn' && t.is_active) {
+                plans.push({
+                  id: `plan_${t.id}`,
+                  duration: t.name,
+                  price: t.price,
+                  highlight: t.duration_days === 365, // Выделяем годовой план
+                  days: t.duration_days,
+                  isTrial: false
+                });
+              }
+            });
+            if (plans.length > 1) {
+              setVpnPlans(plans);
+            }
+          }
+        } catch (e) {
+          console.error('Failed to load tariffs, using defaults', e);
         }
       } catch (err) {
         console.error('Ошибка загрузки данных:', err);
@@ -1146,22 +1219,14 @@ export default function App() {
   };
 
   const buyWhitelist = async () => {
-    let finalGB = whitelistGB;
-    if (finalGB < 5) finalGB = 5;
-    else if (finalGB > 500) finalGB = 500;
-
-    if (finalGB !== whitelistGB) setWhitelistGB(finalGB);
-
-    let price = calculateWhitelistPrice(finalGB);
-    let name = `Whitelist (${finalGB} ГБ)`;
+    const price = WHITELIST_PRICE;
+    const name = `Whitelist (${WHITELIST_GB} ГБ)`;
     
-    // Автоплатежи не добавляют цену, они просто сохраняют способ оплаты
-
     if (balance < price) {
       if(window.confirm(`Недостаточно средств. Стоимость: ${price} ₽. Ваш баланс: ${balance} ₽. Пополнить баланс?`)) {
         setPendingAction({
             type: 'legacy_whitelist',
-            payload: { whitelistGB: finalGB, useAutoPay, selectedPaymentMethodId, price, name } 
+            payload: { whitelistGB: WHITELIST_GB, useAutoPay, selectedPaymentMethodId, price, name } 
         });
         setTopupAmount(price - balance);
         setTopupStep(2); // Сразу к способу оплаты
@@ -1184,7 +1249,7 @@ export default function App() {
           user_id: currentUserId,
           days: 30,
           type: 'whitelist',
-          whitelist_gb: finalGB,
+          whitelist_gb: WHITELIST_GB,
           price: price,
         }),
       });
@@ -1246,15 +1311,15 @@ export default function App() {
         price = wizardPlan.price;
         name = `VPN (${wizardPlan.duration})`;
     } else {
-        price = calculateWhitelistPrice(whitelistGB);
-        name = `Whitelist (${whitelistGB} ГБ)`;
+        price = WHITELIST_PRICE;
+        name = `Whitelist (${WHITELIST_GB} ГБ)`;
     }
 
     if (balance < price) {
       if(window.confirm(`Недостаточно средств. Пополнить баланс на ${price - balance} ₽?`)) {
         setPendingAction({
             type: 'wizard',
-            payload: { wizardType, wizardPlan, whitelistGB, useAutoPay, selectedPaymentMethodId, price, name }
+            payload: { wizardType, wizardPlan, whitelistGB: WHITELIST_GB, useAutoPay, selectedPaymentMethodId, price, name }
         });
         setTopupAmount(price - balance);
         setTopupStep(2); // Сразу к способу оплаты
@@ -1271,7 +1336,7 @@ export default function App() {
           user_id: currentUserId,
           days: wizardType === 'vpn' ? wizardPlan?.days : 30,
           type: wizardType,
-          whitelist_gb: wizardType === 'whitelist' ? whitelistGB : undefined,
+          whitelist_gb: wizardType === 'whitelist' ? WHITELIST_GB : undefined,
           price: price,
         }),
       });
@@ -1484,7 +1549,7 @@ export default function App() {
             {wizardType === 'vpn' ? (
                 <div className="space-y-3">
                     <p className="text-slate-400 text-sm mb-2">Выберите период защиты для <b>{PLATFORMS.find(p => p.id === wizardPlatform)?.name}</b>:</p>
-                    {(VPN_PLANS_DEFAULT || []).filter(plan => !plan.isTrial || !isTrialUsed).map(plan => (
+                    {(vpnPlans || VPN_PLANS_DEFAULT).filter(plan => !plan.isTrial || !isTrialUsed).map(plan => (
                         <div 
                             key={plan.id}
                             onClick={() => { setWizardPlan(plan); setWizardStep(3); }}
@@ -1509,142 +1574,56 @@ export default function App() {
                 </div>
             ) : (
                 <div className="flex-1 flex flex-col">
-                    <p className="text-slate-400 text-sm mb-4">Настройте объем трафика для обхода белых списков:</p>
-                    <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 mb-6">
-                        <div className="flex justify-between items-end mb-4">
-                        <span className="text-slate-300 font-medium">Объем трафика</span>
-                        <div className="flex items-baseline gap-1">
-                            <input 
-                                type="number" 
-                                value={whitelistGB}
-                                onChange={(e) => {
-                                    let val = Number(e.target.value);
-                                    if (val > 500) val = 500;
-                                    if (val < 0) val = 0;
-                                    setWhitelistGB(val);
-                                }}
-                                onBlur={() => {
-                                  let val = whitelistGB;
-                                  if(val < 5) val = 5; 
-                                  if(val > 500) val = 500;
-                                  setWhitelistGB(val);
-                                }}
-                                className="w-20 bg-slate-900 border border-slate-600 rounded-lg p-2 text-right text-white font-bold focus:border-blue-500 outline-none"
-                            />
-                            <span className="text-slate-500 font-bold">ГБ</span>
+                    <p className="text-slate-400 text-sm mb-4">Обход белых списков для мобильных операторов:</p>
+                    
+                    {/* Карточка тарифа */}
+                    <div 
+                        onClick={() => setWizardStep(3)}
+                        className="relative p-6 rounded-2xl border-2 border-blue-500 bg-blue-900/20 mb-6 cursor-pointer hover:bg-blue-900/30 transition-all"
+                    >
+                        <div className="absolute -top-3 left-4 bg-blue-600 text-white text-xs font-bold px-3 py-1 rounded-full">
+                            РЕКОМЕНДУЕМ
                         </div>
-                        </div>
-                        
-                        <div className="relative w-full h-8 flex items-center" style={{ touchAction: 'none' }}>
-                            <input 
-                                type="range" 
-                                min={5} 
-                                max={500}
-                                step={1}
-                                value={whitelistGB}
-                                onChange={(e) => setWhitelistGB(Number(e.target.value))}
-                                className="absolute w-full h-8 bg-transparent appearance-none cursor-pointer z-10"
-                                style={{
-                                  WebkitAppearance: 'none',
-                                  background: 'transparent',
-                                  touchAction: 'none'
-                                }}
-                            />
-                            <div className="w-full h-2 bg-slate-700 rounded-lg absolute overflow-hidden pointer-events-none">
-                                <div 
-                                    className="h-full bg-blue-600 rounded-lg" 
-                                    style={{ width: `${((whitelistGB - 5) / 495) * 100}%` }}
-                                />
-                            </div>
-                            <style>{`
-                              input[type="range"] {
-                                touch-action: none;
-                                -webkit-tap-highlight-color: transparent;
-                              }
-                              input[type="range"]::-webkit-slider-runnable-track {
-                                height: 8px;
-                                background: transparent;
-                              }
-                              input[type="range"]::-webkit-slider-thumb {
-                                -webkit-appearance: none;
-                                width: 28px;
-                                height: 28px;
-                                background: white;
-                                border-radius: 50%;
-                                box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-                                cursor: grab;
-                                margin-top: -10px;
-                              }
-                              input[type="range"]::-webkit-slider-thumb:active {
-                                cursor: grabbing;
-                                transform: scale(1.1);
-                              }
-                              input[type="range"]::-moz-range-thumb {
-                                width: 28px;
-                                height: 28px;
-                                background: white;
-                                border-radius: 50%;
-                                border: none;
-                                box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-                                cursor: grab;
-                              }
-                              input[type="range"]::-moz-range-thumb:active {
-                                cursor: grabbing;
-                                transform: scale(1.1);
-                              }
-                              input[type="range"]::-moz-range-track {
-                                height: 8px;
-                                background: transparent;
-                              }
-                            `}</style>
-                        </div>
-
-                        <div className="flex justify-between text-xs text-slate-500 mt-2">
-                        <span>5 ГБ</span> 
-                        <span>500 ГБ</span>
-                        </div>
-                    </div>
-
-                    <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4">
-                        <div className="flex justify-between items-center mb-2">
+                        <div className="flex justify-between items-center">
                             <div>
-                                <div className="text-slate-400 text-sm">Абонентская плата</div>
+                                <div className="text-xl font-bold text-white mb-1">1 месяц</div>
+                                <div className="text-slate-400 text-sm">{WHITELIST_GB} ГБ трафика</div>
                             </div>
-                            <div className="text-lg font-bold text-white">100 ₽</div>
-                        </div>
-                        <div className="flex justify-between items-center mb-2">
-                            <div>
-                                <div className="text-slate-400 text-sm">Трафик ({whitelistGB} ГБ × 15₽)</div>
+                            <div className="text-right">
+                                <div className="text-3xl font-bold text-white">{WHITELIST_PRICE} ₽</div>
+                                <div className="text-slate-500 text-xs">≈ {Math.round(WHITELIST_PRICE / WHITELIST_GB * 10) / 10} ₽/ГБ</div>
                             </div>
-                            <div className="text-lg font-bold text-white">{whitelistGB * 15} ₽</div>
-                        </div>
-                        <div className="border-t border-slate-700 pt-2 flex justify-between items-center">
-                            <div>
-                                <div className="text-slate-300 text-sm font-bold">Итого</div>
-                            </div>
-                            <div className="text-2xl font-bold text-white">{calculateWhitelistPrice(whitelistGB)} ₽</div>
                         </div>
                     </div>
 
-                    {/* Авто-списание с баланса - нельзя отменить */}
-                    <div className="bg-blue-500/10 border border-blue-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
-                        <Zap className="text-blue-400 shrink-0 mt-0.5" size={18} />
-                        <div className="text-blue-300 text-xs leading-relaxed">
-                            <b>Авто-продление:</b> Подписка автоматически продлевается каждый месяц. Средства списываются с баланса.
+                    {/* Что включено */}
+                    <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4 space-y-3">
+                        <div className="flex items-center gap-3">
+                            <CheckCircle className="text-green-400 shrink-0" size={18} />
+                            <span className="text-slate-300 text-sm">{WHITELIST_GB} ГБ высокоскоростного трафика</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <CheckCircle className="text-green-400 shrink-0" size={18} />
+                            <span className="text-slate-300 text-sm">Обход ограничений мобильных операторов</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <CheckCircle className="text-green-400 shrink-0" size={18} />
+                            <span className="text-slate-300 text-sm">Работает с безлимитными тарифами</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <Zap className="text-blue-400 shrink-0" size={18} />
+                            <span className="text-slate-300 text-sm">Автоматическое продление</span>
                         </div>
                     </div>
 
-                    <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
-                        <AlertTriangle className="text-red-500 shrink-0 mt-0.5" size={18} />
-                        <div className="text-red-400 text-xs leading-relaxed">
-                            Обход белых списков является эксперементальной функцией и может быть нестабильным в некоторых регионах!
+                    <div className="bg-yellow-500/10 border border-yellow-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
+                        <AlertTriangle className="text-yellow-500 shrink-0 mt-0.5" size={18} />
+                        <div className="text-yellow-400 text-xs leading-relaxed">
+                            <b>Внимание:</b> Функция является экспериментальной и может быть нестабильной в некоторых регионах.
                         </div>
                     </div>
 
-                    <Button onClick={() => {
-                        if (whitelistGB < 5) setWhitelistGB(5);
-                        setWizardStep(3);
-                    }}>Продолжить</Button>
+                    <Button onClick={() => setWizardStep(3)}>Подключить за {WHITELIST_PRICE} ₽</Button>
                 </div>
             )}
         </div>
@@ -1655,14 +1634,13 @@ export default function App() {
             <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 mb-6 text-center">
                 <div className="text-slate-400 mb-2">Вы подключаете</div>
                 <div className="text-2xl font-bold text-white mb-6">
-                    {wizardType === 'vpn' ? wizardPlan?.duration : `Whitelist (${whitelistGB} ГБ)`}
-                    {wizardType !== 'vpn' && useAutoPay && <div className="text-sm text-blue-400 mt-1">+ Автоплатежи</div>}
+                    {wizardType === 'vpn' ? wizardPlan?.duration : `Обход белых списков (${WHITELIST_GB} ГБ)`}
                 </div>
                 
                 <div className="border-t border-slate-700 pt-4 flex justify-between items-center">
                     <span className="text-slate-400">Стоимость:</span>
                     <span className="text-xl font-bold text-white">
-                        {wizardType === 'vpn' ? wizardPlan?.price : calculateWhitelistPrice(whitelistGB)} ₽
+                        {wizardType === 'vpn' ? wizardPlan?.price : WHITELIST_PRICE} ₽
                     </span>
                 </div>
             </div>
@@ -1677,25 +1655,25 @@ export default function App() {
             <div className="mt-auto">
                 <div className="flex justify-between items-center mb-4 text-sm">
                     <span className="text-slate-400">Ваш баланс:</span>
-                    <span className={`${balance < (wizardType === 'vpn' ? (wizardPlan?.price || 0) : calculateWhitelistPrice(whitelistGB)) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
+                    <span className={`${balance < (wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
                 </div>
 
-                {balance >= (wizardType === 'vpn' ? (wizardPlan?.price || 0) : calculateWhitelistPrice(whitelistGB)) ? (
+                {balance >= (wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE) ? (
                     <Button onClick={wizardActivate} variant={wizardType === 'vpn' && wizardPlan?.isTrial ? 'trial' : 'primary'}>
                         {wizardType === 'vpn' && wizardPlan?.isTrial ? 'Активировать бесплатно' : 'Оплатить и подключить'}
                     </Button>
                 ) : (
                     <Button onClick={() => {
-                        const price = wizardType === 'vpn' ? (wizardPlan?.price || 0) : calculateWhitelistPrice(whitelistGB);
+                        const price = wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE;
                         setPendingAction({
                             type: 'wizard',
-                            payload: { wizardType, wizardPlan, whitelistGB, useAutoPay, selectedPaymentMethodId, price, name: wizardType === 'vpn' ? `VPN (${wizardPlan?.duration})` : `Whitelist (${whitelistGB} ГБ)` }
+                            payload: { wizardType, wizardPlan, whitelistGB: WHITELIST_GB, useAutoPay, selectedPaymentMethodId, price, name: wizardType === 'vpn' ? `VPN (${wizardPlan?.duration})` : `Whitelist (${WHITELIST_GB} ГБ)` }
                         });
                         setTopupAmount(price - balance);
                         setTopupStep(2); // Сразу к способу оплаты
                         setView('topup');
                     }}>
-                        Пополнить на {(wizardType === 'vpn' ? (wizardPlan?.price || 0) : calculateWhitelistPrice(whitelistGB)) - balance} ₽
+                        Пополнить на {(wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE) - balance} ₽
                     </Button>
                 )}
             </div>
@@ -1769,16 +1747,19 @@ export default function App() {
       <div className="flex-1 space-y-4">
         {devices.map(device => {
           const isExpired = device.is_expired === true;
+          // Проверка на вечную подписку (год >= 2090)
+          const isForever = device.days_left !== undefined && device.days_left > 25000; // ~68 лет
           // Формируем текст оставшегося времени
           const getTimeLeftText = () => {
             if (isExpired) return 'Истекла';
+            if (isForever) return '∞ Навсегда';
             if (device.days_left === undefined || device.days_left === null) return null;
             if (device.days_left > 0) return `Осталось ${device.days_left} дн.`;
             if (device.hours_left && device.hours_left > 0) return `Осталось ${device.hours_left} ч.`;
             return 'Менее часа';
           };
           const timeLeftText = getTimeLeftText();
-          const isLowTime = !isExpired && (device.days_left !== undefined && device.days_left <= 3);
+          const isLowTime = !isExpired && !isForever && (device.days_left !== undefined && device.days_left <= 3);
           
           return (
           <div key={device.id} className={`rounded-xl p-4 border ${isExpired ? 'bg-red-900/20 border-red-500/50' : 'bg-slate-800 border-slate-700'}`}>
@@ -1793,7 +1774,7 @@ export default function App() {
                     VPN: #{device.short_uuid || device.key_uuid?.slice(0, 8) || 'N/A'}
                   </div>
                   {timeLeftText ? (
-                    <div className={`text-xs font-medium ${isExpired || isLowTime ? 'text-red-400' : 'text-slate-400'}`}>
+                    <div className={`text-xs font-medium ${isExpired ? 'text-red-400' : isLowTime ? 'text-orange-400' : isForever ? 'text-yellow-400' : 'text-slate-400'}`}>
                       {timeLeftText}
                     </div>
                   ) : (
@@ -2070,101 +2051,57 @@ export default function App() {
         </div>
       ) : (
         <div className="flex-1 flex flex-col">
-          <div className="text-sm text-slate-400 mb-3 px-1 uppercase font-bold tracking-wider">Настройка трафика</div>
-          
-          <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 mb-6">
-            <div className="flex justify-between items-end mb-4">
-               <span className="text-slate-300 font-medium">Объем трафика</span>
-               <div className="flex items-baseline gap-1">
-                  <input 
-                    type="number" 
-                    value={whitelistGB}
-                    onChange={(e) => {
-                        let val = Number(e.target.value);
-                        if (val > 500) val = 500;
-                        if (val < 0) val = 0;
-                        setWhitelistGB(val);
-                    }}
-                    onBlur={() => {
-                      let val = whitelistGB;
-                      if (val < 5) val = 5;
-                      if (val > 500) val = 500;
-                      setWhitelistGB(val);
-                    }}
-                    className="w-20 bg-slate-900 border border-slate-600 rounded-lg p-2 text-right text-white font-bold focus:border-blue-500 outline-none"
-                  />
-                  <span className="text-slate-500 font-bold">ГБ</span>
-               </div>
+          {/* Карточка тарифа */}
+          <div className="bg-slate-800 p-6 rounded-2xl border-2 border-blue-500 mb-6">
+            <div className="flex justify-between items-center mb-4">
+              <div>
+                <div className="text-xl font-bold text-white">Обход белых списков</div>
+                <div className="text-slate-400 text-sm">1 месяц подписки</div>
+              </div>
+              <div className="text-right">
+                <div className="text-3xl font-bold text-white">{WHITELIST_PRICE} ₽</div>
+              </div>
             </div>
             
-            <div className="relative w-full h-8 flex items-center" style={{ touchAction: 'none' }}>
-                <input 
-                    type="range" 
-                    min={5} 
-                    max={500}
-                    step={1}
-                    value={whitelistGB}
-                    onChange={(e) => setWhitelistGB(Number(e.target.value))}
-                    className="absolute w-full h-8 bg-transparent appearance-none cursor-pointer z-10 slider-whitelist"
-                    style={{
-                      WebkitAppearance: 'none',
-                      background: 'transparent',
-                      touchAction: 'none'
-                    }}
-                />
-                <div className="w-full h-2 bg-slate-700 rounded-lg absolute overflow-hidden pointer-events-none">
-                    <div 
-                        className="h-full bg-blue-600 rounded-lg" 
-                        style={{ width: `${((whitelistGB - 5) / 495) * 100}%` }}
-                    />
-                </div>
-            </div>
-
-            <div className="flex justify-between text-xs text-slate-500 mt-2">
-              <span>5 ГБ</span>
-              <span>500 ГБ</span>
-            </div>
-          </div>
-
-          <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4 flex justify-between items-center">
-             <div>
-               <div className="text-slate-400 text-sm">Стоимость</div>
-               <div className="text-xs text-slate-500">Прогрессивная цена</div>
-             </div>
-             <div className="text-2xl font-bold text-white">{calculateWhitelistPrice(whitelistGB)} ₽</div>
-          </div>
-
-          {/* Авто-списание с баланса */}
-          <div className="bg-blue-500/10 border border-blue-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
-              <Zap className="text-blue-400 shrink-0 mt-0.5" size={18} />
-              <div className="text-blue-300 text-xs leading-relaxed">
-                  <b>Авто-продление:</b> Подписка автоматически продлевается каждый месяц. Средства списываются с баланса.
+            <div className="space-y-2 mb-4">
+              <div className="flex items-center gap-2 text-slate-300 text-sm">
+                <CheckCircle className="text-green-400 shrink-0" size={16} />
+                <span>{WHITELIST_GB} ГБ трафика включено</span>
               </div>
+              <div className="flex items-center gap-2 text-slate-300 text-sm">
+                <CheckCircle className="text-green-400 shrink-0" size={16} />
+                <span>Обход ограничений операторов</span>
+              </div>
+              <div className="flex items-center gap-2 text-slate-300 text-sm">
+                <Zap className="text-blue-400 shrink-0" size={16} />
+                <span>Автоматическое продление</span>
+              </div>
+            </div>
           </div>
 
-          <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
-              <AlertTriangle className="text-red-500 shrink-0 mt-0.5" size={18} />
-              <div className="text-red-400 text-xs leading-relaxed">
-                  Обход белых списков является эксперементальной функцией и может быть нестабильным в некоторых регионах!
+          <div className="bg-yellow-500/10 border border-yellow-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
+              <AlertTriangle className="text-yellow-500 shrink-0 mt-0.5" size={18} />
+              <div className="text-yellow-400 text-xs leading-relaxed">
+                  <b>Внимание:</b> Функция экспериментальная и может быть нестабильной в некоторых регионах.
               </div>
           </div>
 
           <div className="mt-auto pb-4 pt-4 border-t border-slate-800">
              <div className="flex justify-between items-center mb-4 text-sm">
                <span className="text-slate-400">Ваш баланс:</span>
-               <span className={`${balance < calculateWhitelistPrice(whitelistGB) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
+               <span className={`${balance < WHITELIST_PRICE ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
              </div>
              <Button 
                 onClick={buyWhitelist}
-                variant={balance < calculateWhitelistPrice(whitelistGB) ? "secondary" : "primary"}
+                variant={balance < WHITELIST_PRICE ? "secondary" : "primary"}
              >
-                {balance < calculateWhitelistPrice(whitelistGB)
+                {balance < WHITELIST_PRICE
                     ? "Недостаточно средств" 
-                    : `Купить за ${calculateWhitelistPrice(whitelistGB)} ₽`
+                    : `Подключить за ${WHITELIST_PRICE} ₽`
                 }
              </Button>
-             {balance < calculateWhitelistPrice(whitelistGB) && (
-               <button onClick={() => { setTopupAmount(calculateWhitelistPrice(whitelistGB) - balance); setTopupStep(1); setView('topup'); }} className="w-full mt-3 text-blue-500 text-sm font-medium hover:underline">
+             {balance < WHITELIST_PRICE && (
+               <button onClick={() => { setTopupAmount(WHITELIST_PRICE - balance); setTopupStep(1); setView('topup'); }} className="w-full mt-3 text-blue-500 text-sm font-medium hover:underline">
                  Пополнить баланс
                </button>
              )}
@@ -2270,13 +2207,17 @@ export default function App() {
     
     return (
       <div className="flex flex-col items-center justify-center min-h-[80vh] animate-in zoom-in duration-300 text-center px-4">
-        <div className="w-20 h-20 rounded-full bg-blue-600/10 flex items-center justify-center mb-6 relative">
-          <div className="absolute inset-0 rounded-full border-4 border-blue-600 border-t-transparent animate-spin"></div>
-          <div className="font-bold text-blue-500 text-lg">₽</div>
+        <div className="w-24 h-24 rounded-full bg-gradient-to-br from-blue-600/20 to-purple-600/20 flex items-center justify-center mb-8 relative">
+          <div className="absolute inset-0 rounded-full border-4 border-blue-500/50 border-t-blue-500 animate-spin"></div>
+          <div className="absolute inset-2 rounded-full border-4 border-purple-500/30 border-b-purple-500 animate-spin" style={{ animationDirection: 'reverse', animationDuration: '1.5s' }}></div>
+          <CreditCard className="text-blue-400" size={32} />
         </div>
-        <h2 className="text-2xl font-bold text-white mb-2">Ожидание оплаты</h2>
-        <p className="text-slate-400 mb-8 max-w-xs">
-          {pendingAction ? 'После оплаты устройство подключится автоматически.' : 'Нажмите кнопку ниже чтобы перейти к оплате.'}
+        <h2 className="text-2xl font-bold text-white mb-3">Обрабатываем платёж...</h2>
+        <p className="text-slate-400 mb-2 max-w-xs">
+          {pendingAction ? 'VPN подключится автоматически после оплаты' : 'Завершите оплату в открывшемся окне'}
+        </p>
+        <p className="text-slate-500 text-xs mb-8">
+          Страница обновится автоматически
         </p>
         {paymentUrl && (
           <Button onClick={() => {
@@ -2629,6 +2570,67 @@ export default function App() {
     );
   };
 
+  // Страница "Доступ ограничен"
+  if (isBanned) {
+    return (
+      <div className="max-w-md mx-auto bg-black min-h-screen relative text-slate-200 font-sans selection:bg-blue-500/30">
+        <div className="p-4 min-h-screen flex flex-col items-center justify-center">
+          <div className="text-center px-4 animate-in fade-in duration-500">
+            {/* Иконка */}
+            <div className="w-24 h-24 mx-auto mb-6 rounded-full bg-red-500/10 flex items-center justify-center">
+              <svg className="w-12 h-12 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+              </svg>
+            </div>
+            
+            {/* Заголовок */}
+            <h1 className="text-2xl font-bold text-white mb-3">Доступ ограничен</h1>
+            
+            {/* Описание */}
+            <p className="text-slate-400 mb-6 leading-relaxed">
+              Ваш аккаунт заблокирован за нарушение правил сервиса.
+            </p>
+            
+            {/* Причина */}
+            {banReason && (
+              <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 mb-6">
+                <div className="text-sm text-red-400 font-medium mb-1">Причина:</div>
+                <div className="text-white text-sm">{banReason}</div>
+              </div>
+            )}
+            
+            {/* Инфо блок */}
+            <div className="bg-slate-800/50 rounded-xl p-4 mb-6 text-left">
+              <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
+                <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Информация
+              </h3>
+              <ul className="text-sm text-slate-400 space-y-2">
+                <li>• Администрация оставляет за собой право отказать в разблокировке</li>
+                <li>• Подробности о причинах блокировки могут не предоставляться в целях защиты алгоритмов безопасности</li>
+              </ul>
+            </div>
+            
+            {/* Кнопка поддержки */}
+            <a 
+              href={SUPPORT_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-2 w-full py-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-xl text-white font-medium transition-colors"
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+              </svg>
+              Связаться с поддержкой
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-md mx-auto bg-black min-h-screen relative text-slate-200 font-sans selection:bg-blue-500/30">
       <div className="p-4 min-h-screen flex flex-col">
@@ -2826,6 +2828,109 @@ export default function App() {
           </div>
         )}
       </Modal>
+
+      {/* Онбординг для новых пользователей */}
+      {showOnboarding && (
+        <div className="fixed inset-0 z-[100] bg-slate-950 flex flex-col">
+          {/* Progress dots */}
+          <div className="flex justify-center gap-2 pt-6 pb-4">
+            {[0, 1, 2, 3].map(i => (
+              <div 
+                key={i} 
+                className={`w-2 h-2 rounded-full transition-all ${i === onboardingStep ? 'bg-blue-500 w-6' : 'bg-slate-700'}`}
+              />
+            ))}
+          </div>
+          
+          {/* Content */}
+          <div className="flex-1 flex flex-col items-center justify-center px-8 text-center">
+            {onboardingStep === 0 && (
+              <>
+                <div className="w-24 h-24 bg-blue-600/20 rounded-full flex items-center justify-center mb-6">
+                  <Shield className="text-blue-500" size={48} />
+                </div>
+                <h2 className="text-2xl font-bold text-white mb-4">Добро пожаловать!</h2>
+                <p className="text-slate-400 leading-relaxed">
+                  BLIN VPN — это современный и безопасный VPN-сервис. 
+                  Мы поможем вам защитить ваше интернет-соединение.
+                </p>
+              </>
+            )}
+            
+            {onboardingStep === 1 && (
+              <>
+                <div className="w-24 h-24 bg-green-600/20 rounded-full flex items-center justify-center mb-6">
+                  <Gift className="text-green-500" size={48} />
+                </div>
+                <h2 className="text-2xl font-bold text-white mb-4">Бесплатный пробный период</h2>
+                <p className="text-slate-400 leading-relaxed">
+                  Попробуйте VPN абсолютно бесплатно! 
+                  Активируйте 24-часовой пробный период и оцените качество сервиса.
+                </p>
+              </>
+            )}
+            
+            {onboardingStep === 2 && (
+              <>
+                <div className="w-24 h-24 bg-purple-600/20 rounded-full flex items-center justify-center mb-6">
+                  <UserPlus className="text-purple-500" size={48} />
+                </div>
+                <h2 className="text-2xl font-bold text-white mb-4">Реферальная программа</h2>
+                <p className="text-slate-400 leading-relaxed">
+                  Приглашайте друзей и получайте бонусы! 
+                  За каждого приглашённого друга вы получите 10% от его первого пополнения.
+                </p>
+              </>
+            )}
+            
+            {onboardingStep === 3 && (
+              <>
+                <div className="w-24 h-24 bg-yellow-600/20 rounded-full flex items-center justify-center mb-6">
+                  <Rocket className="text-yellow-500" size={48} />
+                </div>
+                <h2 className="text-2xl font-bold text-white mb-4">Начнём!</h2>
+                <p className="text-slate-400 leading-relaxed">
+                  Всё готово для начала работы. 
+                  Нажмите "Подключить VPN" на главном экране, чтобы настроить защиту.
+                </p>
+              </>
+            )}
+          </div>
+          
+          {/* Buttons */}
+          <div className="px-6 pb-8 space-y-3">
+            {onboardingStep < 3 ? (
+              <>
+                <button 
+                  onClick={() => setOnboardingStep(prev => prev + 1)}
+                  className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold transition-colors"
+                >
+                  Далее
+                </button>
+                <button 
+                  onClick={() => {
+                    setShowOnboarding(false);
+                    localStorage.setItem(`onboarding_${telegramId}`, 'true');
+                  }}
+                  className="w-full py-3 text-slate-500 hover:text-slate-300 transition-colors"
+                >
+                  Пропустить
+                </button>
+              </>
+            ) : (
+              <button 
+                onClick={() => {
+                  setShowOnboarding(false);
+                  localStorage.setItem(`onboarding_${telegramId}`, 'true');
+                }}
+                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold transition-colors"
+              >
+                Начать пользоваться
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
