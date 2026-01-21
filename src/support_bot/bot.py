@@ -1,6 +1,6 @@
 """
-Бот службы поддержки - Business Mode
-Работает напрямую с админом через личные сообщения
+Бот службы поддержки - Telegram Business Mode
+Бот подключается к бизнес-аккаунту и отвечает от его имени в личных чатах
 """
 import asyncio
 import logging
@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv('SUPPORT_BOT_TOKEN', '')
 MAIN_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
-ADMIN_CHAT_ID = int(os.getenv('SUPPORT_ADMIN_CHAT_ID', '0'))  # ID админа для получения сообщений
 
 # Валидация токенов
 if not BOT_TOKEN:
@@ -32,16 +31,13 @@ if BOT_TOKEN == MAIN_BOT_TOKEN:
     logger.error("❌ КРИТИЧЕСКАЯ ОШИБКА: SUPPORT_BOT_TOKEN совпадает с TELEGRAM_BOT_TOKEN!")
     sys.exit(1)
 
-if ADMIN_CHAT_ID == 0:
-    logger.warning("⚠️ SUPPORT_ADMIN_CHAT_ID не настроен!")
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Кэш для связи message_id -> user_id (для ответов)
-message_user_map = {}
-# Кэш для отправленных info-сообщений (чтобы не дублировать)
-user_info_sent = set()
+# Хранилище закрепленных сообщений с информацией о пользователях
+# {chat_id: pinned_message_id}
+pinned_info_messages = {}
+
 
 def get_user_info(user_id: int) -> dict:
     """Получить информацию о пользователе"""
@@ -67,16 +63,16 @@ def get_user_info(user_id: int) -> dict:
     referrals_row = cursor.fetchone()
     referrals_count = referrals_row[0] if referrals_row else 0
     
-    # Общая сумма пополнений
     cursor.execute("""
         SELECT COALESCE(SUM(amount), 0) FROM transactions 
-        WHERE user_id = ? AND type = 'Пополнение'
+        WHERE user_id = ? AND type IN ('deposit', 'Пополнение')
     """, (user_id,))
     total_paid = cursor.fetchone()[0] or 0
     
     conn.close()
     
     return {
+        'id': user['id'],
         'telegram_id': user['telegram_id'],
         'username': user.get('username', 'N/A'),
         'balance': user.get('balance', 0),
@@ -90,32 +86,27 @@ def get_user_info(user_id: int) -> dict:
         'referred_by': user.get('referred_by')
     }
 
+
 def save_ticket_message(user_id: int, message_text: str, is_admin: bool = False):
     """Сохранить сообщение в БД"""
     conn = database.get_db_connection()
     cursor = conn.cursor()
     try:
-        # Проверяем/создаём тикет
         cursor.execute("SELECT id FROM tickets WHERE user_id = ?", (user_id,))
         ticket = cursor.fetchone()
         
         if not ticket:
-            cursor.execute("""
-                INSERT INTO tickets (user_id, status)
-                VALUES (?, 'Open')
-            """, (user_id,))
+            cursor.execute("INSERT INTO tickets (user_id, status) VALUES (?, 'Open')", (user_id,))
             ticket_id = cursor.lastrowid
         else:
             ticket_id = ticket[0]
             cursor.execute("UPDATE tickets SET status = 'Open' WHERE id = ?", (ticket_id,))
         
-        # Сохраняем сообщение
         cursor.execute("""
             INSERT INTO ticket_messages (ticket_id, user_id, is_admin, message_text)
             VALUES (?, ?, ?, ?)
         """, (ticket_id, user_id if not is_admin else None, 1 if is_admin else 0, message_text))
         
-        # Обновляем тикет
         cursor.execute("""
             UPDATE tickets
             SET last_message = ?, last_message_time = CURRENT_TIMESTAMP,
@@ -127,117 +118,123 @@ def save_ticket_message(user_id: int, message_text: str, is_admin: bool = False)
     finally:
         conn.close()
 
-@dp.message(CommandStart())
-async def cmd_start(message: types.Message):
-    """Приветствие пользователя"""
+
+async def send_user_info_and_pin(chat_id: int, user_id: int, business_connection_id: str = None):
+    """Отправить и закрепить информацию о пользователе"""
+    user_info = get_user_info(user_id)
+    if not user_info:
+        return
+    
+    is_paying = user_info.get('total_paid', 0) > 0 or user_info.get('total_keys', 0) > 0
+    
+    info_message = (
+        f"{'💎' if is_paying else '👤'} <b>{'ПЛАТНЫЙ КЛИЕНТ' if is_paying else 'Клиент'}</b>\n\n"
+        f"👤 <b>Username:</b> @{user_info.get('username', 'N/A')}\n"
+        f"🆔 <b>Telegram ID:</b> <code>{user_info['telegram_id']}</code>\n"
+        f"💰 <b>Баланс:</b> {user_info.get('balance', 0)}₽\n"
+        f"💳 <b>Всего оплачено:</b> {user_info.get('total_paid', 0)}₽\n"
+        f"🔑 <b>Ключей:</b> {user_info.get('total_keys', 0)} (забанено: {user_info.get('banned_keys', 0)})\n"
+        f"👥 <b>Рефералов:</b> {user_info.get('referrals', 0)}\n"
+        f"🎁 <b>Триал:</b> {'Использован' if user_info.get('trial_used') else 'Не использован'}\n"
+        f"📅 <b>Регистрация:</b> {user_info.get('registration_date', 'N/A')}"
+    )
+    
+    # Кнопки быстрых действий
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📱 Открыть приложение", url=f"https://t.me/{os.getenv('BOT_USERNAME', 'blnnnbot')}")]
+        [
+            InlineKeyboardButton(text="💰 +100₽", callback_data=f"add_balance:{user_info['id']}:100"),
+            InlineKeyboardButton(text="💰 +500₽", callback_data=f"add_balance:{user_info['id']}:500"),
+        ],
+        [
+            InlineKeyboardButton(text="📅 +7 дней", callback_data=f"add_days:{user_info['id']}:7"),
+            InlineKeyboardButton(text="📅 +30 дней", callback_data=f"add_days:{user_info['id']}:30"),
+        ],
+        [
+            InlineKeyboardButton(text="🚫 Забанить", callback_data=f"ban_user:{user_info['id']}"),
+            InlineKeyboardButton(text="✅ Разбанить", callback_data=f"unban_user:{user_info['id']}"),
+        ]
     ])
     
-    await message.answer(
-        "👋 <b>Добро пожаловать в службу поддержки!</b>\n\n"
-        "Напишите ваш вопрос, и мы ответим в ближайшее время.\n\n"
-        "💡 <i>Пожалуйста, опишите проблему как можно подробнее.</i>",
-        parse_mode="HTML",
-        reply_markup=keyboard
-    )
-
-@dp.message(Command("admin"))
-async def cmd_admin(message: types.Message):
-    """Команда для админа - показать ID чата"""
-    if message.chat.type == 'private':
-        await message.answer(
-            f"🔧 <b>Настройка бота поддержки</b>\n\n"
-            f"Ваш Chat ID: <code>{message.chat.id}</code>\n\n"
-            f"Добавьте в .env:\n"
-            f"<code>SUPPORT_ADMIN_CHAT_ID={message.chat.id}</code>",
-            parse_mode="HTML"
-        )
-
-@dp.message(F.chat.type == 'private', F.reply_to_message)
-async def handle_admin_reply(message: types.Message):
-    """Обработка ответов админа на сообщения пользователей"""
-    if message.chat.id != ADMIN_CHAT_ID:
-        return
-    
-    # Ищем user_id по ID сообщения, на которое отвечают
-    reply_msg_id = message.reply_to_message.message_id
-    user_id = message_user_map.get(reply_msg_id)
-    
-    if not user_id:
-        # Пробуем найти в forwarded_from
-        if message.reply_to_message.forward_from:
-            telegram_id = message.reply_to_message.forward_from.id
-            user = database.get_user_by_telegram_id(telegram_id)
-            if user:
-                user_id = user['id']
-    
-    if not user_id:
-        await message.reply("❌ Не удалось определить получателя. Ответьте на пересланное сообщение пользователя.")
-        return
-    
     try:
-        user = database.get_user_by_id(user_id)
-        if not user:
-            await message.reply("❌ Пользователь не найден в БД")
-            return
-        
-        telegram_id = user['telegram_id']
-        
-        # Отправляем ответ пользователю
-        if message.photo:
-            await bot.send_photo(
-                chat_id=telegram_id,
-                photo=message.photo[-1].file_id,
-                caption=message.caption or '',
-                parse_mode='HTML'
+        # Отправляем сообщение через business connection если есть
+        if business_connection_id:
+            info_msg = await bot.send_message(
+                chat_id=chat_id,
+                text=info_message,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+                business_connection_id=business_connection_id
             )
-        elif message.document:
-            await bot.send_document(
-                chat_id=telegram_id,
-                document=message.document.file_id,
-                caption=message.caption or '',
-                parse_mode='HTML'
-            )
-        elif message.video:
-            await bot.send_video(
-                chat_id=telegram_id,
-                video=message.video.file_id,
-                caption=message.caption or '',
-                parse_mode='HTML'
-            )
-        elif message.voice:
-            await bot.send_voice(chat_id=telegram_id, voice=message.voice.file_id)
-        elif message.sticker:
-            await bot.send_sticker(chat_id=telegram_id, sticker=message.sticker.file_id)
         else:
-            text = message.html_text if message.html_text else message.text
-            await bot.send_message(
-                chat_id=telegram_id,
-                text=text,
-                parse_mode='HTML' if message.html_text else None
+            info_msg = await bot.send_message(
+                chat_id=chat_id,
+                text=info_message,
+                parse_mode="HTML",
+                reply_markup=keyboard
             )
         
-        # Сохраняем в БД
-        save_ticket_message(user_id, message.text or '[Медиа]', is_admin=True)
+        # Закрепляем сообщение
+        try:
+            if business_connection_id:
+                await bot.pin_chat_message(
+                    chat_id=chat_id, 
+                    message_id=info_msg.message_id,
+                    business_connection_id=business_connection_id,
+                    disable_notification=True
+                )
+            else:
+                await bot.pin_chat_message(
+                    chat_id=chat_id, 
+                    message_id=info_msg.message_id,
+                    disable_notification=True
+                )
+            pinned_info_messages[chat_id] = info_msg.message_id
+            logger.info(f"Закреплено сообщение с информацией о пользователе в чате {chat_id}")
+        except Exception as e:
+            logger.warning(f"Не удалось закрепить сообщение: {e}")
         
-        # Подтверждение админу
-        await message.reply("✅ Ответ отправлен")
-        
+        return info_msg
     except Exception as e:
-        logger.error(f"Ошибка отправки ответа: {e}")
-        await message.reply(f"❌ Ошибка: {e}")
+        logger.error(f"Ошибка отправки информации о пользователе: {e}")
+        return None
 
-@dp.message(F.chat.type == 'private')
-async def handle_user_message(message: types.Message):
-    """Обработка сообщений от пользователей"""
-    # Если это админ и не reply - игнорируем
-    if message.chat.id == ADMIN_CHAT_ID and not message.reply_to_message:
+
+# ========== BUSINESS MODE HANDLERS ==========
+
+@dp.business_connection()
+async def handle_business_connection(event: types.BusinessConnection):
+    """Обработка подключения/отключения от бизнес-аккаунта"""
+    if event.is_enabled:
+        logger.info(f"✅ Бот подключен к бизнес-аккаунту пользователя {event.user.id} (@{event.user.username})")
+    else:
+        logger.info(f"❌ Бот отключен от бизнес-аккаунта пользователя {event.user.id}")
+
+
+@dp.business_message()
+async def handle_business_message(message: types.Message):
+    """
+    Обработка сообщений через Business Mode.
+    Сообщения приходят в чат бизнес-аккаунта с клиентами.
+    """
+    if not message.business_connection_id:
         return
     
+    # Получаем ID пользователя, который написал (клиент)
     user_telegram_id = message.from_user.id
+    chat_id = message.chat.id
     
-    # Получаем или создаем пользователя
+    # Проверяем, от бизнес-аккаунта ли сообщение (ответ поддержки)
+    # Если from_user.id совпадает с chat.id - это ответ от бизнес-аккаунта
+    is_support_reply = (message.from_user.id == message.chat.id)
+    
+    if is_support_reply:
+        # Это ответ поддержки клиенту - просто сохраняем в БД
+        user = database.get_user_by_telegram_id(chat_id)
+        if user:
+            save_ticket_message(user['id'], message.text or '[Медиа]', is_admin=True)
+        return
+    
+    # Это сообщение от клиента
     user = database.get_user_by_telegram_id(user_telegram_id)
     if not user:
         user_id = database.create_user(
@@ -249,85 +246,63 @@ async def handle_user_message(message: types.Message):
     else:
         user_id = user['id']
     
-    # Проверяем, отправляли ли уже инфо об этом пользователе
-    should_send_info = user_id not in user_info_sent
+    # Проверяем, есть ли уже закрепленное сообщение в этом чате
+    if chat_id not in pinned_info_messages:
+        # Отправляем и закрепляем информацию о клиенте
+        await send_user_info_and_pin(chat_id, user_id, message.business_connection_id)
     
-    try:
-        # Сначала отправляем информацию о пользователе (один раз) и закрепляем
-        if should_send_info:
-            user_info = get_user_info(user_id)
-            is_paying = user_info.get('total_paid', 0) > 0 or user_info.get('total_keys', 0) > 0
-            
-            info_message = (
-                f"{'💎' if is_paying else '👤'} <b>{'ПЛАТНЫЙ КЛИЕНТ' if is_paying else 'Новое обращение'}</b>\n\n"
-                f"👤 <b>Пользователь:</b> @{user_info.get('username', 'N/A')}\n"
-                f"🆔 <b>Telegram ID:</b> <code>{user_info['telegram_id']}</code>\n"
-                f"💰 <b>Баланс:</b> {user_info.get('balance', 0)}₽\n"
-                f"💳 <b>Всего оплачено:</b> {user_info.get('total_paid', 0)}₽\n"
-                f"🔑 <b>Ключей:</b> {user_info.get('total_keys', 0)} (забанено: {user_info.get('banned_keys', 0)})\n"
-                f"👥 <b>Рефералов:</b> {user_info.get('referrals', 0)}\n"
-                f"🎁 <b>Пробный период:</b> {'Использован' if user_info.get('trial_used') else 'Не использован'}\n"
-                f"📅 <b>Регистрация:</b> {user_info.get('registration_date', 'N/A')}\n"
-            )
-            
-            # Кнопки быстрых действий
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(text="💰 +100₽", callback_data=f"add_balance:{user_id}:100"),
-                    InlineKeyboardButton(text="💰 +500₽", callback_data=f"add_balance:{user_id}:500"),
-                ],
-                [
-                    InlineKeyboardButton(text="📅 +7 дней", callback_data=f"add_days:{user_id}:7"),
-                    InlineKeyboardButton(text="📅 +30 дней", callback_data=f"add_days:{user_id}:30"),
-                ],
-                [
-                    InlineKeyboardButton(text="🚫 Забанить", callback_data=f"ban_user:{user_id}"),
-                    InlineKeyboardButton(text="✅ Разбанить", callback_data=f"unban_user:{user_id}"),
-                ]
-            ])
-            
-            info_msg = await bot.send_message(
-                chat_id=ADMIN_CHAT_ID,
-                text=info_message,
-                parse_mode="HTML",
-                reply_markup=keyboard
-            )
-            
-            # Закрепляем сообщение
-            try:
-                await bot.pin_chat_message(chat_id=ADMIN_CHAT_ID, message_id=info_msg.message_id, disable_notification=True)
-            except:
-                pass  # Может не быть прав на закрепление
-            
-            user_info_sent.add(user_id)
-        
-        # Пересылаем сообщение пользователя
-        forwarded = await message.forward(chat_id=ADMIN_CHAT_ID)
-        
-        # Сохраняем связь message_id -> user_id
-        message_user_map[forwarded.message_id] = user_id
-        
-        # Сохраняем в БД
-        save_ticket_message(user_id, message.text or '[Медиа]', is_admin=False)
-        
-        # Если первое сообщение - уведомляем пользователя
-        if should_send_info:
-            await message.answer(
-                "✅ <b>Ваше сообщение получено!</b>\n\n"
-                "Мы ответим вам в ближайшее время. Пожалуйста, ожидайте.",
-                parse_mode="HTML"
-            )
-        
-    except Exception as e:
-        logger.error(f"Ошибка обработки сообщения: {e}")
-        await message.answer("❌ Произошла ошибка. Попробуйте позже.")
+    # Сохраняем сообщение клиента в БД
+    save_ticket_message(user_id, message.text or '[Медиа]', is_admin=False)
+    
+    logger.info(f"Business message от {user_telegram_id} (@{message.from_user.username}): {message.text[:50] if message.text else '[медиа]'}...")
+
+
+@dp.edited_business_message()
+async def handle_edited_business_message(message: types.Message):
+    """Обработка редактирования сообщений в business mode"""
+    logger.info(f"Отредактировано business сообщение в чате {message.chat.id}")
+
+
+# ========== FALLBACK: ОБЫЧНЫЙ РЕЖИМ (если Business Mode не подключен) ==========
+
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message):
+    """Приветствие - для случая когда пишут напрямую боту"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 Открыть приложение", url=f"https://t.me/{os.getenv('BOT_USERNAME', 'blnnnbot')}")]
+    ])
+    
+    await message.answer(
+        "👋 <b>Служба поддержки BLIN VPN</b>\n\n"
+        "Этот бот работает через Telegram Business.\n"
+        "Напишите нам в личные сообщения бизнес-аккаунта для получения поддержки.\n\n"
+        "📱 <i>Или откройте мини-приложение:</i>",
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
+
+
+@dp.message(Command("info"))
+async def cmd_info(message: types.Message):
+    """Показать информацию о business connection"""
+    await message.answer(
+        "ℹ️ <b>Telegram Business Mode</b>\n\n"
+        "Этот бот предназначен для работы через Telegram Business.\n\n"
+        "<b>Как настроить:</b>\n"
+        "1. Подключите Telegram Premium\n"
+        "2. Откройте Настройки → Telegram Business\n"
+        "3. Выберите 'Чат-боты'\n"
+        "4. Добавьте этого бота\n\n"
+        "После этого бот будет видеть все сообщения в ваших чатах и сможет отвечать от вашего имени.",
+        parse_mode="HTML"
+    )
+
+
+# ========== CALLBACK HANDLERS (работают и в business mode) ==========
 
 @dp.callback_query(F.data.startswith("add_balance:"))
 async def callback_add_balance(callback: types.CallbackQuery):
     """Быстрое добавление баланса"""
-    if callback.message.chat.id != ADMIN_CHAT_ID:
-        return
-    
     parts = callback.data.split(":")
     user_id = int(parts[1])
     amount = int(parts[2])
@@ -336,27 +311,31 @@ async def callback_add_balance(callback: types.CallbackQuery):
         user = database.get_user_by_id(user_id)
         if user:
             new_balance = database.update_user_balance(user_id, amount)
-            database.add_transaction(user_id, 'Пополнение', amount, 'balance', f'Начислено поддержкой')
+            database.add_transaction(user_id, 'Пополнение', amount, 'balance', 'Начислено поддержкой')
             
-            # Уведомляем пользователя
-            await bot.send_message(
-                chat_id=user['telegram_id'],
-                text=f"💰 <b>Вам начислено {amount}₽!</b>\n\nВаш баланс: {new_balance}₽",
-                parse_mode="HTML"
-            )
+            # Уведомляем клиента через основного бота
+            try:
+                main_bot = Bot(token=MAIN_BOT_TOKEN) if MAIN_BOT_TOKEN else None
+                if main_bot:
+                    await main_bot.send_message(
+                        chat_id=user['telegram_id'],
+                        text=f"💰 <b>Вам начислено {amount}₽!</b>\n\nВаш баланс: {new_balance}₽",
+                        parse_mode="HTML"
+                    )
+                    await main_bot.session.close()
+            except Exception as e:
+                logger.warning(f"Не удалось отправить уведомление через основного бота: {e}")
             
-            await callback.answer(f"✅ Начислено {amount}₽")
+            await callback.answer(f"✅ Начислено {amount}₽, баланс: {new_balance}₽")
         else:
             await callback.answer("❌ Пользователь не найден", show_alert=True)
     except Exception as e:
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
 
+
 @dp.callback_query(F.data.startswith("add_days:"))
 async def callback_add_days(callback: types.CallbackQuery):
     """Быстрое добавление дней"""
-    if callback.message.chat.id != ADMIN_CHAT_ID:
-        return
-    
     parts = callback.data.split(":")
     user_id = int(parts[1])
     days = int(parts[2])
@@ -365,7 +344,6 @@ async def callback_add_days(callback: types.CallbackQuery):
         conn = database.get_db_connection()
         cursor = conn.cursor()
         
-        # Продлеваем все активные ключи пользователя
         cursor.execute("""
             UPDATE vpn_keys
             SET expires_at = datetime(
@@ -382,23 +360,27 @@ async def callback_add_days(callback: types.CallbackQuery):
         if updated > 0:
             user = database.get_user_by_id(user_id)
             if user:
-                await bot.send_message(
-                    chat_id=user['telegram_id'],
-                    text=f"🎁 <b>Вам добавлено {days} дней подписки!</b>",
-                    parse_mode="HTML"
-                )
-            await callback.answer(f"✅ Добавлено {days} дней к {updated} ключам")
+                try:
+                    main_bot = Bot(token=MAIN_BOT_TOKEN) if MAIN_BOT_TOKEN else None
+                    if main_bot:
+                        await main_bot.send_message(
+                            chat_id=user['telegram_id'],
+                            text=f"🎁 <b>Вам добавлено {days} дней подписки!</b>",
+                            parse_mode="HTML"
+                        )
+                        await main_bot.session.close()
+                except:
+                    pass
+            await callback.answer(f"✅ +{days} дней к {updated} ключам")
         else:
-            await callback.answer("⚠️ У пользователя нет активных ключей", show_alert=True)
+            await callback.answer("⚠️ Нет активных ключей", show_alert=True)
     except Exception as e:
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
 
 @dp.callback_query(F.data.startswith("ban_user:"))
 async def callback_ban_user(callback: types.CallbackQuery):
     """Быстрый бан пользователя"""
-    if callback.message.chat.id != ADMIN_CHAT_ID:
-        return
-    
     parts = callback.data.split(":")
     user_id = int(parts[1])
     
@@ -408,12 +390,10 @@ async def callback_ban_user(callback: types.CallbackQuery):
     except Exception as e:
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
 
+
 @dp.callback_query(F.data.startswith("unban_user:"))
 async def callback_unban_user(callback: types.CallbackQuery):
     """Быстрый разбан пользователя"""
-    if callback.message.chat.id != ADMIN_CHAT_ID:
-        return
-    
     parts = callback.data.split(":")
     user_id = int(parts[1])
     
@@ -421,21 +401,29 @@ async def callback_unban_user(callback: types.CallbackQuery):
         database.update_user_status(user_id, 'Active')
         user = database.get_user_by_id(user_id)
         if user:
-            await bot.send_message(
-                chat_id=user['telegram_id'],
-                text="✅ <b>Ваш аккаунт разблокирован!</b>\n\nВы снова можете пользоваться сервисом.",
-                parse_mode="HTML"
-            )
+            try:
+                main_bot = Bot(token=MAIN_BOT_TOKEN) if MAIN_BOT_TOKEN else None
+                if main_bot:
+                    await main_bot.send_message(
+                        chat_id=user['telegram_id'],
+                        text="✅ <b>Ваш аккаунт разблокирован!</b>",
+                        parse_mode="HTML"
+                    )
+                    await main_bot.session.close()
+            except:
+                pass
         await callback.answer("✅ Пользователь разбанен")
     except Exception as e:
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
 
+
 async def main():
     """Запуск бота"""
-    logger.info("🚀 Бот поддержки запущен (Business Mode)...")
-    logger.info(f"   Admin Chat ID: {ADMIN_CHAT_ID}")
+    logger.info("🚀 Бот поддержки запущен (Telegram Business Mode)")
+    logger.info("   Для работы подключите бота к Telegram Business аккаунту")
     await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+
 
 if __name__ == "__main__":
     try:
