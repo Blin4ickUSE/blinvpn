@@ -13,20 +13,6 @@ services:
     depends_on:
       - webhook
 
-  # Бот поддержки
-  support_bot:
-    build:
-      context: .
-      dockerfile: Dockerfile.support_bot
-    container_name: blinvpn_support_bot
-    restart: unless-stopped
-    env_file:
-      - .env
-    volumes:
-      - ./data:/app/data
-    depends_on:
-      - webhook
-
   # Webhook сервер для платежных систем
   webhook:
     build:
@@ -94,4 +80,3 @@ services:
 
 volumes:
   data:
-
