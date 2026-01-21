@@ -77,7 +77,7 @@ services:
     container_name: blinvpn_panel
     restart: unless-stopped
     ports:
-      - "127.0.0.1:${PANEL_PORT:-3001}:3001"
+      - "127.0.0.1:${PANEL_PORT:-9473}:9473"
     env_file:
       - .env
     depends_on:
