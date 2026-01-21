@@ -9,8 +9,7 @@ COPY panel/ ./
 
 RUN npm run build
 
-EXPOSE 9473
+EXPOSE 3000
 
 # --cors разрешает все origins, -L разрешает все хосты
-CMD ["npx", "serve", "-s", "dist", "-l", "9473", "--cors", "-L"]
-
+CMD ["npx", "serve", "-s", "dist", "-l", "3001", "--cors", "-L"]
