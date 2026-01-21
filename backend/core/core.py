@@ -48,7 +48,7 @@ def send_support_message_to_user(telegram_id: int, message: str) -> bool:
     # Если не удалось - через основной бот
     return send_notification_to_user(telegram_id, message)
 
-def send_notification_to_user(telegram_id: int, message: str) -> bool:
+def send_notification_to_user(telegram_id: int, message: str, reply_markup: dict = None) -> bool:
     """Отправить уведомление пользователю в Telegram"""
     if not TELEGRAM_BOT_TOKEN:
         return False
@@ -60,18 +60,128 @@ def send_notification_to_user(telegram_id: int, message: str) -> bool:
             'text': message,
             'parse_mode': 'HTML'
         }
+        if reply_markup:
+            data['reply_markup'] = reply_markup
         response = requests.post(url, json=data, timeout=5)
         return response.status_code == 200
     except Exception as e:
         logger.error(f"Failed to send notification to user {telegram_id}: {e}")
         return False
 
-def send_notification_to_admin(message: str) -> bool:
+
+def send_key_created_notification(telegram_id: int, days: int, traffic_gb: int, devices: int) -> bool:
+    """Отправить уведомление о создании ключа с кнопкой открытия приложения"""
+    if not TELEGRAM_BOT_TOKEN:
+        return False
+    
+    miniapp_url = os.getenv('MINIAPP_URL', 'https://your-domain.com/miniapp')
+    
+    message = (
+        "🎉 <b>Ваш VPN ключ готов!</b>\n\n"
+        f"📅 Срок действия: {days} дней\n"
+        f"📊 Лимит трафика: {traffic_gb} ГБ\n"
+        f"📱 Устройства: {devices}\n\n"
+        "🔗 Нажмите, чтобы увидеть инструкцию"
+    )
+    
+    reply_markup = {
+        'inline_keyboard': [[{
+            'text': '📱 Открыть приложение',
+            'web_app': {'url': miniapp_url}
+        }]]
+    }
+    
+    return send_notification_to_user(telegram_id, message, reply_markup)
+
+def send_notification_to_admin(message: str, reply_markup: dict = None) -> bool:
     """Отправить уведомление администратору"""
     if not TELEGRAM_ADMIN_ID or not TELEGRAM_BOT_TOKEN:
         return False
     
-    return send_notification_to_user(int(TELEGRAM_ADMIN_ID), message)
+    return send_notification_to_user(int(TELEGRAM_ADMIN_ID), message, reply_markup)
+
+
+def send_withdrawal_request_to_admin(transaction_id: int, user_id: int, telegram_id: int, 
+                                     username: str, amount: float, method: str, 
+                                     details: str) -> bool:
+    """Отправить запрос на вывод админу с кнопками Принять/Отказать"""
+    if not TELEGRAM_ADMIN_ID or not TELEGRAM_BOT_TOKEN:
+        return False
+    
+    message = (
+        f"💸 <b>Запрос на вывод средств</b>\n\n"
+        f"🆔 ID заявки: #{transaction_id}\n"
+        f"👤 Пользователь: @{username}\n"
+        f"🔢 Telegram ID: {telegram_id}\n"
+        f"💵 Сумма: {amount}₽\n"
+        f"💳 Метод: {method}\n"
+        f"📝 Детали: {details}"
+    )
+    
+    reply_markup = {
+        'inline_keyboard': [
+            [
+                {'text': '✅ Принять', 'callback_data': f'withdraw_approve_{transaction_id}'},
+                {'text': '❌ Отказать', 'callback_data': f'withdraw_reject_{transaction_id}'}
+            ]
+        ]
+    }
+    
+    return send_notification_to_admin(message, reply_markup)
+
+def send_formatted_notification(telegram_id: int, message: str, parse_mode: str = 'HTML', 
+                                 reply_markup: dict = None) -> bool:
+    """Отправить форматированное уведомление пользователю с поддержкой HTML/Markdown"""
+    if not TELEGRAM_BOT_TOKEN:
+        return False
+    
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        data = {
+            'chat_id': telegram_id,
+            'text': message,
+            'parse_mode': parse_mode
+        }
+        if reply_markup:
+            data['reply_markup'] = reply_markup
+        
+        response = requests.post(url, json=data, timeout=10)
+        if response.status_code != 200:
+            # Если ошибка парсинга - пробуем без форматирования
+            if 'parse_error' in response.text.lower() or "can't parse" in response.text.lower():
+                data['parse_mode'] = None
+                response = requests.post(url, json=data, timeout=10)
+        
+        return response.status_code == 200
+    except Exception as e:
+        logger.error(f"Failed to send formatted notification to {telegram_id}: {e}")
+        return False
+
+
+def send_photo_to_user(telegram_id: int, photo_url: str, caption: str = None, 
+                       parse_mode: str = 'HTML', reply_markup: dict = None) -> bool:
+    """Отправить фото пользователю с подписью"""
+    if not TELEGRAM_BOT_TOKEN:
+        return False
+    
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+        data = {
+            'chat_id': telegram_id,
+            'photo': photo_url
+        }
+        if caption:
+            data['caption'] = caption
+            data['parse_mode'] = parse_mode
+        if reply_markup:
+            data['reply_markup'] = reply_markup
+        
+        response = requests.post(url, json=data, timeout=15)
+        return response.status_code == 200
+    except Exception as e:
+        logger.error(f"Failed to send photo to {telegram_id}: {e}")
+        return False
+
 
 def send_notification_to_support_group(message: str) -> bool:
     """Отправить уведомление в группу поддержки"""
