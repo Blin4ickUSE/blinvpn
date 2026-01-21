@@ -19,11 +19,18 @@ AUTO_PAY_MIN_BALANCE = 15.0
 # Максимальный отрицательный баланс
 MAX_NEGATIVE_BALANCE = -15.0
 
-def calculate_whitelist_price(gb: int, subscription_fee: float = 100.0, price_per_gb: float = 15.0) -> float:
+def calculate_whitelist_price(gb: int = 100, subscription_fee: float = 299.0, price_per_gb: float = 15.0, pricing_type: str = 'fixed') -> float:
     """
-    Рассчитывает цену за whitelist bypass: абонентская плата (100₽) + 15₽/ГБ
-    Диапазон: 5-500 ГБ
+    Рассчитывает цену за whitelist bypass:
+    - fixed: фиксированная цена 299₽/месяц с 100ГБ трафика
+    - dynamic: абонентская плата + цена за ГБ
+    
+    По умолчанию: 299₽/месяц, 100ГБ трафика
     """
+    if pricing_type == 'fixed':
+        return subscription_fee  # 299₽ фиксированная цена
+    
+    # Динамическая цена (legacy)
     if gb < 5:
         gb = 5
     if gb > 500:
