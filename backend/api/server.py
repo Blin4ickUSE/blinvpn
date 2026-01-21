@@ -782,7 +782,7 @@ def delete_payment_method(method_id: int):
 
 @app.route('/api/user/devices/<int:device_id>', methods=['DELETE'])
 def delete_user_device(device_id: int):
-    """Удалить устройство пользователя"""
+    """Удалить устройство пользователя и ключ из Remnawave"""
     telegram_id = request.args.get('telegram_id', type=int)
     if not telegram_id:
         return jsonify({'error': 'telegram_id required'}), 400
@@ -796,31 +796,35 @@ def delete_user_device(device_id: int):
     try:
         # Проверяем, что устройство принадлежит пользователю
         cursor.execute("""
-            SELECT id, vpn_key_id FROM devices 
-            WHERE id = ? AND user_id = ?
+            SELECT d.id, d.vpn_key_id, vk.key_uuid
+            FROM devices d
+            LEFT JOIN vpn_keys vk ON d.vpn_key_id = vk.id
+            WHERE d.id = ? AND d.user_id = ?
         """, (device_id, user['id']))
         device = cursor.fetchone()
         
         if not device:
             return jsonify({'error': 'Device not found'}), 404
         
-        # Деактивируем устройство
-        cursor.execute("""
-            UPDATE devices 
-            SET is_active = 0 
-            WHERE id = ? AND user_id = ?
-        """, (device_id, user['id']))
+        key_uuid = device['key_uuid'] if 'key_uuid' in device.keys() else None
         
-        # Если есть связанный VPN ключ, деактивируем его тоже
+        # Удаляем из Remnawave если есть UUID
+        if key_uuid:
+            try:
+                remnawave.remnawave_api.delete_user_sync(key_uuid)
+                logger.info(f"Deleted key {key_uuid} from Remnawave")
+            except Exception as e:
+                logger.error(f"Failed to delete key {key_uuid} from Remnawave: {e}")
+        
+        # Удаляем устройство
+        cursor.execute("DELETE FROM devices WHERE id = ? AND user_id = ?", (device_id, user['id']))
+        
+        # Удаляем связанный VPN ключ
         if device['vpn_key_id']:
-            cursor.execute("""
-                UPDATE vpn_keys 
-                SET status = 'Inactive' 
-                WHERE id = ?
-            """, (device['vpn_key_id'],))
+            cursor.execute("DELETE FROM vpn_keys WHERE id = ?", (device['vpn_key_id'],))
         
         conn.commit()
-        logger.info(f"Device {device_id} deleted for user {telegram_id}")
+        logger.info(f"Device {device_id} and key deleted for user {telegram_id}")
         return jsonify({'success': True})
     except Exception as e:
         conn.rollback()
@@ -1082,13 +1086,14 @@ def update_promocode(promo_id: int):
 @app.route('/api/panel/mailing', methods=['POST'])
 @require_auth
 def send_mailing():
-    """Отправить рассылку"""
+    """Отправить рассылку с поддержкой HTML/Markdown форматирования"""
     data = request.json
     message = data.get('message')
     target_users = data.get('target_users', 'all')  # 'all' or list/int user_ids
     button_type = data.get('button_type')
     button_value = data.get('button_value')
     image_url = data.get('image_url')
+    parse_mode = data.get('parse_mode', 'HTML')  # HTML или Markdown
 
     if not message:
         return jsonify({'success': False, 'error': 'Message is required'}), 400
@@ -1100,21 +1105,49 @@ def send_mailing():
         # Определяем список получателей
         user_rows = []
         if target_users == 'all':
-            cursor.execute("SELECT id, telegram_id FROM users")
+            cursor.execute("SELECT id, telegram_id FROM users WHERE is_banned = 0 OR is_banned IS NULL")
             user_rows = cursor.fetchall()
         elif isinstance(target_users, list):
             placeholders = ",".join("?" for _ in target_users)
             cursor.execute(
-                f"SELECT id, telegram_id FROM users WHERE id IN ({placeholders})",
+                f"SELECT id, telegram_id FROM users WHERE id IN ({placeholders}) AND (is_banned = 0 OR is_banned IS NULL)",
                 tuple(target_users),
             )
             user_rows = cursor.fetchall()
 
+        # Формируем кнопки если есть
+        reply_markup = None
+        if button_type and button_value:
+            if button_type == 'url':
+                reply_markup = {
+                    'inline_keyboard': [[{'text': button_value.split('|')[0] if '|' in button_value else 'Перейти', 
+                                          'url': button_value.split('|')[1] if '|' in button_value else button_value}]]
+                }
+            elif button_type == 'webapp':
+                reply_markup = {
+                    'inline_keyboard': [[{'text': button_value.split('|')[0] if '|' in button_value else 'Открыть', 
+                                          'web_app': {'url': button_value.split('|')[1] if '|' in button_value else button_value}}]]
+                }
+
         sent = 0
+        errors = 0
         for row in user_rows:
             telegram_id = row['telegram_id']
-            if core.send_notification_to_user(telegram_id, message):
-                sent += 1
+            try:
+                if image_url:
+                    # Отправка с изображением
+                    success = core.send_photo_to_user(telegram_id, image_url, message, parse_mode, reply_markup)
+                else:
+                    # Обычная рассылка
+                    success = core.send_formatted_notification(telegram_id, message, parse_mode, reply_markup)
+                
+                if success:
+                    sent += 1
+                else:
+                    errors += 1
+            except Exception as e:
+                logger.error(f"Error sending mailing to {telegram_id}: {e}")
+                errors += 1
 
         # Сохраняем запись о рассылке
         cursor.execute(
@@ -1128,7 +1161,7 @@ def send_mailing():
     finally:
         conn.close()
 
-    return jsonify({'success': True, 'sent': sent})
+    return jsonify({'success': True, 'sent': sent, 'errors': errors})
 
 @app.route('/api/panel/mailing/stats', methods=['GET'])
 @require_auth
@@ -1813,16 +1846,8 @@ def create_key():
         
         # Уведомление админу удалено - оставляем только для пополнений и запросов на вывод
         
-        # Отправляем ключ пользователю
-        if subscription_url:
-            user_msg = (
-                f"🎉 Ваш VPN ключ готов!\n\n"
-                f"📅 Срок действия: {days} дней\n"
-                f"📊 Лимит трафика: {traffic_gb} ГБ\n"
-                f"📱 Устройства: {devices}\n\n"
-                f"🔗 Ссылка для подключения:\n<code>{subscription_url}</code>"
-            )
-            core.send_notification_to_user(telegram_id, user_msg)
+        # Отправляем ключ пользователю с кнопкой открытия приложения
+        core.send_key_created_notification(telegram_id, days, traffic_gb, devices)
         
         return jsonify({
             'success': True,
@@ -1863,24 +1888,20 @@ def toggle_key_block(key_id):
         
         conn.commit()
         
-        # Если блокируем, также отключаем в Remnawave
+        # Если блокируем, также отключаем в Remnawave через update_user
         cursor.execute("SELECT key_uuid FROM vpn_keys WHERE id = ?", (key_id,))
         row = cursor.fetchone()
         
         if row and row['key_uuid']:
             try:
-                import asyncio
-                from backend.api import remnawave
+                from backend.api.remnawave import UserStatus
                 
-                async def update_remnawave():
-                    api = remnawave.get_remnawave_api()
-                    async with api as rw_api:
-                        if blocked:
-                            await rw_api.disable_user(row['key_uuid'])
-                        else:
-                            await rw_api.enable_user(row['key_uuid'])
-                
-                asyncio.run(update_remnawave())
+                # Обновляем статус в Remnawave
+                status = UserStatus.DISABLED if blocked else UserStatus.ACTIVE
+                remnawave.remnawave_api.update_user_sync(
+                    uuid=row['key_uuid'],
+                    status=status
+                )
                 logger.info(f"Key {key_id} {'blocked' if blocked else 'unblocked'} in Remnawave")
             except Exception as e:
                 logger.error(f"Failed to update key status in Remnawave: {e}")
@@ -1893,6 +1914,133 @@ def toggle_key_block(key_id):
         })
     except Exception as e:
         logger.error(f"Error toggling key block: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/panel/keys/<int:key_id>', methods=['DELETE'])
+@require_auth
+def delete_key(key_id: int):
+    """Удалить ключ из панели и Remnawave"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Получаем информацию о ключе
+        cursor.execute("SELECT key_uuid, user_id FROM vpn_keys WHERE id = ?", (key_id,))
+        row = cursor.fetchone()
+        
+        if not row:
+            return jsonify({'error': 'Ключ не найден'}), 404
+        
+        key_uuid = row['key_uuid']
+        user_id = row['user_id']
+        
+        # Удаляем из Remnawave
+        if key_uuid:
+            try:
+                remnawave.remnawave_api.delete_user_sync(key_uuid)
+                logger.info(f"Deleted key {key_uuid} from Remnawave")
+            except Exception as e:
+                logger.error(f"Failed to delete key {key_uuid} from Remnawave: {e}")
+        
+        # Удаляем связанные устройства
+        cursor.execute("DELETE FROM devices WHERE vpn_key_id = ?", (key_id,))
+        
+        # Удаляем ключ
+        cursor.execute("DELETE FROM vpn_keys WHERE id = ?", (key_id,))
+        
+        conn.commit()
+        
+        # Уведомляем пользователя
+        cursor.execute("SELECT telegram_id FROM users WHERE id = ?", (user_id,))
+        user_row = cursor.fetchone()
+        if user_row:
+            core.send_notification_to_user(
+                user_row['telegram_id'],
+                "🗑 Ваша VPN подписка была удалена администратором."
+            )
+        
+        logger.info(f"Key {key_id} deleted from panel")
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Error deleting key {key_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/panel/keys/<int:key_id>', methods=['PUT'])
+@require_auth
+def update_key(key_id: int):
+    """Обновить параметры ключа"""
+    data = request.json
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Получаем информацию о ключе
+        cursor.execute("SELECT key_uuid, expiry_date, traffic_limit, devices_limit FROM vpn_keys WHERE id = ?", (key_id,))
+        row = cursor.fetchone()
+        
+        if not row:
+            return jsonify({'error': 'Ключ не найден'}), 404
+        
+        key_uuid = row['key_uuid']
+        
+        # Новые значения
+        new_expiry_days = data.get('expiry_days')
+        new_traffic_gb = data.get('traffic_gb')
+        new_devices = data.get('devices_limit')
+        
+        # Обновляем в БД
+        updates = []
+        values = []
+        
+        if new_expiry_days is not None:
+            new_expiry_date = (datetime.now() + timedelta(days=int(new_expiry_days))).isoformat()
+            updates.append("expiry_date = ?")
+            values.append(new_expiry_date)
+        
+        if new_traffic_gb is not None:
+            traffic_bytes = int(float(new_traffic_gb) * (1024 ** 3))
+            updates.append("traffic_limit = ?")
+            values.append(traffic_bytes)
+        
+        if new_devices is not None:
+            updates.append("devices_limit = ?")
+            values.append(int(new_devices))
+        
+        if updates:
+            values.append(key_id)
+            cursor.execute(f"UPDATE vpn_keys SET {', '.join(updates)} WHERE id = ?", tuple(values))
+            conn.commit()
+        
+        # Обновляем в Remnawave
+        if key_uuid:
+            try:
+                update_params = {'uuid': key_uuid}
+                
+                if new_expiry_days is not None:
+                    update_params['expire_at'] = datetime.now() + timedelta(days=int(new_expiry_days))
+                
+                if new_traffic_gb is not None:
+                    update_params['traffic_limit_bytes'] = int(float(new_traffic_gb) * (1024 ** 3))
+                
+                if new_devices is not None:
+                    update_params['hwid_device_limit'] = int(new_devices)
+                
+                remnawave.remnawave_api.update_user_sync(**update_params)
+                logger.info(f"Updated key {key_uuid} in Remnawave")
+            except Exception as e:
+                logger.error(f"Failed to update key {key_uuid} in Remnawave: {e}")
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Error updating key {key_id}: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
         conn.close()
@@ -2173,36 +2321,32 @@ def request_withdrawal():
             # Создаем заявку на вывод
             if method == 'card':
                 description = f'Заявка на вывод {amount}₽ на карту. Банк: {bank}, Телефон: {phone}'
+                details = f"🏦 Банк: {bank}\n📱 Телефон: {phone}"
             else:
                 description = f'Заявка на вывод {amount}₽ в криптовалюте. Сеть: {crypto_net}, Адрес: {crypto_addr}'
+                details = f"🌐 Сеть: {crypto_net}\n📝 Адрес: {crypto_addr}"
             
             cursor.execute("""
                 INSERT INTO transactions (user_id, type, amount, status, description, payment_method)
                 VALUES (?, 'withdrawal_request', ?, 'Pending', ?, ?)
             """, (user['id'], -amount, description, 'Карта' if method == 'card' else 'Crypto'))
             
+            transaction_id = cursor.lastrowid
             conn.commit()
             
-            # Уведомление в группу поддержки о запросе на вывод
+            # Отправляем запрос ТОЛЬКО админу с кнопками Принять/Отказать
             username = user.get('username', 'N/A')
-            support_message = (
-                f"💸 <b>Запрос на вывод средств</b>\n\n"
-                f"👤 Пользователь: @{username}\n"
-                f"🆔 Telegram ID: {telegram_id}\n"
-                f"💵 Сумма: {amount}₽\n"
-                f"💳 Метод: {'Банковская карта' if method == 'card' else 'Криптовалюта'}\n"
+            method_name = 'Банковская карта' if method == 'card' else 'Криптовалюта'
+            
+            core.send_withdrawal_request_to_admin(
+                transaction_id=transaction_id,
+                user_id=user['id'],
+                telegram_id=telegram_id,
+                username=username,
+                amount=amount,
+                method=method_name,
+                details=details
             )
-            
-            if method == 'card':
-                support_message += f"🏦 Банк: {bank}\n📱 Телефон: {phone}"
-            else:
-                support_message += f"🌐 Сеть: {crypto_net}\n📝 Адрес: <code>{crypto_addr}</code>"
-            
-            # Отправляем в группу поддержки
-            core.send_notification_to_support_group(support_message)
-            
-            # Также уведомляем администратора
-            core.send_notification_to_admin(support_message)
             
             return jsonify({
                 'success': True,
