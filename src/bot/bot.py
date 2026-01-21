@@ -1,6 +1,5 @@
 """
-Бот службы поддержки
-Интегрирован с панелью управления
+Основной бот Telegram
 """
 import asyncio
 import logging
@@ -8,392 +7,578 @@ import os
 import sys
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, MessageReactionUpdated
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, CallbackQuery
+from aiogram.enums import ParseMode
 
 # Добавляем путь к backend
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 
 from backend.database import database
-from backend.core import core
+from backend.core import core, abuse_detected
+from backend.core.blacklist_updater import start_blacklist_updater
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv('SUPPORT_BOT_TOKEN', '')
-MAIN_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
-SUPPORT_GROUP_ID = int(os.getenv('TELEGRAM_SUPPORT_GROUP_ID', '-1000000000000'))
+BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+SUPPORT_BOT_TOKEN = os.getenv('SUPPORT_BOT_TOKEN', '')
+WEB_APP_URL = os.getenv('MINIAPP_URL', 'https://your-domain.com/miniapp')
 
-# Валидация токенов - предотвращение конфликта "два бота на одном токене"
+# Валидация токенов
 if not BOT_TOKEN:
-    logger.error("❌ SUPPORT_BOT_TOKEN не указан в .env!")
+    logger.error("❌ TELEGRAM_BOT_TOKEN не указан в .env!")
     sys.exit(1)
 
-if BOT_TOKEN == MAIN_BOT_TOKEN:
-    logger.error("❌ КРИТИЧЕСКАЯ ОШИБКА: SUPPORT_BOT_TOKEN совпадает с TELEGRAM_BOT_TOKEN!")
+if BOT_TOKEN == SUPPORT_BOT_TOKEN:
+    logger.error("❌ КРИТИЧЕСКАЯ ОШИБКА: TELEGRAM_BOT_TOKEN совпадает с SUPPORT_BOT_TOKEN!")
     logger.error("   Это вызовет ошибку 'Conflict: terminated by other getUpdates request'")
     logger.error("   Создайте ОТДЕЛЬНОГО бота в @BotFather для службы поддержки!")
     sys.exit(1)
 
-if SUPPORT_GROUP_ID == -1000000000000:
-    logger.warning("⚠️ TELEGRAM_SUPPORT_GROUP_ID не настроен, используется значение по умолчанию")
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-def init_db():
-    """Инициализация БД для тикетов"""
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
-    # Таблицы уже созданы в database.py
-    conn.close()
-
-def get_topic_id(user_id: int) -> int:
-    """Получить ID топика по ID пользователя"""
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT telegram_topic_id FROM tickets WHERE user_id = ?", (user_id,))
-        result = cursor.fetchone()
-        return result[0] if result else None
-    finally:
-        conn.close()
-
-def save_topic_id(user_id: int, topic_id: int):
-    """Сохранить связь пользователя и топика"""
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
-    try:
-        # Проверяем, есть ли уже тикет
-        cursor.execute("SELECT id FROM tickets WHERE user_id = ?", (user_id,))
-        existing = cursor.fetchone()
-        
-        if existing:
-            cursor.execute("""
-                UPDATE tickets 
-                SET telegram_topic_id = ?, status = 'Open'
-                WHERE user_id = ?
-            """, (topic_id, user_id))
-        else:
-            cursor.execute("""
-                INSERT INTO tickets (user_id, telegram_topic_id, status)
-                VALUES (?, ?, 'Open')
-            """, (user_id, topic_id))
-        
-        conn.commit()
-    finally:
-        conn.close()
-
-def get_user_id_by_topic(topic_id: int) -> int:
-    """Получить ID пользователя по ID топика"""
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT user_id FROM tickets WHERE telegram_topic_id = ?", (topic_id,))
-        result = cursor.fetchone()
-        return result[0] if result else None
-    finally:
-        conn.close()
-
-def get_user_info(user_id: int) -> dict:
-    """Получить информацию о пользователе для тикета"""
-    user = database.get_user_by_id(user_id)
-    if not user:
-        return {}
+def extract_referral_id(text: str) -> int:
+    """Извлечь referral ID из команды /start
     
-    # Получаем статистику ключей
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT COUNT(*) as total, 
-               SUM(CASE WHEN status = 'Banned' THEN 1 ELSE 0 END) as banned
-        FROM vpn_keys
-        WHERE user_id = ?
-    """, (user_id,))
-    
-    keys_stats = cursor.fetchone()
-    total_keys = keys_stats[0] if keys_stats else 0
-    banned_keys = keys_stats[1] if keys_stats else 0
-    
-    # Получаем рефералов
-    cursor.execute("SELECT COUNT(*) FROM users WHERE referred_by = ?", (user_id,))
-    referrals_row = cursor.fetchone()
-    referrals_count = referrals_row[0] if referrals_row else 0
-    
-    conn.close()
-    
-    return {
-        'telegram_id': user['telegram_id'],
-        'username': user.get('username', 'N/A'),
-        'balance': user.get('balance', 0),
-        'status': user.get('status', 'Unknown'),
-        'total_keys': total_keys,
-        'banned_keys': banned_keys,
-        'referrals': referrals_count,
-        'trial_used': user.get('trial_used', 0),
-        'registration_date': user.get('registration_date', 'N/A')
-    }
+    Поддерживаемые форматы:
+    - /start ref123456789
+    - /start ref=123456789
+    """
+    # Пробуем формат ref123456789 (без =)
+    match = re.search(r'ref(\d+)', text)
+    if match:
+        return int(match.group(1))
+    # Пробуем формат ref=123456789 (с =)
+    match = re.search(r'ref=(\d+)', text)
+    return int(match.group(1)) if match else None
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    """Приветствие пользователя"""
-    await message.answer(
-        "Здравствуйте! Напишите ваш вопрос, и мы создадим обращение в службу поддержки."
-    )
-
-@dp.message(F.chat.type == 'private')
-async def handle_user_message(message: types.Message):
-    """Обработка сообщений от пользователя"""
-    user_id_telegram = message.from_user.id
+    """Обработчик команды /start"""
+    telegram_id = message.from_user.id
     
-    # Получаем или создаем пользователя в БД
-    user = database.get_user_by_telegram_id(user_id_telegram)
-    if not user:
-        user_id = database.create_user(
-            user_id_telegram,
-            message.from_user.username,
-            message.from_user.full_name
-        )
-        user = database.get_user_by_id(user_id)
-    else:
-        user_id = user['id']
-    
-    topic_id = get_topic_id(user_id)
-    
-    # Если топик есть, пробуем отправить в него сообщение
-    if topic_id:
-        try:
-            await message.forward(chat_id=SUPPORT_GROUP_ID, message_thread_id=topic_id)
-            
-            # Сохраняем сообщение в БД
-            conn = database.get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO ticket_messages (ticket_id, user_id, is_admin, message_text)
-                VALUES ((SELECT id FROM tickets WHERE user_id = ?), ?, 0, ?)
-            """, (user_id, user_id, message.text or ''))
-            cursor.execute("""
-                UPDATE tickets
-                SET last_message = ?, last_message_time = CURRENT_TIMESTAMP, unread_count = unread_count + 1, status = 'Open'
-                WHERE user_id = ?
-            """, (message.text or '', user_id))
-            conn.commit()
-            conn.close()
-            return
-        except Exception as e:
-            # Топик не существует или удалён - очищаем и создаём новый
-            logger.warning(f"Не удалось отправить в топик {topic_id}, создаём новый: {e}")
-            conn = database.get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("UPDATE tickets SET telegram_topic_id = NULL WHERE user_id = ?", (user_id,))
-            conn.commit()
-            conn.close()
-            topic_id = None
-    
-    # Создаем новый топик только если его нет или предыдущий недоступен
-    if not topic_id:
-        try:
-            topic_name = f"{message.from_user.full_name} ({user_id_telegram})"
-            topic = await bot.create_forum_topic(chat_id=SUPPORT_GROUP_ID, name=topic_name)
-            topic_id = topic.message_thread_id
-            save_topic_id(user_id, topic_id)
-            
-            # Отправляем информацию о пользователе
-            user_info = get_user_info(user_id)
-            info_message = (
-                f"👥 <b>Новое обращение!</b>\n\n"
-                f"💸 <b>ПЛАТНЫЙ КЛИЕНТ?</b> {'Да' if user_info.get('balance', 0) > 0 or user_info.get('total_keys', 0) > 0 else 'Нет'}\n\n"
-                f"👤 <b>ID:</b> {user_info['telegram_id']}\n"
-                f"💰 <b>Баланс:</b> {user_info.get('balance', 0)}₽\n"
-                f"🔑 <b>Всего ключей:</b> {user_info.get('total_keys', 0)}\n"
-                f"🚫 <b>Забаненных ключей:</b> {user_info.get('banned_keys', 0)}/{user_info.get('total_keys', 0)}\n"
-                f"👆 <b>Чей реферал:</b> {'Есть' if user.get('referred_by') else 'Ничей'}\n"
-                f"👇 <b>Рефералов:</b> {user_info.get('referrals', 0)}\n"
-                f"♾️ <b>Брал пробный период?</b> {'Да' if user_info.get('trial_used') else 'Нет'}\n"
-                f"⌛️ <b>Дата регистрации:</b> {user_info.get('registration_date', 'N/A')}"
-            )
-            
-            await bot.send_message(
-                chat_id=SUPPORT_GROUP_ID,
-                message_thread_id=topic_id,
-                text=info_message,
-                parse_mode="HTML"
-            )
-            
-            # Пересылаем сообщение пользователя
-            await message.forward(chat_id=SUPPORT_GROUP_ID, message_thread_id=topic_id)
-            
-            # Сохраняем сообщение в БД
-            conn = database.get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO ticket_messages (ticket_id, user_id, is_admin, message_text)
-                VALUES ((SELECT id FROM tickets WHERE user_id = ?), ?, 0, ?)
-            """, (user_id, user_id, message.text or ''))
-            conn.commit()
-            conn.close()
-            
-        except Exception as e:
-            logger.error(f"Ошибка при создании топика: {e}")
-            await message.answer("Произошла ошибка при создании обращения. Пожалуйста, попробуйте позже.")
-
-@dp.edited_message(F.chat.id == SUPPORT_GROUP_ID, F.message_thread_id)
-async def handle_admin_edit(message: types.Message):
-    """Обработка редактирований сообщений админов"""
-    topic_id = message.message_thread_id
-    user_id = get_user_id_by_topic(topic_id)
-    
-    if user_id:
-        try:
-            user = database.get_user_by_id(user_id)
-            if not user:
-                return
-            
-            telegram_id = user['telegram_id']
-            message_text = message.text or message.caption or ''
-            
-            # Отправляем отредактированное сообщение пользователю
-            await bot.send_message(
-                chat_id=telegram_id,
-                text=f"✏️ <b>Сообщение изменено:</b>\n\n{message_text}",
-                parse_mode='HTML'
-            )
-            
-            # Обновляем в БД
-            conn = database.get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE ticket_messages
-                SET message_text = ?
-                WHERE ticket_id = (SELECT id FROM tickets WHERE telegram_topic_id = ?)
-                  AND created_at = (SELECT MAX(created_at) FROM ticket_messages WHERE ticket_id = (SELECT id FROM tickets WHERE telegram_topic_id = ?))
-            """, (message_text, topic_id, topic_id))
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            logger.error(f"Ошибка при обработке редактирования: {e}")
-
-
-@dp.message_reaction(F.chat.id == SUPPORT_GROUP_ID)
-async def handle_admin_reaction(event: types.MessageReactionUpdated):
-    """Обработка реакций админов в группе - отправляем пользователю"""
-    try:
-        topic_id = event.message_thread_id
-        if not topic_id:
-            return
-        
-        user_id = get_user_id_by_topic(topic_id)
-        if not user_id:
-            return
-        
-        user = database.get_user_by_id(user_id)
-        if not user:
-            return
-        
-        telegram_id = user['telegram_id']
-        
-        # Получаем новые реакции
-        new_reactions = event.new_reaction
-        if new_reactions:
-            reaction_emojis = []
-            for r in new_reactions:
-                if hasattr(r, 'emoji'):
-                    reaction_emojis.append(r.emoji)
-            
-            if reaction_emojis:
-                reaction_text = ' '.join(reaction_emojis)
-                await bot.send_message(
-                    chat_id=telegram_id,
-                    text=f"👍 Поддержка отреагировала на ваше сообщение: {reaction_text}"
-                )
-    except Exception as e:
-        logger.error(f"Ошибка при обработке реакции: {e}")
-
-@dp.message(F.chat.id == SUPPORT_GROUP_ID, F.message_thread_id)
-async def handle_admin_reply(message: types.Message):
-    """Обработка ответов админов в группе"""
-    topic_id = message.message_thread_id
-    
-    # Игнорируем служебные сообщения
-    if message.forum_topic_created:
+    # Проверка черного списка
+    if core.check_blacklist(telegram_id):
+        await message.answer("❌ Ваш аккаунт заблокирован.")
         return
     
-    user_id = get_user_id_by_topic(topic_id)
+    # Извлекаем referral ID
+    referral_id = None
+    if message.text and 'ref' in message.text:
+        referral_id = extract_referral_id(message.text)
     
-    if user_id:
-        try:
-            # Получаем telegram_id пользователя
-            user = database.get_user_by_id(user_id)
-            if not user:
-                logger.error(f"Пользователь с ID {user_id} не найден в БД")
-                await message.reply(f"❌ Пользователь ID={user_id} не найден в БД")
-                return
-            
-            telegram_id = user['telegram_id']
-            logger.info(f"Отправляю ответ пользователю: user_id={user_id}, telegram_id={telegram_id}")
-            
-            # Формируем текст сообщения
-            message_text = message.text or message.caption or ''
-            if message.photo:
-                # Если есть фото, отправляем его с подписью
-                await bot.send_photo(
-                    chat_id=telegram_id,
-                    photo=message.photo[-1].file_id,
-                    caption=message_text,
-                    parse_mode='HTML'
-                )
-            elif message.document:
-                # Если есть документ, отправляем его
-                await bot.send_document(
-                    chat_id=telegram_id,
-                    document=message.document.file_id,
-                    caption=message_text,
-                    parse_mode='HTML'
-                )
-            else:
-                # Обычное текстовое сообщение
-                # Пробуем сохранить HTML форматирование, если есть
-                if message.html_text:
-                    parse_mode = 'HTML'
-                    text = message.html_text
-                elif message.text:
-                    parse_mode = None
-                    text = message.text
+    # Нельзя быть своим собственным рефералом
+    if referral_id == telegram_id:
+        referral_id = None
+    
+    # Получаем или создаем пользователя
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        # Создаем нового пользователя
+        username = message.from_user.username
+        full_name = message.from_user.full_name
+        
+        # Проверяем referral и рейт-лимит
+        referred_by = None
+        if referral_id:
+            ref_user = database.get_user_by_telegram_id(referral_id)
+            if ref_user:
+                # Проверяем рейт-лимит: не более 25 рефералов в минуту
+                if database.check_referral_rate_limit(referral_id, limit=25, window_seconds=60):
+                    referred_by = ref_user['id']
+                    logger.info(f"Referral accepted: user {telegram_id} referred by {referral_id}")
                 else:
-                    parse_mode = None
-                    text = message_text
-                
-                await bot.send_message(
-                    chat_id=telegram_id,
-                    text=text,
-                    parse_mode=parse_mode
-                )
+                    logger.warning(f"Referral rate limit exceeded for referrer {referral_id}")
+        
+        user_id = database.create_user(telegram_id, username, full_name, referred_by)
+        user = database.get_user_by_id(user_id)
+    else:
+        # Пользователь уже существует - попробуем установить реферера, если его нет
+        if referral_id and user.get('referred_by') is None:
+            ref_user = database.get_user_by_telegram_id(referral_id)
+            if ref_user:
+                # Проверяем рейт-лимит
+                if database.check_referral_rate_limit(referral_id, limit=25, window_seconds=60):
+                    if database.set_referrer_for_user(user['id'], ref_user['id']):
+                        logger.info(f"Referral set for existing user {telegram_id} -> {referral_id}")
+                        # Обновляем данные пользователя
+                        user = database.get_user_by_telegram_id(telegram_id)
+                else:
+                    logger.warning(f"Referral rate limit exceeded for referrer {referral_id}")
+    
+    # Проверяем статус бана
+    ban_status = abuse_detected.check_user_ban_status(user['id'])
+    if ban_status.get('banned'):
+        await message.answer(
+            "❌ Ваш аккаунт заблокирован.\n\n"
+            "Если вы считаете, что это ошибка, свяжитесь со службой поддержки.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Служба поддержки", url="https://t.me/your_support_bot")
+            ]])
+        )
+        return
+    
+    # Формируем сообщение
+    text = (
+        "*👋 Добро пожаловать!*\n\n"
+        "Это *BlinVPN* — лучший сервис для обхода блокировок и защиты данных. "
+        "Просто запусти мини-приложение кнопкой ниже!\n\n"
+        "*🎁 Дарим 24 часа бесплатно!*\n"
+        "*🇷🇺 Оплата по СБП и Криптовалюте.*\n"
+        "*⚡️ Высокая скорость и стабильная работа*\n"
+        "*🤝 Служба поддержки поможет с любым вопросом или решит проблему.*"
+    )
+    
+    # Кнопка Mini App
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="📱 Открыть приложение",
+            web_app=WebAppInfo(url=WEB_APP_URL)
+        )
+    ]])
+    
+    await message.answer(text, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
+
+
+# ========== Обработчики callback для запросов на вывод ==========
+
+# Состояния для ожидания причины отказа
+withdrawal_reject_states = {}
+
+@dp.callback_query(F.data.startswith('withdraw_approve_'))
+async def handle_withdraw_approve(callback: CallbackQuery):
+    """Обработка одобрения запроса на вывод"""
+    try:
+        transaction_id = int(callback.data.split('_')[-1])
+        
+        # Отправляем запрос на подтверждение
+        confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text='✅ Да, выполнить', callback_data=f'withdraw_confirm_{transaction_id}'),
+                InlineKeyboardButton(text='❌ Отмена', callback_data=f'withdraw_cancel_{transaction_id}')
+            ]
+        ])
+        
+        await callback.message.edit_reply_markup(reply_markup=confirm_keyboard)
+        await callback.answer('Подтвердите выполнение вывода')
+    except Exception as e:
+        logger.error(f"Error handling withdraw approve: {e}")
+        await callback.answer('Ошибка обработки', show_alert=True)
+
+
+@dp.callback_query(F.data.startswith('withdraw_confirm_'))
+async def handle_withdraw_confirm(callback: CallbackQuery):
+    """Подтверждение вывода - отправляем пользователю уведомление об успехе"""
+    try:
+        transaction_id = int(callback.data.split('_')[-1])
+        
+        conn = database.get_db_connection()
+        cursor = conn.cursor()
+        
+        # Получаем информацию о транзакции
+        cursor.execute("""
+            SELECT t.*, u.telegram_id, u.username
+            FROM transactions t
+            JOIN users u ON t.user_id = u.id
+            WHERE t.id = ?
+        """, (transaction_id,))
+        
+        transaction = cursor.fetchone()
+        if not transaction:
+            await callback.answer('Транзакция не найдена', show_alert=True)
+            return
+        
+        # Обновляем статус транзакции
+        cursor.execute("""
+            UPDATE transactions SET status = 'Success' WHERE id = ?
+        """, (transaction_id,))
+        
+        conn.commit()
+        conn.close()
+        
+        # Отправляем уведомление пользователю
+        amount = abs(float(transaction['amount']))
+        core.send_notification_to_user(
+            transaction['telegram_id'],
+            f"✅ <b>Вывод средств выполнен!</b>\n\n"
+            f"💵 Сумма: {amount}₽\n"
+            f"💳 Метод: {transaction['payment_method']}\n\n"
+            f"Деньги отправлены. Спасибо за использование BlinVPN!"
+        )
+        
+        # Удаляем сообщение с запросом
+        await callback.message.delete()
+        await callback.answer('Вывод успешно выполнен!', show_alert=True)
+        
+    except Exception as e:
+        logger.error(f"Error confirming withdrawal: {e}")
+        await callback.answer('Ошибка обработки', show_alert=True)
+
+
+@dp.callback_query(F.data.startswith('withdraw_reject_'))
+async def handle_withdraw_reject(callback: CallbackQuery):
+    """Обработка отказа в выводе"""
+    try:
+        transaction_id = int(callback.data.split('_')[-1])
+        
+        # Запрашиваем причину отказа
+        reason_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='Без причины', callback_data=f'withdraw_reject_confirm_{transaction_id}_none')],
+            [InlineKeyboardButton(text='Подозрительная активность', callback_data=f'withdraw_reject_confirm_{transaction_id}_suspicious')],
+            [InlineKeyboardButton(text='Неверные реквизиты', callback_data=f'withdraw_reject_confirm_{transaction_id}_invalid')],
+            [InlineKeyboardButton(text='❌ Отмена', callback_data=f'withdraw_cancel_{transaction_id}')]
+        ])
+        
+        await callback.message.edit_reply_markup(reply_markup=reason_keyboard)
+        await callback.answer('Выберите причину отказа')
+    except Exception as e:
+        logger.error(f"Error handling withdraw reject: {e}")
+        await callback.answer('Ошибка обработки', show_alert=True)
+
+
+@dp.callback_query(F.data.startswith('withdraw_reject_confirm_'))
+async def handle_withdraw_reject_confirm(callback: CallbackQuery):
+    """Подтверждение отказа с причиной"""
+    try:
+        parts = callback.data.split('_')
+        transaction_id = int(parts[3])
+        reason_code = parts[4] if len(parts) > 4 else 'none'
+        
+        reasons = {
+            'none': '',
+            'suspicious': 'Подозрительная активность',
+            'invalid': 'Неверные реквизиты'
+        }
+        reason = reasons.get(reason_code, '')
+        
+        conn = database.get_db_connection()
+        cursor = conn.cursor()
+        
+        # Получаем информацию о транзакции
+        cursor.execute("""
+            SELECT t.*, u.telegram_id, u.username
+            FROM transactions t
+            JOIN users u ON t.user_id = u.id
+            WHERE t.id = ?
+        """, (transaction_id,))
+        
+        transaction = cursor.fetchone()
+        if not transaction:
+            await callback.answer('Транзакция не найдена', show_alert=True)
+            return
+        
+        amount = abs(float(transaction['amount']))
+        user_id = transaction['user_id']
+        
+        # Возвращаем деньги на реферальный баланс
+        cursor.execute("""
+            UPDATE users SET partner_balance = partner_balance + ? WHERE id = ?
+        """, (amount, user_id))
+        
+        # Обновляем статус транзакции
+        cursor.execute("""
+            UPDATE transactions SET status = 'Rejected', description = description || ' | Причина отказа: ' || ? WHERE id = ?
+        """, (reason or 'Не указана', transaction_id))
+        
+        conn.commit()
+        conn.close()
+        
+        # Отправляем уведомление пользователю
+        reject_msg = f"❌ <b>Вывод средств отклонён</b>\n\n💵 Сумма: {amount}₽\n"
+        if reason:
+            reject_msg += f"📝 Причина: {reason}\n"
+        reject_msg += "\n💰 Средства возвращены на ваш реферальный баланс."
+        
+        core.send_notification_to_user(transaction['telegram_id'], reject_msg)
+        
+        # Удаляем сообщение с запросом
+        await callback.message.delete()
+        await callback.answer('Вывод отклонён, средства возвращены', show_alert=True)
+        
+    except Exception as e:
+        logger.error(f"Error confirming rejection: {e}")
+        await callback.answer('Ошибка обработки', show_alert=True)
+
+
+@dp.callback_query(F.data.startswith('withdraw_cancel_'))
+async def handle_withdraw_cancel(callback: CallbackQuery):
+    """Отмена действия - возвращаем исходные кнопки"""
+    try:
+        transaction_id = int(callback.data.split('_')[-1])
+        
+        original_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text='✅ Принять', callback_data=f'withdraw_approve_{transaction_id}'),
+                InlineKeyboardButton(text='❌ Отказать', callback_data=f'withdraw_reject_{transaction_id}')
+            ]
+        ])
+        
+        await callback.message.edit_reply_markup(reply_markup=original_keyboard)
+        await callback.answer('Действие отменено')
+    except Exception as e:
+        logger.error(f"Error canceling: {e}")
+        await callback.answer('Ошибка', show_alert=True)
+
+
+async def subscription_notifications_task():
+    """Фоновая задача для уведомлений о подписках (умная корзина)"""
+    while True:
+        try:
+            await asyncio.sleep(3600)  # Проверка каждый час
             
-            # Сохраняем сообщение в БД
             conn = database.get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO ticket_messages (ticket_id, is_admin, message_text)
-                VALUES ((SELECT id FROM tickets WHERE telegram_topic_id = ?), 1, ?)
-            """, (topic_id, message.text or ''))
             
-            # Обновляем тикет
+            from datetime import datetime, timedelta
+            now = datetime.now()
+            
+            # === 1. Уведомления за 3, 2, 1 день и 3 часа до конца ===
+            notification_intervals = [
+                (3, 'days', '3 дня'),
+                (2, 'days', '2 дня'),
+                (1, 'days', '1 день'),
+                (3, 'hours', '3 часа')
+            ]
+            
+            for value, unit, text in notification_intervals:
+                if unit == 'days':
+                    target_time = now + timedelta(days=value)
+                    window_start = target_time - timedelta(hours=1)
+                    window_end = target_time + timedelta(hours=1)
+                else:
+                    target_time = now + timedelta(hours=value)
+                    window_start = target_time - timedelta(minutes=30)
+                    window_end = target_time + timedelta(minutes=30)
+                
+                cursor.execute("""
+                    SELECT vk.id, vk.key_uuid, vk.expiry_date, u.telegram_id
+                    FROM vpn_keys vk
+                    JOIN users u ON vk.user_id = u.id
+                    WHERE vk.status = 'Active'
+                      AND datetime(vk.expiry_date) BETWEEN ? AND ?
+                """, (window_start.isoformat(), window_end.isoformat()))
+                
+                for row in cursor.fetchall():
+                    key_id = row['id']
+                    key_uuid = row['key_uuid']
+                    telegram_id = row['telegram_id']
+                    short_id = key_uuid[:8] if key_uuid else f"#{key_id}"
+                    
+                    msg = (
+                        f"⚠️ <b>Ваша подписка скоро закончится</b>\n\n"
+                        f"Через {text} ваш ключ {short_id} закончится. "
+                        f"Чтобы сохранить доступ в свободный интернет, оплатите подписку!"
+                    )
+                    core.send_notification_to_user(telegram_id, msg)
+                    logger.info(f"Sent expiry reminder ({text}) to {telegram_id} for key {key_id}")
+            
+            # === 2. Уведомление при истечении подписки ===
             cursor.execute("""
-                UPDATE tickets
-                SET last_message = ?, last_message_time = CURRENT_TIMESTAMP
-                WHERE telegram_topic_id = ?
-            """, (message.text or '', topic_id))
+                SELECT vk.id, vk.key_uuid, vk.expiry_date, u.telegram_id
+                FROM vpn_keys vk
+                JOIN users u ON vk.user_id = u.id
+                WHERE vk.status = 'Active'
+                  AND datetime(vk.expiry_date) < ?
+            """, (now.isoformat(),))
+            
+            for row in cursor.fetchall():
+                key_id = row['id']
+                telegram_id = row['telegram_id']
+                
+                # Помечаем как истёкший
+                cursor.execute("UPDATE vpn_keys SET status = 'Expired' WHERE id = ?", (key_id,))
+                
+                msg = (
+                    "❌ <b>Ваша подписка закончилась.</b>\n\n"
+                    "Вскоре она будет окончательно удалена. "
+                    "Чтобы не перенастраивать всё заново, продлите подписку в разделе \"Устройства\""
+                )
+                core.send_notification_to_user(telegram_id, msg)
+                logger.info(f"Subscription expired for key {key_id}, notified user {telegram_id}")
+            
+            # === 3. Уведомление за сутки перед удалением (9-й день) ===
+            nine_days_ago = now - timedelta(days=9)
+            cursor.execute("""
+                SELECT vk.id, vk.key_uuid, vk.expiry_date, u.telegram_id
+                FROM vpn_keys vk
+                JOIN users u ON vk.user_id = u.id
+                WHERE vk.status = 'Expired'
+                  AND datetime(vk.expiry_date) BETWEEN ? AND ?
+            """, ((nine_days_ago - timedelta(hours=1)).isoformat(), 
+                  (nine_days_ago + timedelta(hours=1)).isoformat()))
+            
+            for row in cursor.fetchall():
+                telegram_id = row['telegram_id']
+                
+                msg = (
+                    "❗️ <b>Ваша подписка будет удалена</b>\n\n"
+                    "Через 24 часа ваша подписка будет окончательно удалена. "
+                    "Чтобы не потерять доступ, продлите подписку."
+                )
+                core.send_notification_to_user(telegram_id, msg)
+            
+            # === 4. Удаление через 10 дней после истечения ===
+            ten_days_ago = now - timedelta(days=10)
+            cursor.execute("""
+                SELECT vk.id, vk.key_uuid, vk.user_id, u.telegram_id
+                FROM vpn_keys vk
+                JOIN users u ON vk.user_id = u.id
+                WHERE vk.status = 'Expired'
+                  AND datetime(vk.expiry_date) < ?
+            """, (ten_days_ago.isoformat(),))
+            
+            for row in cursor.fetchall():
+                key_id = row['id']
+                key_uuid = row['key_uuid']
+                user_id = row['user_id']
+                
+                # Удаляем из Remnawave
+                if key_uuid:
+                    try:
+                        from backend.api import remnawave
+                        remnawave.remnawave_api.delete_user_sync(key_uuid)
+                        logger.info(f"Deleted key {key_uuid} from Remnawave")
+                    except Exception as e:
+                        logger.error(f"Failed to delete key {key_uuid} from Remnawave: {e}")
+                
+                # Удаляем устройства
+                cursor.execute("DELETE FROM devices WHERE vpn_key_id = ?", (key_id,))
+                
+                # Удаляем ключ
+                cursor.execute("DELETE FROM vpn_keys WHERE id = ?", (key_id,))
+                
+                logger.info(f"Auto-deleted expired key {key_id} for user {user_id}")
             
             conn.commit()
             conn.close()
+            
         except Exception as e:
-            logger.error(f"Не удалось отправить ответ пользователю user_id={user_id}, telegram_id={telegram_id}: {e}")
-            await message.reply(f"❌ Не удалось доставить ответ пользователю (telegram_id={telegram_id}).\nОшибка: {e}")
+            logger.error(f"Error in subscription_notifications_task: {e}")
+            await asyncio.sleep(60)
+
+
+async def weekly_reminder_task():
+    """Еженедельное напоминание для неактивных пользователей (в течение полугода)"""
+    while True:
+        try:
+            await asyncio.sleep(86400)  # Проверка раз в день
+            
+            # Проверяем только по понедельникам
+            from datetime import datetime, timedelta
+            if datetime.now().weekday() != 0:  # 0 = понедельник
+                continue
+            
+            conn = database.get_db_connection()
+            cursor = conn.cursor()
+            
+            # Находим пользователей у которых были подписки, но нет активных,
+            # и последняя подписка была удалена не более 6 месяцев назад
+            six_months_ago = datetime.now() - timedelta(days=180)
+            
+            cursor.execute("""
+                SELECT DISTINCT u.telegram_id, u.id
+                FROM users u
+                WHERE u.id IN (
+                    SELECT DISTINCT user_id FROM transactions 
+                    WHERE type IN ('subscription', 'trial') 
+                    AND created_at > ?
+                )
+                AND u.id NOT IN (
+                    SELECT user_id FROM vpn_keys WHERE status = 'Active'
+                )
+                AND (u.is_banned = 0 OR u.is_banned IS NULL)
+            """, (six_months_ago.isoformat(),))
+            
+            for row in cursor.fetchall():
+                telegram_id = row['telegram_id']
+                
+                msg = (
+                    "❔️ <b>Вы про нас не забыли?</b>\n\n"
+                    "А мы про вас нет. Вы приобретали подписку у нас и перестали пользоваться. "
+                    "Нам очень жаль, если наш сервис вам не понравился.\n\n"
+                    "Напишите нам в поддержку, чтобы мы разобрались с вашей проблемой "
+                    "и вы вновь могли пользоваться нашим сервисом!"
+                )
+                
+                core.send_notification_to_user(telegram_id, msg)
+            
+            conn.close()
+            
+        except Exception as e:
+            logger.error(f"Error in weekly_reminder_task: {e}")
+            await asyncio.sleep(3600)
+
+
+async def auto_refund_expired_withdrawals():
+    """Фоновая задача для автовозврата просроченных запросов на вывод (7 дней)"""
+    while True:
+        try:
+            await asyncio.sleep(3600)  # Проверка каждый час
+            
+            conn = database.get_db_connection()
+            cursor = conn.cursor()
+            
+            # Находим просроченные запросы (старше 7 дней)
+            cursor.execute("""
+                SELECT t.id, t.user_id, t.amount, u.telegram_id
+                FROM transactions t
+                JOIN users u ON t.user_id = u.id
+                WHERE t.type = 'withdrawal_request' 
+                  AND t.status = 'Pending'
+                  AND datetime(t.created_at) < datetime('now', '-7 days')
+            """)
+            
+            expired = cursor.fetchall()
+            
+            for row in expired:
+                trans_id = row['id']
+                user_id = row['user_id']
+                amount = abs(float(row['amount']))
+                telegram_id = row['telegram_id']
+                
+                # Возвращаем деньги на реферальный баланс
+                cursor.execute("""
+                    UPDATE users SET partner_balance = partner_balance + ? WHERE id = ?
+                """, (amount, user_id))
+                
+                # Обновляем статус транзакции
+                cursor.execute("""
+                    UPDATE transactions SET status = 'Expired', description = description || ' | Автовозврат через 7 дней'
+                    WHERE id = ?
+                """, (trans_id,))
+                
+                # Уведомляем пользователя
+                core.send_notification_to_user(
+                    telegram_id,
+                    f"⏰ <b>Истёк срок обработки заявки на вывод</b>\n\n"
+                    f"💵 Сумма: {amount}₽\n\n"
+                    f"Заявка не была обработана в течение 7 дней. "
+                    f"Средства возвращены на ваш реферальный баланс."
+                )
+                
+                logger.info(f"Auto-refunded withdrawal #{trans_id} for user {user_id}: {amount}₽")
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            logger.error(f"Error in auto_refund_expired_withdrawals: {e}")
+            await asyncio.sleep(60)  # При ошибке ждём минуту
+
 
 async def main():
     """Запуск бота"""
-    init_db()
-    logger.info("Бот поддержки запущен...")
+    # Запускаем обновление черного списка
+    start_blacklist_updater()
+    
+    # Запускаем фоновые задачи
+    asyncio.create_task(auto_refund_expired_withdrawals())
+    asyncio.create_task(subscription_notifications_task())
+    asyncio.create_task(weekly_reminder_task())
+    
+    logger.info("Бот запущен...")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
