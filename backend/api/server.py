@@ -583,7 +583,7 @@ def get_user_devices():
                     else:
                         dt = added_date
                     added_formatted = dt.strftime('%d.%m.%Y')
-                except:
+                except Exception:
                     added_formatted = str(added_date)[:10]
             else:
                 added_formatted = datetime.now().strftime('%d.%m.%Y')
@@ -709,7 +709,7 @@ def get_user_history():
                     months = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
                     month_idx = dt.month - 1
                     date_formatted = f"{dt.day} {months[month_idx]} {dt.year}"
-                except:
+                except Exception:
                     date_formatted = str(date_str)[:10]
             else:
                 date_formatted = datetime.now().strftime('%d %b %Y')
@@ -1245,7 +1245,7 @@ def get_mailing_history():
                     else:
                         dt = date_str
                     date_formatted = dt.strftime('%d.%m.%y')
-                except:
+                except Exception:
                     date_formatted = str(date_str)[:10]
             else:
                 date_formatted = ''
@@ -1582,7 +1582,7 @@ def get_user_subscriptions(user_id: int):
                         total_hours = total_seconds / 3600
                         days_left = int(total_hours / 24)
                         hours_left = int(math.ceil(total_hours % 24))
-                except:
+                except Exception:
                     is_expired = True
             
             subscriptions.append({
@@ -1698,7 +1698,7 @@ def get_keys():
                         now = datetime.now(timezone.utc)
                     diff = expiry - now
                     expiry_days = max(0, int(diff.total_seconds() / 86400))
-                except:
+                except Exception:
                     expiry_days = 0
             
             keys.append({
@@ -4226,9 +4226,10 @@ def cleanup_expired_keys():
         deleted = 0
         for key_uuid in keys_to_delete:
             try:
-                remnawave.delete_user(key_uuid)
+                remnawave.remnawave_api.delete_user_sync(key_uuid)
                 deleted += 1
-            except:
+            except Exception as e:
+                logger.warning(f"Failed to delete user {key_uuid} from Remnawave: {e}")
                 pass
         
         # Удаляем из базы
@@ -4239,43 +4240,6 @@ def cleanup_expired_keys():
         conn.commit()
         
         return jsonify({'success': True, 'deleted': deleted})
-    finally:
-        conn.close()
-
-@app.route('/api/panel/remnawave/sync', methods=['POST'])
-@require_auth
-def sync_remnawave_keys():
-    """Синхронизировать ключи с Remnawave"""
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
-    synced = 0
-    
-    try:
-        # Получаем все ключи из БД
-        cursor.execute("SELECT id, key_uuid, user_id FROM vpn_keys WHERE key_uuid IS NOT NULL")
-        local_keys = cursor.fetchall()
-        
-        for key in local_keys:
-            key_id, key_uuid, user_id = key
-            try:
-                # Получаем данные из Remnawave
-                rw_user = remnawave.get_user_by_uuid(key_uuid)
-                if rw_user:
-                    # Обновляем локальные данные
-                    traffic_used = rw_user.get('usedTrafficBytes', 0)
-                    traffic_limit = rw_user.get('trafficLimitBytes', 0)
-                    
-                    cursor.execute("""
-                        UPDATE vpn_keys 
-                        SET traffic_used = ?, traffic_limit = ?
-                        WHERE id = ?
-                    """, (traffic_used, traffic_limit, key_id))
-                    synced += 1
-            except:
-                continue
-        
-        conn.commit()
-        return jsonify({'success': True, 'synced': synced})
     finally:
         conn.close()
 
@@ -4313,4 +4277,3 @@ if __name__ == '__main__':
     # Запускаем планировщик бэкапов
     start_backup_scheduler()
     app.run(host='0.0.0.0', port=int(os.getenv('API_PORT', 8000)))
-
