@@ -395,6 +395,12 @@ def init_database():
         except sqlite3.OperationalError:
             pass
         
+        # Миграция: добавляем last_ip в vpn_keys если его нет (для детекции abuse по IP)
+        try:
+            cursor.execute("ALTER TABLE vpn_keys ADD COLUMN last_ip TEXT")
+        except sqlite3.OperationalError:
+            pass
+        
         # Миграция: добавляем поля в mailings если их нет
         try:
             cursor.execute("ALTER TABLE mailings ADD COLUMN button_type TEXT")
