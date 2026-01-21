@@ -125,6 +125,7 @@ def init_database():
                 uses_limit INTEGER,
                 expires_at TIMESTAMP,
                 is_active INTEGER DEFAULT 1,
+                target_type TEXT DEFAULT 'all',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -415,6 +416,12 @@ def init_database():
         except sqlite3.OperationalError:
             pass
         
+        # Миграция: добавляем target_type в промокоды (all/vpn/whitelist)
+        try:
+            cursor.execute("ALTER TABLE promocodes ADD COLUMN target_type TEXT DEFAULT 'all'")
+        except sqlite3.OperationalError:
+            pass
+        
         # Инициализация дефолтных тарифов VPN
         cursor.execute("SELECT COUNT(*) FROM tariff_plans WHERE plan_type = 'vpn'")
         if cursor.fetchone()[0] == 0:
@@ -430,12 +437,19 @@ def init_database():
                 VALUES (?, ?, ?, ?, ?)
             """, default_vpn_plans)
         
-        # Инициализация настроек whitelist
+        # Инициализация настроек whitelist - 299₽/месяц, 100ГБ трафика
         cursor.execute("SELECT COUNT(*) FROM whitelist_settings")
         if cursor.fetchone()[0] == 0:
             cursor.execute("""
-                INSERT INTO whitelist_settings (subscription_fee, price_per_gb, min_gb, max_gb, auto_pay_enabled, auto_pay_threshold_mb)
-                VALUES (100.0, 15.0, 5, 500, 1, 100)
+                INSERT INTO whitelist_settings (subscription_fee, price_per_gb, min_gb, max_gb, auto_pay_enabled, auto_pay_threshold_mb, pricing_type)
+                VALUES (299.0, 15.0, 100, 500, 1, 100, 'fixed')
+            """)
+        else:
+            # Обновляем существующие настройки на фиксированную цену
+            cursor.execute("""
+                UPDATE whitelist_settings 
+                SET subscription_fee = 299.0, min_gb = 100, pricing_type = 'fixed'
+                WHERE subscription_fee < 299
             """)
         
         # Инициализация публичных страниц
@@ -638,7 +652,9 @@ def set_default_squads(squad_uuids: List[str], plan_type: str = 'vpn') -> bool:
     """Установить список UUID сквадов по умолчанию для типа подписки"""
     import json
     key = f'default_squads_{plan_type}'  # default_squads_vpn или default_squads_whitelist
-    return set_system_setting(key, json.dumps(squad_uuids))
+    # Убираем дубликаты, сохраняя порядок
+    unique_uuids = list(dict.fromkeys(squad_uuids))
+    return set_system_setting(key, json.dumps(unique_uuids))
 
 
 # ========== Функции для рейт-лимитинга рефералов ==========
