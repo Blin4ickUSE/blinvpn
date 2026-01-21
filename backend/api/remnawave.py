@@ -559,7 +559,7 @@ class RemnawaveAPI:
     
     def update_user_sync(self, uuid: str, expire_at: datetime = None, 
                         traffic_limit_bytes: int = None, hwid_device_limit: int = None,
-                        active_internal_squads: List[str] = None):
+                        active_internal_squads: List[str] = None, status: UserStatus = None):
         """Обновить пользователя (синхронная обёртка)"""
         async def _update():
             async with self._api as api:
@@ -568,7 +568,8 @@ class RemnawaveAPI:
                     expire_at=expire_at,
                     traffic_limit_bytes=traffic_limit_bytes,
                     hwid_device_limit=hwid_device_limit,
-                    active_internal_squads=active_internal_squads
+                    active_internal_squads=active_internal_squads,
+                    status=status
                 )
         return asyncio.run(_update())
     
