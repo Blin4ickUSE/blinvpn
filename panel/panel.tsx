@@ -560,6 +560,31 @@ const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, o
                             {keyItem.key}
                         </div>
                         
+                        {/* Информация о трафике */}
+                        <div className="p-4 bg-gray-950 rounded-xl border border-gray-800">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-sm text-gray-400">Использовано трафика</span>
+                                <span className="text-sm font-mono text-white">
+                                    {(keyItem.trafficUsed / (1024**3)).toFixed(2)} / {keyItem.trafficLimit > 0 ? (keyItem.trafficLimit / (1024**3)).toFixed(0) : '∞'} ГБ
+                                </span>
+                            </div>
+                            <div className="w-full bg-gray-800 rounded-full h-2">
+                                <div 
+                                    className={`h-2 rounded-full transition-all ${
+                                        keyItem.trafficLimit > 0 && keyItem.trafficUsed/keyItem.trafficLimit > 0.9 ? 'bg-red-500' : 
+                                        keyItem.trafficLimit > 0 && keyItem.trafficUsed/keyItem.trafficLimit > 0.7 ? 'bg-yellow-500' : 'bg-blue-500'
+                                    }`}
+                                    style={{ width: `${keyItem.trafficLimit > 0 ? Math.min(100, (keyItem.trafficUsed/keyItem.trafficLimit)*100) : 0}%` }}
+                                ></div>
+                            </div>
+                            {keyItem.trafficLimit > 0 && keyItem.trafficUsed/keyItem.trafficLimit > 0.9 && (
+                                <div className="text-xs text-red-400 mt-2 flex items-center">
+                                    <AlertTriangle size={12} className="mr-1" />
+                                    Трафик почти исчерпан
+                                </div>
+                            )}
+                        </div>
+                        
                         {/* Статус блокировки */}
                         <div className="flex items-center justify-between p-3 bg-gray-950 rounded-xl border border-gray-800">
                             <div>
@@ -683,6 +708,7 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
     const [searchUser, setSearchUser] = useState('');
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
     const [isTrial, setIsTrial] = useState(false);
+    const [isForever, setIsForever] = useState(false);
     const [params, setParams] = useState({ days: 30, traffic: 100, devices: 5 });
     const [selectedSquads, setSelectedSquads] = useState<string[]>([]);
     const [squads, setSquads] = useState<{uuid: string; name: string}[]>([]);
@@ -721,25 +747,36 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
             return;
         }
         try {
+            // 27394 дня ≈ 75 лет (до ~2099 года)
+            const finalDays = isForever ? 27394 : params.days;
             const response = await apiFetch('/panel/keys', {
                 method: 'POST',
                 body: JSON.stringify({
                     user_id: selectedUser.id,
-                    days: params.days,
+                    days: finalDays,
                     traffic: params.traffic,
                     devices: params.devices,
                     is_trial: isTrial,
+                    is_forever: isForever,
                     squads: selectedSquads
                 })
             });
-            onToast('Успех', 'Ключ успешно создан и отправлен пользователю', 'success');
+            onToast('Успех', isForever ? 'Бесконечный ключ создан!' : 'Ключ успешно создан и отправлен пользователю', 'success');
             onClose(); 
         } catch (e: any) {
             onToast('Ошибка', e.message || 'Не удалось создать ключ', 'error');
         }
     };
 
-    useEffect(() => { if(isTrial) { setParams({ days: 1, traffic: 5, devices: 1 }); } else { setParams({ days: 30, traffic: 100, devices: 5 }); } }, [isTrial]);
+    useEffect(() => { 
+        if(isTrial) { 
+            setParams({ days: 1, traffic: 5, devices: 1 }); 
+        } else if (isForever) {
+            setParams(prev => ({ ...prev, traffic: 0, devices: 10 })); // 0 = безлимит
+        } else { 
+            setParams({ days: 30, traffic: 100, devices: 5 }); 
+        } 
+    }, [isTrial, isForever]);
 
     return (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200" onClick={onClose}>
@@ -783,8 +820,11 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
                             </div>
                         )}
                     </div>
-                    <label className="flex items-center cursor-pointer p-4 bg-gray-800/50 border border-gray-800 rounded-xl hover:border-gray-700 transition-colors"><div className="relative"><input type="checkbox" checked={isTrial} onChange={() => setIsTrial(!isTrial)} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full transition-colors ${isTrial ? 'bg-purple-600' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform ${isTrial ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="font-medium text-white">Пробный период</div><div className="text-xs text-gray-500">Автоматически выставит лимиты</div></div></label>
-                    <div className="grid grid-cols-3 gap-4"><div><label className="text-xs text-gray-500 mb-1.5 block">Длительность (дней)</label><input type="number" min="1" value={params.days} onChange={e => setParams({...params, days: parseInt(e.target.value) || 0})} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono"/></div><div><label className="text-xs text-gray-500 mb-1.5 block">Трафик (GB)</label><input type="number" min="1" value={params.traffic} onChange={e => setParams({...params, traffic: parseInt(e.target.value) || 0})} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono"/></div><div><label className="text-xs text-gray-500 mb-1.5 block">Устройства</label><input type="number" min="1" value={params.devices} onChange={e => setParams({...params, devices: parseInt(e.target.value) || 0})} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono"/></div></div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <label className="flex items-center cursor-pointer p-4 bg-gray-800/50 border border-gray-800 rounded-xl hover:border-gray-700 transition-colors"><div className="relative"><input type="checkbox" checked={isTrial} onChange={() => { setIsTrial(!isTrial); setIsForever(false); }} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full transition-colors ${isTrial ? 'bg-purple-600' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform ${isTrial ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="font-medium text-white">Пробный период</div><div className="text-xs text-gray-500">1 день, 5ГБ</div></div></label>
+                        <label className="flex items-center cursor-pointer p-4 bg-gray-800/50 border border-gray-800 rounded-xl hover:border-gray-700 transition-colors"><div className="relative"><input type="checkbox" checked={isForever} onChange={() => { setIsForever(!isForever); setIsTrial(false); }} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full transition-colors ${isForever ? 'bg-yellow-500' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform ${isForever ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="font-medium text-white">∞ Навсегда</div><div className="text-xs text-gray-500">До 2099 года</div></div></label>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4"><div><label className="text-xs text-gray-500 mb-1.5 block">Длительность (дней)</label><input type="number" min="1" value={isForever ? 27394 : params.days} disabled={isForever} onChange={e => setParams({...params, days: parseInt(e.target.value) || 0})} className={`w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono ${isForever ? 'opacity-50' : ''}`}/></div><div><label className="text-xs text-gray-500 mb-1.5 block">Трафик (GB)</label><input type="number" min="1" value={params.traffic} onChange={e => setParams({...params, traffic: parseInt(e.target.value) || 0})} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono"/></div><div><label className="text-xs text-gray-500 mb-1.5 block">Устройства</label><input type="number" min="1" value={params.devices} onChange={e => setParams({...params, devices: parseInt(e.target.value) || 0})} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono"/></div></div>
                     <div>
                         <label className="text-sm font-medium text-gray-400 mb-2 block">Доступные сквады</label>
                         {loadingSquads ? (
@@ -1598,7 +1638,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
                 { category: "Пользователи", items: [{ name: "Пользователи", icon: Users }, { name: "Ключи", icon: Key }] },
                 { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Тарифы", icon: Tag }] },
                 { category: "Поддержка", items: [{ name: "Тикеты", icon: MessageSquare }] },
-                { category: "Система", items: [{ name: "Сквады", icon: Zap }] },
+                { category: "Система", items: [{ name: "Сквады", icon: Zap }, { name: "Инструменты", icon: Terminal }] },
                 { category: "Другое", items: [{ name: "Настройки", icon: Settings }] }
             ].map((section, idx) => (
                 <div key={idx}>
@@ -1611,7 +1651,36 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
       <main className="md:ml-64 min-h-screen transition-all duration-300">
         <div className="bg-gray-900/50 backdrop-blur-md border-b border-gray-800 sticky top-0 z-30 px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3 md:gap-4"><button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="md:hidden text-gray-300 hover:text-white p-1">{isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}</button><div className="relative group cursor-pointer"><div className="flex items-center space-x-2 bg-green-500/10 border border-green-500/20 px-3 py-1.5 rounded-full"><div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div><span className="text-green-400 text-sm font-medium">Работает</span></div></div></div>
+          <div className="flex items-center gap-3 md:gap-4"><button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="md:hidden text-gray-300 hover:text-white p-1">{isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}</button><div className="relative group cursor-pointer">
+              <div className="flex items-center space-x-2 bg-green-500/10 border border-green-500/20 px-3 py-1.5 rounded-full">
+                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                <span className="text-green-400 text-sm font-medium">Работает</span>
+              </div>
+              {/* Tooltip при наведении */}
+              <div className="absolute top-full left-0 mt-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 shadow-xl min-w-[200px]">
+                  <div className="text-sm font-medium text-white mb-3">Статус системы</div>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-400">API</span>
+                      <div className="flex items-center"><div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div><span className="text-green-400">OK</span></div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-400">Remnawave</span>
+                      <div className="flex items-center"><div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div><span className="text-green-400">OK</span></div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-400">Telegram Bot</span>
+                      <div className="flex items-center"><div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div><span className="text-green-400">OK</span></div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-400">База данных</span>
+                      <div className="flex items-center"><div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div><span className="text-green-400">OK</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div></div>
           <div className="flex items-center gap-3">
             <div className="flex items-center bg-blue-600/10 border border-blue-500/20 px-3 py-1.5 rounded-lg hover:bg-blue-600/20 transition-colors cursor-pointer"><DollarSign size={16} className="text-blue-400 mr-2" /><div className="text-lg font-bold text-blue-400 leading-none">{totalRevenue.toLocaleString('ru-RU')} ₽</div></div>
             <button onClick={onLogout} className="flex items-center bg-red-600/10 border border-red-500/20 px-3 py-1.5 rounded-lg hover:bg-red-600/20 transition-colors text-red-400 text-sm font-medium"><Lock size={14} className="mr-1.5" />Выход</button>
@@ -1628,7 +1697,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             {activePage === 'Тарифы' && <TariffsPage promos={promos} plans={plans} setPlans={setPlans} onToast={addToast} />}
             {activePage === 'Тикеты' && <TicketsPage tickets={tickets} activeTicketId={activeTicketId} setActiveTicketId={setActiveTicketId} ticketMsg={ticketMsg} setTicketMsg={setTicketMsg} setSelectedUser={setSelectedUser} users={users} onToast={addToast} />}
             {activePage === 'Сквады' && <SquadsPage onToast={addToast} />}
-            {/* Публичные страницы удалены */}
+            {activePage === 'Инструменты' && <ToolsPage onToast={addToast} />}
             {activePage === 'Настройки' && <SettingsPage onToast={addToast} />}
         </div>
       </main>
@@ -1926,7 +1995,18 @@ interface UsersPageProps {
 }
 
 const UsersPage: React.FC<UsersPageProps> = ({ users, userSearch, setUserSearch, setSelectedUser, setMassActionType }) => {
-    const filteredUsers = users.filter(u => u.username.toLowerCase().includes(userSearch.toLowerCase()));
+    const [statusFilter, setStatusFilter] = useState<'all' | 'Trial' | 'Active' | 'Banned'>('all');
+    const [showFilterMenu, setShowFilterMenu] = useState(false);
+    
+    const filteredUsers = users.filter(u => {
+        const matchesSearch = u.username.toLowerCase().includes(userSearch.toLowerCase()) || 
+                              u.name.toLowerCase().includes(userSearch.toLowerCase()) ||
+                              u.telegramId.toString().includes(userSearch);
+        const matchesStatus = statusFilter === 'all' || 
+                              (statusFilter === 'Banned' ? u.status === 'Banned' : u.status === statusFilter);
+        return matchesSearch && matchesStatus;
+    });
+    
     const [showMassMenu, setShowMassMenu] = useState(false);
     const menuRef = useRef<HTMLDivElement>(null);
 
@@ -1981,7 +2061,22 @@ const UsersPage: React.FC<UsersPageProps> = ({ users, userSearch, setUserSearch,
                 </div>
             </div>
 
-            <div className="relative"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Поиск..." /></div>
+            <div className="flex space-x-4">
+                <div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Поиск по имени, username или ID..." /></div>
+                <div className="relative">
+                    <button onClick={() => setShowFilterMenu(!showFilterMenu)} className={`px-4 py-3 bg-gray-900 border rounded-xl text-gray-300 hover:bg-gray-800 transition-colors flex items-center ${statusFilter !== 'all' ? 'border-blue-500 text-blue-400' : 'border-gray-700'}`}>
+                        <Filter size={18} className="mr-2" /> 
+                        {statusFilter === 'all' ? 'Фильтр' : statusFilter === 'Trial' ? 'Триал' : statusFilter === 'Active' ? 'Активные' : 'Забаненные'}
+                    </button>
+                    {showFilterMenu && (
+                        <div className="absolute top-full right-0 mt-2 bg-gray-900 border border-gray-700 rounded-xl shadow-xl z-20 overflow-hidden min-w-[150px]">
+                            {[{v: 'all', l: 'Все'}, {v: 'Trial', l: 'Триал'}, {v: 'Active', l: 'Активные'}, {v: 'Banned', l: 'Забаненные'}].map(opt => (
+                                <button key={opt.v} onClick={() => { setStatusFilter(opt.v as any); setShowFilterMenu(false); }} className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-800 transition-colors ${statusFilter === opt.v ? 'text-blue-400 bg-blue-600/10' : 'text-gray-300'}`}>{opt.l}</button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
             <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-sm">
                 <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
@@ -2013,12 +2108,35 @@ interface KeysPageProps {
 }
 
 const KeysPage: React.FC<KeysPageProps> = ({ keys, keySearch, setKeySearch, setIsCreateKeyOpen, setEditingKey }) => {
-    const filteredKeys = keys.filter(k => k.key.toLowerCase().includes(keySearch.toLowerCase()) || k.user.toLowerCase().includes(keySearch.toLowerCase()));
+    const [statusFilter, setStatusFilter] = useState<'all' | 'Active' | 'Expired' | 'Banned'>('all');
+    const [showFilterMenu, setShowFilterMenu] = useState(false);
+    
+    const filteredKeys = keys.filter(k => {
+        const matchesSearch = k.key.toLowerCase().includes(keySearch.toLowerCase()) || k.user.toLowerCase().includes(keySearch.toLowerCase());
+        const matchesStatus = statusFilter === 'all' || k.status === statusFilter;
+        return matchesSearch && matchesStatus;
+    });
+    
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4"><div><h2 className="text-2xl font-bold text-white">Ключи</h2><p className="text-gray-400 mt-1">Управление подписками VLESS/Vmess</p></div><button onClick={() => setIsCreateKeyOpen(true)} className="flex items-center px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-900/20 transition-all"><Plus size={18} className="mr-2" />Создать</button></div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6"><StatCard title="Всего ключей" value={keys.length} icon={Key} color="blue" /><StatCard title="Истёкшие" value={keys.filter(k => k.status === 'Expired').length} icon={Clock} color="orange" /><StatCard title="Заблокированные" value={keys.filter(k => k.status === 'Banned').length} icon={Ban} color="red" /></div>
-            <div className="flex space-x-4"><div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={keySearch} onChange={e => setKeySearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Поиск по ключу, пользователю..." /></div><button className="px-4 bg-gray-900 border border-gray-700 rounded-xl text-gray-300 hover:bg-gray-800 transition-colors flex items-center"><Filter size={18} className="mr-2" /> Фильтр</button></div>
+            <div className="flex space-x-4">
+                <div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={keySearch} onChange={e => setKeySearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Поиск по ключу, пользователю..." /></div>
+                <div className="relative">
+                    <button onClick={() => setShowFilterMenu(!showFilterMenu)} className={`px-4 py-3 bg-gray-900 border rounded-xl text-gray-300 hover:bg-gray-800 transition-colors flex items-center ${statusFilter !== 'all' ? 'border-blue-500 text-blue-400' : 'border-gray-700'}`}>
+                        <Filter size={18} className="mr-2" /> 
+                        {statusFilter === 'all' ? 'Фильтр' : statusFilter === 'Active' ? 'Активные' : statusFilter === 'Expired' ? 'Истёкшие' : 'Забаненные'}
+                    </button>
+                    {showFilterMenu && (
+                        <div className="absolute top-full right-0 mt-2 bg-gray-900 border border-gray-700 rounded-xl shadow-xl z-20 overflow-hidden min-w-[150px]">
+                            {[{v: 'all', l: 'Все'}, {v: 'Active', l: 'Активные'}, {v: 'Expired', l: 'Истёкшие'}, {v: 'Banned', l: 'Забаненные'}].map(opt => (
+                                <button key={opt.v} onClick={() => { setStatusFilter(opt.v as any); setShowFilterMenu(false); }} className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-800 transition-colors ${statusFilter === opt.v ? 'text-blue-400 bg-blue-600/10' : 'text-gray-300'}`}>{opt.l}</button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
              <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-sm">
                 <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
@@ -2029,7 +2147,7 @@ const KeysPage: React.FC<KeysPageProps> = ({ keys, keySearch, setKeySearch, setI
                                     <td className="px-6 py-4"><div className="text-sm font-mono text-white">#{k.id}</div><div className="text-xs text-gray-500 truncate w-32 font-mono mt-0.5 opacity-70">{k.key}</div></td>
                                     <td className="px-6 py-4 text-sm text-blue-400 font-medium">{k.user}</td><td className="px-6 py-4"><span className={`px-2 py-1 rounded text-xs font-medium border ${k.status === 'Active' ? 'bg-green-500/10 text-green-400 border-green-500/20' : k.status === 'Expired' ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>{k.status}</span></td>
                                     <td className="px-6 py-4 text-sm text-gray-300">{k.expiry > 0 ? `${k.expiry} дн.` : 'Истёк'}</td>
-                                    <td className="px-6 py-4"><div className="text-xs text-gray-400 mb-1">{k.trafficUsed} / {k.trafficLimit} GB</div><div className="w-24 bg-gray-800 rounded-full h-1.5"><div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${(k.trafficUsed/k.trafficLimit)*100}%` }}></div></div></td><td className="px-6 py-4 text-sm text-gray-400 text-center">{k.devicesUsed}/{k.devicesLimit}</td>
+                                    <td className="px-6 py-4"><div className="text-xs text-gray-400 mb-1">{(k.trafficUsed / (1024**3)).toFixed(1)} / {k.trafficLimit > 0 ? (k.trafficLimit / (1024**3)).toFixed(0) : '∞'} GB</div><div className="w-24 bg-gray-800 rounded-full h-1.5"><div className={`h-1.5 rounded-full ${k.trafficLimit > 0 && k.trafficUsed/k.trafficLimit > 0.9 ? 'bg-red-500' : k.trafficLimit > 0 && k.trafficUsed/k.trafficLimit > 0.7 ? 'bg-yellow-500' : 'bg-blue-500'}`} style={{ width: `${k.trafficLimit > 0 ? Math.min(100, (k.trafficUsed/k.trafficLimit)*100) : 0}%` }}></div></div></td><td className="px-6 py-4 text-sm text-gray-400 text-center">{k.devicesUsed}/{k.devicesLimit}</td>
                                     <td className="px-6 py-4 text-right"><div className="p-2 bg-gray-800 rounded-lg text-gray-500 group-hover:bg-blue-600 group-hover:text-white transition-colors inline-block"><Edit2 size={16} /></div></td>
                                 </tr>
                             ))}
@@ -3766,6 +3884,195 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                             </button>
                         </div>
                     </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ===== TOOLS PAGE =====
+interface ToolsPageProps {
+    onToast: (title: string, msg: string, type: ToastType) => void;
+}
+
+const ToolsPage: React.FC<ToolsPageProps> = ({ onToast }) => {
+    const [exporting, setExporting] = useState<string | null>(null);
+    const [syncing, setSyncing] = useState(false);
+    const [diagnostics, setDiagnostics] = useState<any>(null);
+    const [loadingDiag, setLoadingDiag] = useState(false);
+
+    const exportData = async (type: 'users' | 'keys' | 'transactions') => {
+        setExporting(type);
+        try {
+            const res = await apiFetch(`/panel/export/${type}`);
+            if (res && res.data) {
+                const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${type}_export_${new Date().toISOString().slice(0,10)}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+                onToast('Успех', `Экспортировано ${res.data.length} записей`, 'success');
+            }
+        } catch (e: any) {
+            onToast('Ошибка', e.message || 'Не удалось экспортировать', 'error');
+        } finally {
+            setExporting(null);
+        }
+    };
+
+    const runDiagnostics = async () => {
+        setLoadingDiag(true);
+        try {
+            const res = await apiFetch('/panel/diagnostics');
+            setDiagnostics(res);
+        } catch (e) {
+            onToast('Ошибка', 'Не удалось получить диагностику', 'error');
+        } finally {
+            setLoadingDiag(false);
+        }
+    };
+
+    const syncRemnawave = async () => {
+        setSyncing(true);
+        try {
+            const res = await apiFetch('/panel/remnawave/sync', { method: 'POST' });
+            if (res?.success) {
+                onToast('Успех', `Синхронизировано: ${res.synced || 0} ключей`, 'success');
+            }
+        } catch (e) {
+            onToast('Ошибка', 'Не удалось синхронизировать', 'error');
+        } finally {
+            setSyncing(false);
+        }
+    };
+
+    const cleanupExpired = async () => {
+        if (!confirm('Удалить все истёкшие ключи старше 30 дней?')) return;
+        try {
+            const res = await apiFetch('/panel/tools/cleanup-expired', { method: 'POST' });
+            onToast('Успех', `Удалено ${res?.deleted || 0} истёкших ключей`, 'success');
+        } catch (e) {
+            onToast('Ошибка', 'Не удалось выполнить очистку', 'error');
+        }
+    };
+
+    return (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div>
+                <h2 className="text-2xl font-bold text-white">Инструменты</h2>
+                <p className="text-gray-400 mt-1">Полезные утилиты для администрирования</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Экспорт данных */}
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                    <div className="flex items-center gap-3 mb-4">
+                        <div className="w-10 h-10 rounded-xl bg-blue-600/20 flex items-center justify-center">
+                            <Download size={20} className="text-blue-400" />
+                        </div>
+                        <div>
+                            <h3 className="text-white font-bold">Экспорт данных</h3>
+                            <p className="text-gray-500 text-sm">Скачать данные в JSON</p>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                        <button onClick={() => exportData('users')} disabled={!!exporting} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                            {exporting === 'users' ? <Loader size={14} className="animate-spin mx-auto" /> : 'Пользователи'}
+                        </button>
+                        <button onClick={() => exportData('keys')} disabled={!!exporting} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                            {exporting === 'keys' ? <Loader size={14} className="animate-spin mx-auto" /> : 'Ключи'}
+                        </button>
+                        <button onClick={() => exportData('transactions')} disabled={!!exporting} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                            {exporting === 'transactions' ? <Loader size={14} className="animate-spin mx-auto" /> : 'Транзакции'}
+                        </button>
+                    </div>
+                </div>
+
+                {/* Синхронизация */}
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                    <div className="flex items-center gap-3 mb-4">
+                        <div className="w-10 h-10 rounded-xl bg-green-600/20 flex items-center justify-center">
+                            <RefreshCw size={20} className="text-green-400" />
+                        </div>
+                        <div>
+                            <h3 className="text-white font-bold">Синхронизация</h3>
+                            <p className="text-gray-500 text-sm">Обновить данные из Remnawave</p>
+                        </div>
+                    </div>
+                    <button onClick={syncRemnawave} disabled={syncing} className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-500 text-white rounded-xl font-medium disabled:opacity-50 transition-colors flex items-center justify-center gap-2">
+                        {syncing ? <Loader size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                        {syncing ? 'Синхронизация...' : 'Синхронизировать ключи'}
+                    </button>
+                </div>
+
+                {/* Очистка */}
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                    <div className="flex items-center gap-3 mb-4">
+                        <div className="w-10 h-10 rounded-xl bg-red-600/20 flex items-center justify-center">
+                            <Trash2 size={20} className="text-red-400" />
+                        </div>
+                        <div>
+                            <h3 className="text-white font-bold">Очистка данных</h3>
+                            <p className="text-gray-500 text-sm">Удалить устаревшие записи</p>
+                        </div>
+                    </div>
+                    <button onClick={cleanupExpired} className="w-full px-4 py-2.5 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 rounded-xl font-medium transition-colors">
+                        Удалить истёкшие ключи (30+ дней)
+                    </button>
+                </div>
+
+                {/* Диагностика */}
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                    <div className="flex items-center gap-3 mb-4">
+                        <div className="w-10 h-10 rounded-xl bg-purple-600/20 flex items-center justify-center">
+                            <Activity size={20} className="text-purple-400" />
+                        </div>
+                        <div>
+                            <h3 className="text-white font-bold">Диагностика</h3>
+                            <p className="text-gray-500 text-sm">Проверка состояния системы</p>
+                        </div>
+                    </div>
+                    <button onClick={runDiagnostics} disabled={loadingDiag} className="w-full px-4 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-medium disabled:opacity-50 transition-colors flex items-center justify-center gap-2">
+                        {loadingDiag ? <Loader size={16} className="animate-spin" /> : <Activity size={16} />}
+                        Запустить диагностику
+                    </button>
+                </div>
+            </div>
+
+            {/* Результаты диагностики */}
+            {diagnostics && (
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                    <h3 className="text-white font-bold mb-4">Результаты диагностики</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-gray-800 rounded-xl p-4">
+                            <div className="text-2xl font-bold text-white">{diagnostics.users_count || 0}</div>
+                            <div className="text-gray-400 text-sm">Пользователей</div>
+                        </div>
+                        <div className="bg-gray-800 rounded-xl p-4">
+                            <div className="text-2xl font-bold text-white">{diagnostics.keys_count || 0}</div>
+                            <div className="text-gray-400 text-sm">Ключей</div>
+                        </div>
+                        <div className="bg-gray-800 rounded-xl p-4">
+                            <div className="text-2xl font-bold text-white">{diagnostics.active_keys || 0}</div>
+                            <div className="text-gray-400 text-sm">Активных ключей</div>
+                        </div>
+                        <div className="bg-gray-800 rounded-xl p-4">
+                            <div className="text-2xl font-bold text-green-400">{diagnostics.remnawave_status || 'N/A'}</div>
+                            <div className="text-gray-400 text-sm">Remnawave</div>
+                        </div>
+                    </div>
+                    {diagnostics.issues && diagnostics.issues.length > 0 && (
+                        <div className="mt-4 bg-red-600/10 border border-red-500/30 rounded-xl p-4">
+                            <div className="text-red-400 font-bold mb-2">Обнаружены проблемы:</div>
+                            <ul className="text-red-300 text-sm space-y-1">
+                                {diagnostics.issues.map((issue: string, i: number) => (
+                                    <li key={i}>• {issue}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
                 </div>
             )}
         </div>
