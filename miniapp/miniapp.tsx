@@ -2954,7 +2954,7 @@ export default function App() {
       )}
     </div>
   );
-      }  });
+}
   
   // Обработка бана (статус 403)
   if (res.status === 403) {
@@ -5854,4 +5854,5 @@ export default function App() {
     </div>
   );
 }
+
 
