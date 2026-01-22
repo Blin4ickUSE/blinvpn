@@ -3201,13 +3201,12 @@ function calculateWhitelistPrice(): number {
 // Платежные методы загружаются из API с комиссиями, но оставляем дефолтные
 // ВРЕМЕННО: только СБП через YooKassa
 const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
-  // КАРТА ВРЕМЕННО ОТКЛЮЧЕНА
-  // { 
-  //   id: 'card', 
-  //   name: 'Банковская карта', 
-  //   icon: '💳', 
-  //   feePercent: 0  
-  // },
+  { 
+     id: 'card', 
+     name: 'Банковская карта', 
+     icon: '💳', 
+     feePercent: 0  
+  },
   { 
     id: 'sbp', 
     name: 'СБП', 
@@ -3216,15 +3215,6 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
     variants: [
       { id: 'platega_sbp', name: 'Platega', feePercent: 0 },
       { id: 'yookassa_sbp', name: 'YooKassa', feePercent: 0 }
-    ]
-  },
-  { 
-    id: 'card', 
-    name: 'Банковская карта', 
-    icon: '💳', 
-    feePercent: 0, 
-    variants: [
-      { id: 'platega_card', name: 'Platega', feePercent: 0 }
     ]
   },
   // КРИПТОВАЛЮТА ОТКЛЮЧЕНА
@@ -5854,6 +5844,7 @@ export default function App() {
     </div>
   );
 }
+
 
 
 
