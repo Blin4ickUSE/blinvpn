@@ -289,9 +289,7 @@ create_env_file() {
     
     # Telegram боты (обязательно)
     prompt "Telegram Bot Token (основной бот): " TELEGRAM_BOT_TOKEN
-    prompt "Telegram Support Bot Token (ДОЛЖЕН отличаться от основного!): " SUPPORT_BOT_TOKEN
     prompt "Telegram Admin ID: " TELEGRAM_ADMIN_ID
-    prompt "Telegram Support Group ID (группа с форумом): " TELEGRAM_SUPPORT_GROUP_ID
     
     # Remnawave (панель управления VPN)
     log_info "\n${CYAN}Remnawave - панель управления VPN:${NC}"
@@ -312,9 +310,7 @@ create_env_file() {
     cat > .env <<EOF
 # ===== Telegram =====
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-SUPPORT_BOT_TOKEN=${SUPPORT_BOT_TOKEN}
 TELEGRAM_ADMIN_ID=${TELEGRAM_ADMIN_ID}
-TELEGRAM_SUPPORT_GROUP_ID=${TELEGRAM_SUPPORT_GROUP_ID}
 
 # ===== Remnawave (панель управления VPN) =====
 # URL и API токен вашей Remnawave панели
