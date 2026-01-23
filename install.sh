@@ -329,7 +329,7 @@ HELEKET_MERCHANT=
 HELEKET_API_KEY=
 
 # Platega (альтернативные платежи)
-PLATEGA_API_URL=https://api.platega.com
+PLATEGA_API_URL=https://app.platega.io
 PLATEGA_MERCHANT_ID=
 PLATEGA_SECRET_KEY=
 
