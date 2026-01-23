@@ -190,7 +190,7 @@ class NalogService:
         Обработать успешный платеж и создать чек
         
         Args:
-            payment_id: ID платежа
+            payment_id: ID платежки
             amount: Сумма платежа в рублях
             user_id: ID пользователя в системе
             telegram_id: Telegram ID пользователя
