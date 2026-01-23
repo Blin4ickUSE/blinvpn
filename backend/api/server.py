@@ -4294,44 +4294,6 @@ def cleanup_expired_keys():
     finally:
         conn.close()
 
-@app.route('/api/panel/remnawave/sync', methods=['POST'])
-@require_auth
-def sync_remnawave_keys():
-    """Синхронизировать ключи с Remnawave"""
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
-    synced = 0
-    
-    try:
-        # Получаем все ключи из БД
-        cursor.execute("SELECT id, key_uuid, user_id FROM vpn_keys WHERE key_uuid IS NOT NULL")
-        local_keys = cursor.fetchall()
-        
-        for key in local_keys:
-            key_id, key_uuid, user_id = key
-            try:
-                # Получаем данные из Remnawave
-                rw_user = remnawave.get_user_by_uuid(key_uuid)
-                if rw_user:
-                    # Обновляем локальные данные
-                    traffic_used = rw_user.get('usedTrafficBytes', 0)
-                    traffic_limit = rw_user.get('trafficLimitBytes', 0)
-                    
-                    cursor.execute("""
-                        UPDATE vpn_keys 
-                        SET traffic_used = ?, traffic_limit = ?
-                        WHERE id = ?
-                    """, (traffic_used, traffic_limit, key_id))
-                    synced += 1
-            except:
-                continue
-        
-        conn.commit()
-        return jsonify({'success': True, 'synced': synced})
-    finally:
-        conn.close()
-
-
 # Запуск планировщика для автоматических бэкапов
 def start_backup_scheduler():
     """Запустить планировщик для бэкапов в 02:00 МСК"""
