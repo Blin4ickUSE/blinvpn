@@ -557,6 +557,30 @@ def get_user_devices():
     if not user:
         return jsonify({'error': 'User not found'}), 404
     
+    # Синхронизируем traffic_used из Remnawave
+    try:
+        rw_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
+        if rw_users:
+            conn_sync = database.get_db_connection()
+            cursor_sync = conn_sync.cursor()
+            for rw_user in rw_users:
+                rw_uuid = rw_user.uuid if hasattr(rw_user, 'uuid') else rw_user.get('uuid')
+                # Получаем used_traffic_bytes из user_traffic
+                traffic_used = 0
+                if hasattr(rw_user, 'user_traffic') and rw_user.user_traffic:
+                    traffic_used = rw_user.user_traffic.used_traffic_bytes
+                elif hasattr(rw_user, 'used_traffic_bytes'):
+                    traffic_used = rw_user.used_traffic_bytes
+                
+                if rw_uuid and traffic_used > 0:
+                    cursor_sync.execute("""
+                        UPDATE vpn_keys SET traffic_used = ? WHERE key_uuid = ?
+                    """, (traffic_used, rw_uuid))
+            conn_sync.commit()
+            conn_sync.close()
+    except Exception as e:
+        logger.warning(f"Failed to sync traffic from Remnawave: {e}")
+    
     conn = database.get_db_connection()
     cursor = conn.cursor()
     
@@ -583,7 +607,7 @@ def get_user_devices():
                     else:
                         dt = added_date
                     added_formatted = dt.strftime('%d.%m.%Y')
-                except Exception:
+                except:
                     added_formatted = str(added_date)[:10]
             else:
                 added_formatted = datetime.now().strftime('%d.%m.%Y')
@@ -709,7 +733,7 @@ def get_user_history():
                     months = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
                     month_idx = dt.month - 1
                     date_formatted = f"{dt.day} {months[month_idx]} {dt.year}"
-                except Exception:
+                except:
                     date_formatted = str(date_str)[:10]
             else:
                 date_formatted = datetime.now().strftime('%d %b %Y')
@@ -1245,7 +1269,7 @@ def get_mailing_history():
                     else:
                         dt = date_str
                     date_formatted = dt.strftime('%d.%m.%y')
-                except Exception:
+                except:
                     date_formatted = str(date_str)[:10]
             else:
                 date_formatted = ''
@@ -1402,7 +1426,7 @@ def reply_to_ticket(ticket_id: int):
 @app.route('/api/panel/transactions', methods=['GET'])
 @require_auth
 def get_transactions():
-    """Получить список транзакций"""
+    """Получить список транзакций - только успешные пополнения и выводы, без действий администратора"""
     limit = request.args.get('limit', 100, type=int)
     offset = request.args.get('offset', 0, type=int)
     
@@ -1410,6 +1434,8 @@ def get_transactions():
     cursor = conn.cursor()
     
     try:
+        # Показываем только успешные пополнения (deposit) и выводы (withdrawal_request)
+        # Исключаем действия администратора (admin_deposit, admin_withdraw) и другие типы
         cursor.execute("""
             SELECT 
                 t.id,
@@ -1425,6 +1451,9 @@ def get_transactions():
                 t.created_at
             FROM transactions t
             LEFT JOIN users u ON t.user_id = u.id
+            WHERE t.type IN ('deposit', 'withdrawal_request')
+              AND t.status = 'Success'
+              AND t.payment_method != 'Admin'
             ORDER BY t.created_at DESC
             LIMIT ? OFFSET ?
         """, (limit, offset))
@@ -1582,7 +1611,7 @@ def get_user_subscriptions(user_id: int):
                         total_hours = total_seconds / 3600
                         days_left = int(total_hours / 24)
                         hours_left = int(math.ceil(total_hours % 24))
-                except Exception:
+                except:
                     is_expired = True
             
             subscriptions.append({
@@ -1698,7 +1727,7 @@ def get_keys():
                         now = datetime.now(timezone.utc)
                     diff = expiry - now
                     expiry_days = max(0, int(diff.total_seconds() / 86400))
-                except Exception:
+                except:
                     expiry_days = 0
             
             keys.append({
@@ -1735,11 +1764,18 @@ def create_key():
     devices = data.get('devices', 5)
     is_trial = data.get('is_trial', False)
     plan_type = data.get('plan_type', 'vpn')
-    # Если сквады не указаны явно, получаем по умолчанию для типа подписки
+    # Если сквады не указаны явно, используем балансировщик для выбора оптимального сквада
     squad_uuids = data.get('squads')
     if squad_uuids is None or len(squad_uuids) == 0:
-        squad_uuids = database.get_default_squads(plan_type)
-        logger.info(f"Using default squads for {plan_type}: {squad_uuids}")
+        # Сначала пробуем балансировщик - выбираем сквад с наименьшей нагрузкой
+        best_squad = database.get_best_squad_for_subscription(plan_type)
+        if best_squad:
+            squad_uuids = [best_squad['squad_uuid']]
+            logger.info(f"Balancer selected squad {best_squad['squad_name']} for {plan_type} (users: {best_squad['current_users']})")
+        else:
+            # Fallback на сквады из настроек
+            squad_uuids = database.get_default_squads(plan_type)
+            logger.info(f"Using default squads for {plan_type}: {squad_uuids}")
     
     if not user_id:
         return jsonify({'error': 'user_id обязателен'}), 400
@@ -1842,6 +1878,16 @@ def create_key():
                 WHERE id = ?
             """, (expiry_date, traffic_bytes, devices, subscription_url, existing_key['id']))
             key_id = existing_key['id']
+            
+            # Обновляем или создаём устройство, связанное с ключом
+            cursor.execute("SELECT id FROM devices WHERE vpn_key_id = ?", (key_id,))
+            existing_device = cursor.fetchone()
+            if not existing_device:
+                # Создаём устройство если его нет
+                cursor.execute("""
+                    INSERT INTO devices (user_id, vpn_key_id, name, platform, is_active)
+                    VALUES (?, ?, 'Устройство', 'unknown', 1)
+                """, (user_id, key_id))
         else:
             # Создаем новый ключ
             cursor.execute("""
@@ -1849,6 +1895,12 @@ def create_key():
                 VALUES (?, ?, ?, 'Active', ?, ?, ?)
             """, (user_id, key_uuid, subscription_url, expiry_date, devices, traffic_bytes))
             key_id = cursor.lastrowid
+            
+            # Создаём запись в таблице devices для отображения в miniapp
+            cursor.execute("""
+                INSERT INTO devices (user_id, vpn_key_id, name, platform, is_active)
+                VALUES (?, ?, 'Устройство', 'unknown', 1)
+            """, (user_id, key_id))
         
         conn.commit()
         conn.close()
@@ -4226,10 +4278,9 @@ def cleanup_expired_keys():
         deleted = 0
         for key_uuid in keys_to_delete:
             try:
-                remnawave.remnawave_api.delete_user_sync(key_uuid)
+                remnawave.delete_user(key_uuid)
                 deleted += 1
-            except Exception as e:
-                logger.warning(f"Failed to delete user {key_uuid} from Remnawave: {e}")
+            except:
                 pass
         
         # Удаляем из базы
@@ -4240,6 +4291,43 @@ def cleanup_expired_keys():
         conn.commit()
         
         return jsonify({'success': True, 'deleted': deleted})
+    finally:
+        conn.close()
+
+@app.route('/api/panel/remnawave/sync', methods=['POST'])
+@require_auth
+def sync_remnawave_keys():
+    """Синхронизировать ключи с Remnawave"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    synced = 0
+    
+    try:
+        # Получаем все ключи из БД
+        cursor.execute("SELECT id, key_uuid, user_id FROM vpn_keys WHERE key_uuid IS NOT NULL")
+        local_keys = cursor.fetchall()
+        
+        for key in local_keys:
+            key_id, key_uuid, user_id = key
+            try:
+                # Получаем данные из Remnawave
+                rw_user = remnawave.get_user_by_uuid(key_uuid)
+                if rw_user:
+                    # Обновляем локальные данные
+                    traffic_used = rw_user.get('usedTrafficBytes', 0)
+                    traffic_limit = rw_user.get('trafficLimitBytes', 0)
+                    
+                    cursor.execute("""
+                        UPDATE vpn_keys 
+                        SET traffic_used = ?, traffic_limit = ?
+                        WHERE id = ?
+                    """, (traffic_used, traffic_limit, key_id))
+                    synced += 1
+            except:
+                continue
+        
+        conn.commit()
+        return jsonify({'success': True, 'synced': synced})
     finally:
         conn.close()
 
@@ -4277,3 +4365,4 @@ if __name__ == '__main__':
     # Запускаем планировщик бэкапов
     start_backup_scheduler()
     app.run(host='0.0.0.0', port=int(os.getenv('API_PORT', 8000)))
+
