@@ -763,28 +763,7 @@ export default function App() {
           return; // Не загружаем остальные данные
         }
         
-        // Проверяем наличие данных пользователя
-        if (!userData || !userData.id) {
-          console.error('Ошибка: пользователь не загружен, userData:', userData);
-          // Пытаемся повторить запрос через небольшую задержку
-          setTimeout(async () => {
-            try {
-              const retryData = await miniApiFetch(userUrl);
-              if (retryData && retryData.id) {
-                setUserId(retryData.id);
-                setBalance(retryData.balance || 0);
-                setUsername(retryData.username || `User_${tgId}`);
-                setDisplayName(retryData.full_name || tgFirstName || retryData.username || `User_${tgId}`);
-                setIsTrialUsed(retryData.trial_used === 1 || retryData.trial_used === true);
-              }
-            } catch (e) {
-              console.error('Ошибка повторной загрузки пользователя:', e);
-            }
-          }, 1000);
-          return;
-        }
-        
-        if (userData && userData.id) {
+        if (userData) {
           setUserId(userData.id);
           setBalance(userData.balance || 0);
           setUsername(userData.username || `User_${tgId}`);
@@ -1559,11 +1538,14 @@ export default function App() {
                 </button>
                 <button 
                 onClick={() => setWizardType('whitelist')} 
-                className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${
+                className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all relative ${
                     wizardType === 'whitelist' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
                 }`}
                 >
                 Обход белых списков
+                <span className="absolute -top-2 -right-1 bg-gradient-to-r from-pink-500 to-orange-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">
+                    НОВИНКА
+                </span>
                 </button>
             </div>
 
@@ -1634,6 +1616,14 @@ export default function App() {
                         <div className="flex items-center gap-3">
                             <Zap className="text-blue-400 shrink-0" size={18} />
                             <span className="text-slate-300 text-sm">Автоматическое продление</span>
+                        </div>
+                    </div>
+
+                    {/* Новинка - работает при глушилках */}
+                    <div className="bg-gradient-to-r from-pink-500/10 to-orange-500/10 border border-pink-500/30 p-3 rounded-xl mb-4 flex gap-3 items-start">
+                        <Zap className="text-pink-400 shrink-0 mt-0.5" size={18} />
+                        <div className="text-pink-300 text-xs leading-relaxed">
+                            <b className="text-pink-400">НОВИНКА!</b> Теперь работает даже при глушилках интернета. Оставайтесь на связи в любой ситуации!
                         </div>
                     </div>
 
@@ -1997,8 +1987,14 @@ export default function App() {
                 }
                 try {
                   const total = getPaymentTotal();
-                  // ВРЕМЕННО: только YooKassa СБП
-                  const methodKey = 'yookassa_sbp';
+                  // Используем выбранный вариант если есть, иначе выбранный метод
+                  const method = paymentMethods.find(m => m.id === selectedMethod);
+                  let methodKey = selectedMethod || 'yookassa_sbp';
+                  
+                  // Если у метода есть варианты и выбран вариант - используем его
+                  if (method?.variants && selectedVariant) {
+                    methodKey = selectedVariant;
+                  }
                   
                   const res = await miniApiFetch('/payment/create', {
                     method: 'POST',
@@ -2053,11 +2049,14 @@ export default function App() {
         </button>
         <button 
           onClick={() => setBuyTab('whitelist')} 
-          className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${
+          className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all relative ${
             buyTab === 'whitelist' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
           }`}
         >
           Обход белых списков
+          <span className="absolute -top-2 -right-1 bg-gradient-to-r from-pink-500 to-orange-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">
+            НОВИНКА
+          </span>
         </button>
       </div>
 
@@ -2098,6 +2097,14 @@ export default function App() {
                 <span>Автоматическое продление</span>
               </div>
             </div>
+          </div>
+
+          {/* Новинка - работает при глушилках */}
+          <div className="bg-gradient-to-r from-pink-500/10 to-orange-500/10 border border-pink-500/30 p-3 rounded-xl mb-4 flex gap-3 items-start">
+              <Zap className="text-pink-400 shrink-0 mt-0.5" size={18} />
+              <div className="text-pink-300 text-xs leading-relaxed">
+                  <b className="text-pink-400">НОВИНКА!</b> Теперь работает даже при глушилках интернета. Оставайтесь на связи в любой ситуации!
+              </div>
           </div>
 
           <div className="bg-yellow-500/10 border border-yellow-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
@@ -2954,4 +2961,4 @@ export default function App() {
       )}
     </div>
   );
-};
+}
