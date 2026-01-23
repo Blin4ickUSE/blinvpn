@@ -244,32 +244,40 @@ def heleket_webhook():
 
 @app.route('/platega', methods=['POST'])
 def platega_webhook():
-    """Обработка webhook от Platega"""
+    """Обработка webhook от Platega (по документации API)"""
     try:
         data = request.json
         
         logger.info(f"Platega webhook: {data}")
         
-        # Проверяем подпись если есть
-        signature = request.headers.get('Signature', '')
-        if signature and not platega.platega_api.verify_webhook_signature(data, signature):
-            logger.error("Platega webhook: неверная подпись")
-            return jsonify({'error': 'Invalid signature'}), 401
+        # Проверяем авторизацию по документации: X-MerchantId и X-Secret в заголовках
+        received_merchant = request.headers.get('X-MerchantId', '')
+        received_secret = request.headers.get('X-Secret', '')
+        
+        if platega.platega_api.is_configured:
+            if (received_merchant != platega.platega_api.merchant_id or 
+                received_secret != platega.platega_api.secret_key):
+                logger.error("Platega webhook: неверные X-MerchantId или X-Secret")
+                return jsonify({'error': 'Unauthorized'}), 401
         
         status = str(data.get('status', '')).upper()
-        transaction_id = data.get('transactionId') or data.get('id')
+        transaction_id = data.get('id')  # По документации: поле "id"
         payload = data.get('payload', '')
-        amount_kopeks = data.get('amount', 0)
-        amount = amount_kopeks / 100 if amount_kopeks else 0
+        # По документации: amount приходит в рублях (float), не в копейках!
+        amount = float(data.get('amount', 0))
         
         if status == 'CONFIRMED':
-            # Извлекаем user_id из payload (формат: platega:platega_{user_id}_{timestamp})
+            # Извлекаем user_id из payload (формат: platega_{user_id}_{hash})
             user_id = None
-            if payload and payload.startswith('platega:'):
-                correlation_id = payload.replace('platega:', '')
-                parts = correlation_id.split('_')
+            if payload:
+                # Убираем возможный префикс platega:
+                clean_payload = payload.replace('platega:', '') if payload.startswith('platega:') else payload
+                parts = clean_payload.split('_')
                 if len(parts) >= 2 and parts[0] == 'platega':
-                    user_id = int(parts[1])
+                    try:
+                        user_id = int(parts[1])
+                    except ValueError:
+                        pass
             
             if not user_id:
                 logger.error(f"Platega webhook: не удалось извлечь user_id из payload {payload}")
@@ -289,9 +297,17 @@ def platega_webhook():
                 logger.info(f"Platega платеж {transaction_id} уже обработан")
                 return jsonify({'status': 'ok'}), 200
             
-            # Определяем метод оплаты из данных
+            # Определяем метод оплаты из данных (по документации)
             payment_method = data.get('paymentMethod', 0)
-            method_name = 'СБП' if payment_method == 1 else 'Карта'
+            # 2=СБП QR, 10=Карты RUB, 11=Карточный, 12=Международный, 13=Крипто
+            if payment_method == 2:
+                method_name = 'СБП'
+            elif payment_method in (10, 11, 12):
+                method_name = 'Карта'
+            elif payment_method == 13:
+                method_name = 'Крипто'
+            else:
+                method_name = 'Platega'
             
             # Обновляем баланс
             database.update_user_balance(user_id, amount)
