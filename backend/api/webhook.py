@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify
 from backend.api import yookassa, heleket, platega
 from backend.database import database
 from backend.core import core
-from backend.api.yookassa_nalog import nalog_service
+from backend.api.nalogo import nalog_service
 
 logger = logging.getLogger(__name__)
 
