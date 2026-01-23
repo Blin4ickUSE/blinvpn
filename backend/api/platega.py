@@ -14,7 +14,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-PLATEGA_API_URL = os.getenv('PLATEGA_API_URL', 'https://app.platega.io')
+PLATEGA_API_URL = os.getenv('PLATEGA_API_URL', 'https://platega.io')
 PLATEGA_MERCHANT_ID = os.getenv('PLATEGA_MERCHANT_ID', '')
 PLATEGA_SECRET_KEY = os.getenv('PLATEGA_SECRET_KEY', '')
 PLATEGA_RETURN_URL = os.getenv('PLATEGA_RETURN_URL', '')
