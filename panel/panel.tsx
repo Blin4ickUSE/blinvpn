@@ -95,7 +95,6 @@ type ToastType = 'success' | 'error' | 'info';
 type TransactionType = 'income' | 'expense';
 type UserStatus = 'Active' | 'Trial' | 'Banned' | 'Expired';
 type KeyStatus = 'Active' | 'Expired' | 'Banned';
-type TicketStatus = 'Open' | 'Closed' | 'Pending';
 
 interface Toast {
   id: number;
@@ -178,18 +177,6 @@ interface Plan {
   duration: number;
   isHit: boolean;
   description: string;
-}
-
-interface Ticket {
-  id: number;
-  user: string;
-  status: TicketStatus;
-  lastMsg: string;
-  time: string;
-  unread: number;
-  avatar: string;
-  balance: number;
-  sub: string;
 }
 
 // ==========================================
@@ -1377,7 +1364,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [keys, setKeys] = useState<KeyItem[]>([]);
   const [promos, setPromos] = useState<Promo[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
-  const [tickets, setTickets] = useState<Ticket[]>([]);
   const [totalRevenue, setTotalRevenue] = useState<number>(0);
   
   // UI States
@@ -1387,8 +1373,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [massActionType, setMassActionType] = useState<string | null>(null);
   const [keySearch, setKeySearch] = useState('');
   const [isCreateKeyOpen, setIsCreateKeyOpen] = useState(false);
-  const [activeTicketId, setActiveTicketId] = useState<number | null>(null);
-  const [ticketMsg, setTicketMsg] = useState('');
   
   // New States for Key Editing
   const [editingKey, setEditingKey] = useState<KeyItem | null>(null);
@@ -1442,7 +1426,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
               username: u.username ? (u.username.startsWith('@') ? u.username : `@${u.username}`) : `id${u.telegram_id}`,
               name: u.full_name || '',
               balance: u.balance ?? 0,
-              status: (u.status as UserStatus) || 'Trial',
+              // Приоритет: is_banned -> Banned, иначе статус из БД или Trial
+              status: u.is_banned ? 'Banned' : ((u.status as UserStatus) || 'Trial'),
               traffic: 0,
               maxTraffic: 100,
               devices: 0,
@@ -1493,33 +1478,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           if (!cancelled) {
             addToast('Ошибка', 'Не удалось загрузить промокоды', 'error');
             setPromos([]);
-          }
-        }
-
-        // Тикеты
-        try {
-          const ticketsFromApi = await apiFetch('/panel/tickets');
-          if (!cancelled && Array.isArray(ticketsFromApi)) {
-            const mappedTickets: Ticket[] = ticketsFromApi.map((t: any) => ({
-              id: t.id,
-              user: t.user,
-              status: t.status as TicketStatus,
-              lastMsg: t.lastMsg,
-              time: t.time
-                ? new Date(t.time).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-                : '',
-              unread: t.unread ?? 0,
-              avatar: (t.user || '?').charAt(1).toUpperCase(),
-              balance: t.balance ?? 0,
-              sub: t.sub || '',
-            }));
-            setTickets(mappedTickets);
-          }
-        } catch (e) {
-          console.error('Failed to load tickets from API', e);
-          if (!cancelled) {
-            addToast('Ошибка', 'Не удалось загрузить тикеты', 'error');
-            setTickets([]);
           }
         }
 
@@ -1637,7 +1595,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
                 { category: "Главное", items: [{ name: "Главная страница", icon: Home }, { name: "Финансы", icon: DollarSign }, { name: "Статистика", icon: BarChart2 }] },
                 { category: "Пользователи", items: [{ name: "Пользователи", icon: Users }, { name: "Ключи", icon: Key }] },
                 { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Тарифы", icon: Tag }] },
-                { category: "Поддержка", items: [{ name: "Тикеты", icon: MessageSquare }] },
                 { category: "Система", items: [{ name: "Сквады", icon: Zap }, { name: "Инструменты", icon: Terminal }] },
                 { category: "Другое", items: [{ name: "Настройки", icon: Settings }] }
             ].map((section, idx) => (
@@ -1695,7 +1652,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             {activePage === 'Ключи' && <KeysPage keys={keys} keySearch={keySearch} setKeySearch={setKeySearch} setIsCreateKeyOpen={setIsCreateKeyOpen} setEditingKey={setEditingKey} />}
             {activePage === 'Рассылка' && <MailingPage onToast={addToast} />}
             {activePage === 'Тарифы' && <TariffsPage promos={promos} plans={plans} setPlans={setPlans} onToast={addToast} />}
-            {activePage === 'Тикеты' && <TicketsPage tickets={tickets} activeTicketId={activeTicketId} setActiveTicketId={setActiveTicketId} ticketMsg={ticketMsg} setTicketMsg={setTicketMsg} setSelectedUser={setSelectedUser} users={users} onToast={addToast} />}
             {activePage === 'Сквады' && <SquadsPage onToast={addToast} />}
             {activePage === 'Инструменты' && <ToolsPage onToast={addToast} />}
             {activePage === 'Настройки' && <SettingsPage onToast={addToast} />}
@@ -1715,7 +1671,6 @@ const Dashboard = () => {
         total_users: number;
         active_keys: number;
         monthly_revenue: number;
-        open_tickets: number;
     } | null>(null);
 
     useEffect(() => {
@@ -1771,12 +1726,6 @@ const Dashboard = () => {
                 value={summary ? fmtMoney(summary.monthly_revenue) : '—'}
                 icon={DollarSign}
                 color="indigo"
-              />
-              <StatCard
-                title="Открытые тикеты"
-                value={summary ? fmtNumber(summary.open_tickets) : '—'}
-                icon={MessageSquare}
-                color="orange"
               />
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1899,7 +1848,6 @@ const StatisticsPage = () => {
                 <StatCard title="Всего пользователей" value={fmtNumber(stats.totalUsers)} icon={Users} color="blue" />
                 <StatCard title="Активных подписок" value={fmtNumber(stats.activeSubscriptions)} icon={CheckCircle} color="green" />
                 <StatCard title="Платежей сегодня" value={fmtNumber(stats.paymentsToday)} icon={CreditCard} color="indigo" />
-                <StatCard title="Открытых тикетов" value={fmtNumber(stats.openTickets)} icon={MessageSquare} color="orange" />
                 <StatCard title="Баланс клиентов" value={fmtMoney(stats.clientsBalance)} icon={Wallet} color="gray" />
             </div>
 
@@ -3142,120 +3090,6 @@ const PublicPages: React.FC<PublicPagesProps> = ({ onToast }) => {
     );
 };
 
-interface TicketsPageProps {
-    tickets: Ticket[];
-    activeTicketId: number | null;
-    setActiveTicketId: (id: number | null) => void;
-    ticketMsg: string;
-    setTicketMsg: (msg: string) => void;
-    setSelectedUser: (u: User | null) => void;
-    users: User[];
-    onToast: (title: string, msg: string, type: ToastType) => void;
-}
-
-const TicketsPage: React.FC<TicketsPageProps> = ({ tickets, activeTicketId, setActiveTicketId, ticketMsg, setTicketMsg, setSelectedUser, users, onToast }) => {
-    const activeTicket = tickets.find(t => t.id === activeTicketId);
-    const [ticketMessages, setTicketMessages] = useState<any[]>([]);
-    
-    // Загружаем сообщения тикета при изменении activeTicketId
-    useEffect(() => {
-        if (activeTicketId) {
-            const loadMessages = async () => {
-                try {
-                    const messages = await apiFetch(`/panel/tickets/${activeTicketId}/messages`);
-                    if (Array.isArray(messages)) {
-                        setTicketMessages(messages);
-                    }
-                } catch (error) {
-                    console.error('Error loading ticket messages:', error);
-                }
-            };
-            loadMessages();
-        } else {
-            setTicketMessages([]);
-        }
-    }, [activeTicketId]);
-    
-    const handleSendTicketMessage = async (ticketId: number, message: string) => {
-        try {
-            const response = await apiFetch(`/panel/tickets/${ticketId}/reply`, {
-                method: 'POST',
-                body: JSON.stringify({ message })
-            });
-            
-            if (response.success) {
-                onToast('Тикет', 'Сообщение отправлено', 'success');
-                setTicketMsg('');
-                // Обновляем сообщения тикета
-                if (activeTicketId) {
-                    const messages = await apiFetch(`/panel/tickets/${activeTicketId}/messages`);
-                    if (Array.isArray(messages)) {
-                        setTicketMessages(messages);
-                    }
-                }
-            } else {
-                onToast('Ошибка', response.error || 'Не удалось отправить сообщение', 'error');
-            }
-        } catch (error) {
-            console.error('Error sending ticket message:', error);
-            onToast('Ошибка', 'Не удалось отправить сообщение', 'error');
-        }
-    };
-    
-    return (
-        <div className="h-[calc(100vh-140px)] flex gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="w-1/3 bg-gray-900 border border-gray-800 rounded-2xl flex flex-col overflow-hidden">
-                <div className="p-4 border-b border-gray-800 flex justify-between items-center"><h3 className="font-bold text-white text-lg">Тикеты</h3><button className="text-gray-400 hover:text-white"><Filter size={18}/></button></div>
-                <div className="flex-1 overflow-y-auto custom-scrollbar">
-                    {tickets.map(t => (
-                        <div key={t.id} onClick={() => setActiveTicketId(t.id)} className={`p-4 border-b border-gray-800 cursor-pointer hover:bg-gray-800/50 transition-colors ${activeTicketId === t.id ? 'bg-blue-900/10 border-l-2 border-l-blue-500' : ''}`}>
-                            <div className="flex justify-between items-start mb-1"><div className="flex items-center"><div className="w-8 h-8 bg-gray-700 rounded-full flex items-center justify-center text-xs font-bold text-gray-300 mr-2">{t.avatar}</div><span className="font-medium text-white">{t.user}</span></div><span className="text-xs text-gray-500">{t.time}</span></div>
-                            <p className="text-sm text-gray-400 truncate mb-2">{t.lastMsg}</p>
-                            <div className="flex justify-between items-center"><span className={`text-[10px] px-2 py-0.5 rounded border ${t.status === 'Open' ? 'bg-green-500/10 text-green-400 border-green-500/20' : t.status === 'Pending' ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20' : 'bg-gray-700 text-gray-400 border-gray-600'}`}>{t.status}</span>{t.unread > 0 && <span className="bg-blue-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">{t.unread}</span>}</div>
-                        </div>
-                    ))}
-                </div>
-            </div>
-            <div className="w-2/3 bg-gray-900 border border-gray-800 rounded-2xl flex flex-col overflow-hidden">
-                {activeTicket ? (
-                    <>
-                      <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/50">
-                          <div className="flex items-center cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setSelectedUser(users.find(u => u.username === activeTicket.user) || users[0])}>
-                              <div className="w-10 h-10 bg-gray-700 rounded-full flex items-center justify-center font-bold text-gray-300 mr-3">{activeTicket.avatar}</div>
-                              <div><div className="font-bold text-white flex items-center">{activeTicket.user} <ChevronRight size={14} className="ml-1 text-gray-500"/></div><div className="text-xs text-gray-400">Баланс: {activeTicket.balance}₽ • {activeTicket.sub}</div></div>
-                          </div>
-                          <div className="flex gap-2"><button onClick={() => onToast('Тикет', 'Тикет закрыт', 'success')} className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white" title="Закрыть тикет"><CheckCircle size={20}/></button><button className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-red-400" title="Заблокировать"><Ban size={20}/></button><button className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white"><MoreVertical size={20}/></button></div>
-                      </div>
-                      <div className="flex-1 p-6 overflow-y-auto space-y-4 bg-gray-950/30">
-                          {ticketMessages.length === 0 ? (
-                              <div className="flex flex-col items-center justify-center h-full text-gray-500">
-                                  <MessageCircle size={48} className="mb-4 opacity-50"/>
-                                  <p>Сообщений пока нет</p>
-                              </div>
-                          ) : (
-                              ticketMessages.map((msg: any) => (
-                                  <div key={msg.id} className={`flex ${msg.isAdmin ? 'justify-end' : 'justify-start'}`}>
-                                      <div className={`rounded-2xl py-3 px-4 max-w-[70%] text-sm ${
-                                          msg.isAdmin 
-                                              ? 'bg-blue-600 text-white rounded-tr-none' 
-                                              : 'bg-gray-800 text-gray-200 rounded-tl-none'
-                                      }`}>
-                                          {msg.text}
-                                      </div>
-                                  </div>
-                              ))
-                          )}
-                      </div>
-                      <div className="p-4 border-t border-gray-800 bg-gray-900">
-                          <div className="flex items-center gap-2"><button className="text-gray-500 hover:text-white p-2"><Paperclip size={20}/></button><input type="text" value={ticketMsg} onChange={e => setTicketMsg(e.target.value)} onKeyPress={e => {if (e.key === 'Enter' && activeTicketId && ticketMsg.trim()) { handleSendTicketMessage(activeTicketId, ticketMsg.trim()); }}} className="flex-1 bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500" placeholder="Написать сообщение..." /><button onClick={async () => {if (activeTicketId && ticketMsg.trim()) { await handleSendTicketMessage(activeTicketId, ticketMsg.trim()); }}} className="bg-blue-600 hover:bg-blue-500 text-white p-3 rounded-xl transition-colors"><Send size={20}/></button></div>
-                      </div>
-                    </>
-                ) : (<div className="flex-1 flex flex-col items-center justify-center text-gray-500"><MessageCircle size={48} className="mb-4 opacity-50"/><p>Выберите чат из списка</p></div>)}
-            </div>
-        </div>
-    );
-};
-
 // Компонент настроек подписок с загрузкой сквадов из Remnawave
 const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
     const [squads, setSquads] = useState<any[]>([]);
@@ -3416,7 +3250,7 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
             </div>
             
             <div className="flex justify-between items-center">
-                <h3 className="text-lg font-bold text-white">Сквады по умолчанию</h3>
+                <h3 className="text-lg font-bold text-white">Балансировщик сквадов</h3>
                 <button 
                     onClick={saveSquads}
                     disabled={saving}
@@ -3426,10 +3260,23 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
                     Сохранить
                 </button>
             </div>
+
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                <div className="flex items-start gap-3 p-4 bg-blue-900/20 border border-blue-500/30 rounded-xl mb-4">
+                    <Zap className="text-blue-400 shrink-0 mt-0.5" size={20} />
+                    <div>
+                        <div className="text-blue-400 font-bold mb-1">Автоматический балансировщик</div>
+                        <div className="text-blue-300 text-sm">
+                            При создании ключа система автоматически выберет сквад с наименьшим количеством пользователей из выбранных ниже. 
+                            Если сквады не выбраны — будет использован сквад с минимальной нагрузкой из всех доступных.
+                        </div>
+                    </div>
+                </div>
+            </div>
             
             <SquadSelector 
                 title="🔒 VPN подписка" 
-                description="Сквады для обычной VPN подписки"
+                description="Выберите сквады для VPN (балансировщик выберет оптимальный)"
                 selectedSquads={vpnSquads}
                 type="vpn"
                 color="blue"
@@ -3437,7 +3284,7 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
             
             <SquadSelector 
                 title="🌐 Обход белых списков" 
-                description="Сквады для подписки с обходом белых списков"
+                description="Выберите сквады для обхода белых списков (балансировщик выберет оптимальный)"
                 selectedSquads={whitelistSquads}
                 type="whitelist"
                 color="green"
@@ -4180,12 +4027,6 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
                                 onChange={v => setSettings({ ...settings, TELEGRAM_ADMIN_ID: v })}
                             />
                             <Input 
-                                label="Токен поддержки" 
-                                placeholder="Token..." 
-                                value={settings.SUPPORT_BOT_TOKEN || ''}
-                                onChange={v => setSettings({ ...settings, SUPPORT_BOT_TOKEN: v })}
-                            />
-                            <Input 
                                 label="Сайт мини-приложения" 
                                 placeholder="https://t.me/yourbot/app" 
                                 value={settings.MINIAPP_URL || ''}
@@ -4204,12 +4045,6 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
                                 placeholder="https://admka.blann.ru" 
                                 value={settings.REMWAVE_PANEL_URL || ''}
                                 onChange={v => setSettings({ ...settings, REMWAVE_PANEL_URL: v })}
-                            />
-                            <Input 
-                                label="ID группы поддержки" 
-                                placeholder="-1001234567890" 
-                                value={settings.TELEGRAM_SUPPORT_GROUP_ID || ''}
-                                onChange={v => setSettings({ ...settings, TELEGRAM_SUPPORT_GROUP_ID: v })}
                             />
                         </Section>
                     </>
