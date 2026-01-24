@@ -1421,57 +1421,20 @@ export default function App() {
           </div>
           
           <div className="w-full space-y-3">
-            {/* VPN карточка */}
-            <button 
-                onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardType('vpn'); setView('wizard'); }}
-                className="w-full bg-gradient-to-r from-blue-600/20 to-indigo-600/20 hover:from-blue-600/30 hover:to-indigo-600/30 border border-blue-500/30 hover:border-blue-400/50 p-4 rounded-2xl text-left active:scale-[0.98] transition-all group"
+            <Button 
+                onClick={() => { setWizardStep(1); setWizardPlan(null); setView('wizard'); }}
+                className="w-full"
             >
-                <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-600/30 group-hover:scale-105 transition-transform">
-                        <Shield size={24} className="text-white" />
-                    </div>
-                    <div className="flex-1">
-                        <div className="font-bold text-white text-lg">VPN защита</div>
-                        <div className="text-blue-300 text-sm">Безопасный интернет без ограничений</div>
-                    </div>
-                    <div className="text-slate-400">
-                        <ChevronRight size={20} />
-                    </div>
+                <Shield size={20} /> Подключить VPN
+            </Button>
+            
+            {!isTrialUsed && (
+                <div className="text-center">
+                    <span className="text-xs text-blue-300 font-medium bg-blue-500/10 px-3 py-1 rounded-full border border-blue-500/20">
+                        🎁 Первые 24 часа бесплатно
+                    </span>
                 </div>
-                {!isTrialUsed && (
-                    <div className="mt-3 pt-3 border-t border-blue-500/20">
-                        <span className="text-xs text-blue-300 font-medium bg-blue-500/20 px-2.5 py-1 rounded-full">
-                            🎁 Первые 24 часа бесплатно
-                        </span>
-                    </div>
-                )}
-            </button>
-
-            {/* Турбо карточка */}
-            <button 
-                onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardType('whitelist'); setView('wizard'); }}
-                className="w-full bg-gradient-to-r from-orange-500/20 to-pink-500/20 hover:from-orange-500/30 hover:to-pink-500/30 border border-orange-500/30 hover:border-orange-400/50 p-4 rounded-2xl text-left active:scale-[0.98] transition-all group relative overflow-hidden"
-            >
-                <div className="absolute top-0 right-0 bg-gradient-to-l from-yellow-400 to-orange-400 text-yellow-900 text-[10px] font-black px-3 py-1 rounded-bl-xl">
-                    НОВИНКА
-                </div>
-                <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500 to-pink-500 flex items-center justify-center shadow-lg shadow-orange-500/30 group-hover:scale-105 transition-transform">
-                        <Zap size={24} className="text-white" />
-                    </div>
-                    <div className="flex-1">
-                        <div className="font-bold text-white text-lg">Турбо VPN</div>
-                        <div className="text-orange-300 text-sm">Работает даже при блокировках</div>
-                    </div>
-                    <div className="text-slate-400">
-                        <ChevronRight size={20} />
-                    </div>
-                </div>
-                <div className="mt-3 pt-3 border-t border-orange-500/20 flex items-center gap-2">
-                    <Sparkles size={14} className="text-yellow-400" />
-                    <span className="text-xs text-orange-200">Для мобильных операторов и глушилок</span>
-                </div>
-            </button>
+            )}
           </div>
         </div>
       </div>
