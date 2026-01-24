@@ -317,35 +317,30 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         expiry_date = (datetime.now() + timedelta(days=days)).isoformat()
         
         # Проверяем существует ли уже ключ для этого пользователя
-        cursor.execute("SELECT id FROM devices WHERE user_id = ? AND key_uuid = ?", (user_id, user_uuid))
+        cursor.execute("SELECT id FROM vpn_keys WHERE user_id = ? AND key_uuid = ?", (user_id, user_uuid))
         existing_key = cursor.fetchone()
         
         # Определяем squad_uuid для сохранения (первый из списка)
         assigned_squad_uuid = squad_uuids[0] if squad_uuids else None
         
-        device_name = f"{'Whitelist' if plan_type == 'whitelist' else 'VPN'} подписка"
-        
-        device_id = None
+        key_id = None
         if existing_key:
-            # Обновляем существующий ключ/устройство (теперь одна запись)
-            device_id = existing_key['id']
+            # Обновляем существующий ключ
+            key_id = existing_key['id']
             cursor.execute("""
-                UPDATE devices SET status = 'Active', expiry_date = ?, traffic_limit = ?, 
-                       key_config = ?, squad_uuid = ?, plan_type = ?, name = ?, is_active = 1,
-                       updated_at = CURRENT_TIMESTAMP
+                UPDATE vpn_keys SET status = 'Active', expiry_date = ?, traffic_limit = ?, 
+                       key_config = ?, squad_uuid = ?, plan_type = ?
                 WHERE id = ?
-            """, (expiry_date, traffic_limit, subscription_url, assigned_squad_uuid, plan_type, 
-                  device_name, device_id))
+            """, (expiry_date, traffic_limit, subscription_url, assigned_squad_uuid, plan_type, key_id))
         else:
-            # Создаем новый ключ/устройство (теперь одна запись)
+            # Создаем новый ключ
             cursor.execute("""
-                INSERT INTO devices (user_id, key_uuid, key_config, status, expiry_date, 
-                                     devices_limit, traffic_limit, squad_uuid, plan_type,
-                                     name, platform, is_active)
-                VALUES (?, ?, ?, 'Active', ?, 1, ?, ?, ?, ?, 'universal', 1)
+                INSERT INTO vpn_keys (user_id, key_uuid, key_config, status, expiry_date, 
+                                     devices_limit, traffic_limit, squad_uuid, plan_type)
+                VALUES (?, ?, ?, 'Active', ?, 1, ?, ?, ?)
             """, (user_id, user_uuid, subscription_url, expiry_date, traffic_limit, 
-                  assigned_squad_uuid, plan_type, device_name))
-            device_id = cursor.lastrowid
+                  assigned_squad_uuid, plan_type))
+            key_id = cursor.lastrowid
         
         conn.commit()
         conn.close()
@@ -358,6 +353,7 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         
         return {
             'user_id': user_id,
+            'key_id': key_id,
             'remnawave_uuid': user_uuid,
             'subscription_url': subscription_url,
             'subscription': subscription_data,
@@ -551,7 +547,7 @@ def sync_keys_with_remnawave() -> Dict:
         # Получаем все ключи из БД
         conn = database.get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT id, key_uuid, user_id FROM devices WHERE key_uuid IS NOT NULL")
+        cursor.execute("SELECT id, key_uuid, user_id FROM vpn_keys WHERE key_uuid IS NOT NULL")
         db_keys = cursor.fetchall()
         
         deleted_count = 0
@@ -565,7 +561,7 @@ def sync_keys_with_remnawave() -> Dict:
                 logger.info(f"Key {key_uuid} not found in Remnawave, deleting from DB")
                 
                 # Удаляем ключ/устройство (теперь одна запись)
-                cursor.execute("DELETE FROM devices WHERE id = ?", (key_id,))
+                cursor.execute("DELETE FROM vpn_keys WHERE id = ?", (key_id,))
                 deleted_count += 1
         
         conn.commit()
