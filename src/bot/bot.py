@@ -354,7 +354,7 @@ async def subscription_notifications_task():
                 
                 cursor.execute("""
                     SELECT vk.id, vk.key_uuid, vk.expiry_date, u.telegram_id
-                    FROM vpn_keys vk
+                    FROM devices vk
                     JOIN users u ON vk.user_id = u.id
                     WHERE vk.status = 'Active'
                       AND datetime(vk.expiry_date) BETWEEN ? AND ?
@@ -377,7 +377,7 @@ async def subscription_notifications_task():
             # === 2. Уведомление при истечении подписки ===
             cursor.execute("""
                 SELECT vk.id, vk.key_uuid, vk.expiry_date, u.telegram_id
-                FROM vpn_keys vk
+                FROM devices vk
                 JOIN users u ON vk.user_id = u.id
                 WHERE vk.status = 'Active'
                   AND datetime(vk.expiry_date) < ?
@@ -388,7 +388,7 @@ async def subscription_notifications_task():
                 telegram_id = row['telegram_id']
                 
                 # Помечаем как истёкший
-                cursor.execute("UPDATE vpn_keys SET status = 'Expired' WHERE id = ?", (key_id,))
+                cursor.execute("UPDATE devices SET status = 'Expired' WHERE id = ?", (key_id,))
                 
                 msg = (
                     "❌ <b>Ваша подписка закончилась.</b>\n\n"
@@ -402,7 +402,7 @@ async def subscription_notifications_task():
             nine_days_ago = now - timedelta(days=9)
             cursor.execute("""
                 SELECT vk.id, vk.key_uuid, vk.expiry_date, u.telegram_id
-                FROM vpn_keys vk
+                FROM devices vk
                 JOIN users u ON vk.user_id = u.id
                 WHERE vk.status = 'Expired'
                   AND datetime(vk.expiry_date) BETWEEN ? AND ?
@@ -423,7 +423,7 @@ async def subscription_notifications_task():
             ten_days_ago = now - timedelta(days=10)
             cursor.execute("""
                 SELECT vk.id, vk.key_uuid, vk.user_id, u.telegram_id
-                FROM vpn_keys vk
+                FROM devices vk
                 JOIN users u ON vk.user_id = u.id
                 WHERE vk.status = 'Expired'
                   AND datetime(vk.expiry_date) < ?
@@ -443,11 +443,8 @@ async def subscription_notifications_task():
                     except Exception as e:
                         logger.error(f"Failed to delete key {key_uuid} from Remnawave: {e}")
                 
-                # Удаляем устройства
-                cursor.execute("DELETE FROM devices WHERE vpn_key_id = ?", (key_id,))
-                
-                # Удаляем ключ
-                cursor.execute("DELETE FROM vpn_keys WHERE id = ?", (key_id,))
+                # Удаляем ключ/устройство (теперь одна запись)
+                cursor.execute("DELETE FROM devices WHERE id = ?", (key_id,))
                 
                 logger.info(f"Auto-deleted expired key {key_id} for user {user_id}")
             
@@ -486,7 +483,7 @@ async def weekly_reminder_task():
                     AND created_at > ?
                 )
                 AND u.id NOT IN (
-                    SELECT user_id FROM vpn_keys WHERE status = 'Active'
+                    SELECT user_id FROM devices WHERE status = 'Active'
                 )
                 AND (u.is_banned = 0 OR u.is_banned IS NULL)
             """, (six_months_ago.isoformat(),))
