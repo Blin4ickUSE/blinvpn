@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Smartphone, Monitor, Tv, CreditCard, History, 
   UserPlus, Gift, ChevronLeft, Copy, Trash2, Edit2, 
-  CheckCircle, Clock, Globe, Shield, Zap, Plus,
+  CheckCircle, Clock, Globe, Shield, Zap, Plus, Sparkles,
   LogOut, Download, Apple, Command, User, ChevronDown, 
   ArrowRight, Frown, BookOpen, Crown, ChevronRight, Wallet, Sliders, X,
   Rocket, AlertTriangle, FileText, ExternalLink, MessageCircle
@@ -1420,15 +1420,32 @@ export default function App() {
             </button>
           </div>
           
-          <div className="w-full">
-            <button 
-                onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardType('vpn'); setView('wizard'); }}
-                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white py-4 rounded-xl font-bold shadow-lg shadow-blue-900/50 flex items-center justify-center gap-2 active:scale-95 transition-all text-lg"
-            >
-                <Rocket size={24} /> Подключить VPN
-            </button>
+          <div className="w-full space-y-3">
+            {/* Две кнопки рядом */}
+            <div className="flex gap-3">
+              <button 
+                  onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardType('vpn'); setView('wizard'); }}
+                  className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white py-3.5 rounded-xl font-bold shadow-lg shadow-blue-900/50 flex items-center justify-center gap-2 active:scale-95 transition-all"
+              >
+                  <Shield size={20} /> VPN
+              </button>
+              <button 
+                  onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardType('whitelist'); setView('wizard'); }}
+                  className="flex-1 bg-gradient-to-r from-orange-500 to-pink-500 hover:from-orange-400 hover:to-pink-400 text-white py-3.5 rounded-xl font-bold shadow-lg shadow-orange-900/50 flex items-center justify-center gap-2 active:scale-95 transition-all relative"
+              >
+                  <Zap size={20} /> Обход
+                  <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[9px] font-black px-1.5 py-0.5 rounded-full animate-pulse">NEW</span>
+              </button>
+            </div>
+            
+            {/* Подсказка про глушилки */}
+            <div className="flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-orange-500/10 to-pink-500/10 rounded-xl border border-orange-500/20">
+              <Sparkles className="text-orange-400 shrink-0" size={14} />
+              <span className="text-orange-300 text-xs font-medium">Обход работает даже при глушилках!</span>
+            </div>
+            
             {!isTrialUsed && (
-                <div className="text-center mt-2">
+                <div className="text-center">
                     <span className="text-xs text-blue-300 font-medium bg-blue-500/10 px-3 py-1 rounded-full border border-blue-500/20">
                         🎁 Дарим 24 часа бесплатно
                     </span>
