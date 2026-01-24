@@ -1528,6 +1528,21 @@ export default function App() {
 
       {wizardStep === 2 && (
         <div className="flex-1 flex flex-col">
+            {/* Подсказка о новом тарифе */}
+            <div className="bg-gradient-to-r from-orange-500/20 to-pink-500/20 border border-orange-500/30 rounded-2xl p-4 mb-5">
+                <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-orange-500 flex items-center justify-center shrink-0">
+                        <Zap size={20} className="text-white" />
+                    </div>
+                    <div className="flex-1">
+                        <div className="font-bold text-white text-sm mb-1">Новинка: Обход белых списков</div>
+                        <div className="text-orange-200/80 text-xs leading-relaxed">
+                            Работает даже при «Беспилотной опасности» и других блокировках. Для мобильных операторов.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div className="bg-slate-800 p-1 rounded-xl flex gap-1 mb-6">
                 <button 
                 onClick={() => setWizardType('vpn')} 
@@ -1543,7 +1558,7 @@ export default function App() {
                     wizardType === 'whitelist' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-400 hover:text-white'
                 }`}
                 >
-                Турбо VPN
+                Обход
                 <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
                     NEW
                 </span>
@@ -1578,7 +1593,7 @@ export default function App() {
                 </div>
             ) : (
                 <div className="flex-1 flex flex-col">
-                    <p className="text-slate-400 text-sm mb-4">Турбо VPN работает даже когда обычный VPN блокируют:</p>
+                    <p className="text-slate-400 text-sm mb-4">Работает при «Беспилотной опасности» и блокировках:</p>
                     
                     {/* Карточка тарифа */}
                     <div 
@@ -1608,7 +1623,7 @@ export default function App() {
                         </div>
                         <div className="flex items-center gap-3">
                             <CheckCircle className="text-green-400 shrink-0" size={18} />
-                            <span className="text-slate-300 text-sm">Работает при блокировках VPN</span>
+                            <span className="text-slate-300 text-sm">Работает при «Беспилотной опасности»</span>
                         </div>
                         <div className="flex items-center gap-3">
                             <CheckCircle className="text-green-400 shrink-0" size={18} />
@@ -1646,7 +1661,7 @@ export default function App() {
             <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 mb-6 text-center">
                 <div className="text-slate-400 mb-2">Вы подключаете</div>
                 <div className="text-2xl font-bold text-white mb-6">
-                    {wizardType === 'vpn' ? wizardPlan?.duration : `Турбо VPN (${WHITELIST_GB} ГБ)`}
+                    {wizardType === 'vpn' ? wizardPlan?.duration : `Обход белых списков (${WHITELIST_GB} ГБ)`}
                 </div>
                 
                 <div className="border-t border-slate-700 pt-4 flex justify-between items-center">
@@ -2054,7 +2069,7 @@ export default function App() {
             buyTab === 'whitelist' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-400 hover:text-white'
           }`}
         >
-          Турбо VPN
+          Обход
           <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
             NEW
           </span>
@@ -2076,7 +2091,7 @@ export default function App() {
           <div className="bg-gradient-to-r from-orange-500/10 to-pink-500/10 p-6 rounded-2xl border-2 border-orange-500/50 mb-6">
             <div className="flex justify-between items-center mb-4">
               <div>
-                <div className="text-xl font-bold text-white">Турбо VPN</div>
+                <div className="text-xl font-bold text-white">Обход белых списков</div>
                 <div className="text-orange-300 text-sm">1 месяц подписки</div>
               </div>
               <div className="text-right">
@@ -2091,7 +2106,7 @@ export default function App() {
               </div>
               <div className="flex items-center gap-2 text-slate-300 text-sm">
                 <CheckCircle className="text-green-400 shrink-0" size={16} />
-                <span>Работает при блокировках</span>
+                <span>Работает при «Беспилотной опасности»</span>
               </div>
               <div className="flex items-center gap-2 text-slate-300 text-sm">
                 <Zap className="text-orange-400 shrink-0" size={16} />
