@@ -57,7 +57,7 @@ def check_and_process_auto_payment(user_id: int, vpn_key_id: int) -> Dict[str, A
         # Получаем информацию о ключе
         cursor.execute("""
             SELECT traffic_used, traffic_limit, status
-            FROM vpn_keys
+            FROM devices
             WHERE id = ? AND user_id = ?
         """, (vpn_key_id, user_id))
         
@@ -119,7 +119,7 @@ def check_and_process_auto_payment(user_id: int, vpn_key_id: int) -> Dict[str, A
         # Увеличиваем лимит на 1 ГБ
         new_limit_bytes = traffic_limit_bytes + (1024 ** 3)  # +1 ГБ
         cursor.execute("""
-            UPDATE vpn_keys
+            UPDATE devices
             SET traffic_limit = ?
             WHERE id = ?
         """, (new_limit_bytes, vpn_key_id))
