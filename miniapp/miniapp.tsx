@@ -1421,30 +1421,57 @@ export default function App() {
           </div>
           
           <div className="w-full space-y-3">
-            {/* Две кнопки рядом */}
-            <div className="flex gap-3">
-              <button 
-                  onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardType('vpn'); setView('wizard'); }}
-                  className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white py-3.5 rounded-xl font-bold shadow-lg shadow-blue-900/50 flex items-center justify-center gap-2 active:scale-95 transition-all"
-              >
-                  <Shield size={20} /> VPN
-              </button>
-              <button 
-                  onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardType('whitelist'); setView('wizard'); }}
-                  className="flex-1 bg-gradient-to-r from-orange-500 to-pink-500 hover:from-orange-400 hover:to-pink-400 text-white py-3.5 rounded-xl font-bold shadow-lg shadow-orange-900/50 flex items-center justify-center gap-2 active:scale-95 transition-all relative"
-              >
-                  <Zap size={20} /> Белых списков
-                  <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[9px] font-black px-1.5 py-0.5 rounded-full animate-pulse">NEW</span>
-              </button>
-            </div>
-            
-            {!isTrialUsed && (
-                <div className="text-center">
-                    <span className="text-xs text-blue-300 font-medium bg-blue-500/10 px-3 py-1 rounded-full border border-blue-500/20">
-                        🎁 Дарим 24 часа бесплатно
-                    </span>
+            {/* VPN карточка */}
+            <button 
+                onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardType('vpn'); setView('wizard'); }}
+                className="w-full bg-gradient-to-r from-blue-600/20 to-indigo-600/20 hover:from-blue-600/30 hover:to-indigo-600/30 border border-blue-500/30 hover:border-blue-400/50 p-4 rounded-2xl text-left active:scale-[0.98] transition-all group"
+            >
+                <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-600/30 group-hover:scale-105 transition-transform">
+                        <Shield size={24} className="text-white" />
+                    </div>
+                    <div className="flex-1">
+                        <div className="font-bold text-white text-lg">VPN защита</div>
+                        <div className="text-blue-300 text-sm">Безопасный интернет без ограничений</div>
+                    </div>
+                    <div className="text-slate-400">
+                        <ChevronRight size={20} />
+                    </div>
                 </div>
-            )}
+                {!isTrialUsed && (
+                    <div className="mt-3 pt-3 border-t border-blue-500/20">
+                        <span className="text-xs text-blue-300 font-medium bg-blue-500/20 px-2.5 py-1 rounded-full">
+                            🎁 Первые 24 часа бесплатно
+                        </span>
+                    </div>
+                )}
+            </button>
+
+            {/* Турбо карточка */}
+            <button 
+                onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardType('whitelist'); setView('wizard'); }}
+                className="w-full bg-gradient-to-r from-orange-500/20 to-pink-500/20 hover:from-orange-500/30 hover:to-pink-500/30 border border-orange-500/30 hover:border-orange-400/50 p-4 rounded-2xl text-left active:scale-[0.98] transition-all group relative overflow-hidden"
+            >
+                <div className="absolute top-0 right-0 bg-gradient-to-l from-yellow-400 to-orange-400 text-yellow-900 text-[10px] font-black px-3 py-1 rounded-bl-xl">
+                    НОВИНКА
+                </div>
+                <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500 to-pink-500 flex items-center justify-center shadow-lg shadow-orange-500/30 group-hover:scale-105 transition-transform">
+                        <Zap size={24} className="text-white" />
+                    </div>
+                    <div className="flex-1">
+                        <div className="font-bold text-white text-lg">Турбо VPN</div>
+                        <div className="text-orange-300 text-sm">Работает даже при блокировках</div>
+                    </div>
+                    <div className="text-slate-400">
+                        <ChevronRight size={20} />
+                    </div>
+                </div>
+                <div className="mt-3 pt-3 border-t border-orange-500/20 flex items-center gap-2">
+                    <Sparkles size={14} className="text-yellow-400" />
+                    <span className="text-xs text-orange-200">Для мобильных операторов и глушилок</span>
+                </div>
+            </button>
           </div>
         </div>
       </div>
@@ -1550,12 +1577,12 @@ export default function App() {
                 <button 
                 onClick={() => setWizardType('whitelist')} 
                 className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all relative ${
-                    wizardType === 'whitelist' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                    wizardType === 'whitelist' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-400 hover:text-white'
                 }`}
                 >
-                Обход белых списков
-                <span className="absolute -top-2 -right-1 bg-gradient-to-r from-pink-500 to-orange-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">
-                    НОВИНКА
+                Турбо VPN
+                <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                    NEW
                 </span>
                 </button>
             </div>
@@ -1588,7 +1615,7 @@ export default function App() {
                 </div>
             ) : (
                 <div className="flex-1 flex flex-col">
-                    <p className="text-slate-400 text-sm mb-4">Обход белых списков для мобильных операторов:</p>
+                    <p className="text-slate-400 text-sm mb-4">Турбо VPN работает даже когда обычный VPN блокируют:</p>
                     
                     {/* Карточка тарифа */}
                     <div 
@@ -1618,7 +1645,7 @@ export default function App() {
                         </div>
                         <div className="flex items-center gap-3">
                             <CheckCircle className="text-green-400 shrink-0" size={18} />
-                            <span className="text-slate-300 text-sm">Обход ограничений мобильных операторов</span>
+                            <span className="text-slate-300 text-sm">Работает при блокировках VPN</span>
                         </div>
                         <div className="flex items-center gap-3">
                             <CheckCircle className="text-green-400 shrink-0" size={18} />
@@ -1656,7 +1683,7 @@ export default function App() {
             <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 mb-6 text-center">
                 <div className="text-slate-400 mb-2">Вы подключаете</div>
                 <div className="text-2xl font-bold text-white mb-6">
-                    {wizardType === 'vpn' ? wizardPlan?.duration : `Обход белых списков (${WHITELIST_GB} ГБ)`}
+                    {wizardType === 'vpn' ? wizardPlan?.duration : `Турбо VPN (${WHITELIST_GB} ГБ)`}
                 </div>
                 
                 <div className="border-t border-slate-700 pt-4 flex justify-between items-center">
@@ -2061,12 +2088,12 @@ export default function App() {
         <button 
           onClick={() => setBuyTab('whitelist')} 
           className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all relative ${
-            buyTab === 'whitelist' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+            buyTab === 'whitelist' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-400 hover:text-white'
           }`}
         >
-          Обход белых списков
-          <span className="absolute -top-2 -right-1 bg-gradient-to-r from-pink-500 to-orange-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">
-            НОВИНКА
+          Турбо VPN
+          <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+            NEW
           </span>
         </button>
       </div>
@@ -2083,11 +2110,11 @@ export default function App() {
       ) : (
         <div className="flex-1 flex flex-col">
           {/* Карточка тарифа */}
-          <div className="bg-slate-800 p-6 rounded-2xl border-2 border-blue-500 mb-6">
+          <div className="bg-gradient-to-r from-orange-500/10 to-pink-500/10 p-6 rounded-2xl border-2 border-orange-500/50 mb-6">
             <div className="flex justify-between items-center mb-4">
               <div>
-                <div className="text-xl font-bold text-white">Обход белых списков</div>
-                <div className="text-slate-400 text-sm">1 месяц подписки</div>
+                <div className="text-xl font-bold text-white">Турбо VPN</div>
+                <div className="text-orange-300 text-sm">1 месяц подписки</div>
               </div>
               <div className="text-right">
                 <div className="text-3xl font-bold text-white">{WHITELIST_PRICE} ₽</div>
@@ -2101,11 +2128,11 @@ export default function App() {
               </div>
               <div className="flex items-center gap-2 text-slate-300 text-sm">
                 <CheckCircle className="text-green-400 shrink-0" size={16} />
-                <span>Обход ограничений операторов</span>
+                <span>Работает при блокировках</span>
               </div>
               <div className="flex items-center gap-2 text-slate-300 text-sm">
-                <Zap className="text-blue-400 shrink-0" size={16} />
-                <span>Автоматическое продление</span>
+                <Zap className="text-orange-400 shrink-0" size={16} />
+                <span>Для мобильных операторов</span>
               </div>
             </div>
           </div>
@@ -2973,6 +3000,3 @@ export default function App() {
     </div>
   );
 }
-
-
-
