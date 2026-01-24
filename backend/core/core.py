@@ -317,50 +317,34 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         expiry_date = (datetime.now() + timedelta(days=days)).isoformat()
         
         # Проверяем существует ли уже ключ для этого пользователя
-        cursor.execute("SELECT id FROM vpn_keys WHERE user_id = ? AND key_uuid = ?", (user_id, user_uuid))
+        cursor.execute("SELECT id FROM devices WHERE user_id = ? AND key_uuid = ?", (user_id, user_uuid))
         existing_key = cursor.fetchone()
         
         # Определяем squad_uuid для сохранения (первый из списка)
         assigned_squad_uuid = squad_uuids[0] if squad_uuids else None
         
-        vpn_key_id = None
-        if existing_key:
-            # Обновляем существующий ключ
-            vpn_key_id = existing_key['id']
-            cursor.execute("""
-                UPDATE vpn_keys SET status = 'Active', expiry_date = ?, traffic_limit = ?, 
-                       key_config = ?, squad_uuid = ?, plan_type = ?
-                WHERE id = ?
-            """, (expiry_date, traffic_limit, subscription_url, assigned_squad_uuid, plan_type, vpn_key_id))
-        else:
-            # Создаем новый ключ
-            cursor.execute("""
-                INSERT INTO vpn_keys (user_id, key_uuid, key_config, status, expiry_date, 
-                                     devices_limit, traffic_limit, squad_uuid, plan_type)
-                VALUES (?, ?, ?, 'Active', ?, 1, ?, ?, ?)
-            """, (user_id, user_uuid, subscription_url, expiry_date, traffic_limit, 
-                  assigned_squad_uuid, plan_type))
-            vpn_key_id = cursor.lastrowid
-        
-        # Создаем или обновляем устройство для отображения в приложении
         device_name = f"{'Whitelist' if plan_type == 'whitelist' else 'VPN'} подписка"
-        cursor.execute("""
-            SELECT id FROM devices WHERE user_id = ? AND vpn_key_id = ?
-        """, (user_id, vpn_key_id))
-        existing_device = cursor.fetchone()
         
         device_id = None
-        if existing_device:
-            device_id = existing_device['id']
+        if existing_key:
+            # Обновляем существующий ключ/устройство (теперь одна запись)
+            device_id = existing_key['id']
             cursor.execute("""
-                UPDATE devices SET is_active = 1, name = ?
+                UPDATE devices SET status = 'Active', expiry_date = ?, traffic_limit = ?, 
+                       key_config = ?, squad_uuid = ?, plan_type = ?, name = ?, is_active = 1,
+                       updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-            """, (device_name, device_id))
+            """, (expiry_date, traffic_limit, subscription_url, assigned_squad_uuid, plan_type, 
+                  device_name, device_id))
         else:
+            # Создаем новый ключ/устройство (теперь одна запись)
             cursor.execute("""
-                INSERT INTO devices (user_id, name, platform, vpn_key_id, is_active, added_date)
-                VALUES (?, ?, 'universal', ?, 1, CURRENT_TIMESTAMP)
-            """, (user_id, device_name, vpn_key_id))
+                INSERT INTO devices (user_id, key_uuid, key_config, status, expiry_date, 
+                                     devices_limit, traffic_limit, squad_uuid, plan_type,
+                                     name, platform, is_active)
+                VALUES (?, ?, ?, 'Active', ?, 1, ?, ?, ?, ?, 'universal', 1)
+            """, (user_id, user_uuid, subscription_url, expiry_date, traffic_limit, 
+                  assigned_squad_uuid, plan_type, device_name))
             device_id = cursor.lastrowid
         
         conn.commit()
@@ -567,7 +551,7 @@ def sync_keys_with_remnawave() -> Dict:
         # Получаем все ключи из БД
         conn = database.get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT id, key_uuid, user_id FROM vpn_keys WHERE key_uuid IS NOT NULL")
+        cursor.execute("SELECT id, key_uuid, user_id FROM devices WHERE key_uuid IS NOT NULL")
         db_keys = cursor.fetchall()
         
         deleted_count = 0
@@ -580,11 +564,8 @@ def sync_keys_with_remnawave() -> Dict:
                 # Ключ не найден в Remnawave - удаляем из БД
                 logger.info(f"Key {key_uuid} not found in Remnawave, deleting from DB")
                 
-                # Удаляем связанные устройства
-                cursor.execute("DELETE FROM devices WHERE vpn_key_id = ?", (key_id,))
-                
-                # Удаляем ключ
-                cursor.execute("DELETE FROM vpn_keys WHERE id = ?", (key_id,))
+                # Удаляем ключ/устройство (теперь одна запись)
+                cursor.execute("DELETE FROM devices WHERE id = ?", (key_id,))
                 deleted_count += 1
         
         conn.commit()
