@@ -1433,7 +1433,7 @@ export default function App() {
                   onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardType('whitelist'); setView('wizard'); }}
                   className="flex-1 bg-gradient-to-r from-orange-500 to-pink-500 hover:from-orange-400 hover:to-pink-400 text-white py-3.5 rounded-xl font-bold shadow-lg shadow-orange-900/50 flex items-center justify-center gap-2 active:scale-95 transition-all relative"
               >
-                  <Zap size={20} /> Обход
+                  <Zap size={20} /> Обход белых списков
                   <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[9px] font-black px-1.5 py-0.5 rounded-full animate-pulse">NEW</span>
               </button>
             </div>
@@ -2973,4 +2973,5 @@ export default function App() {
     </div>
   );
 }
+
 
