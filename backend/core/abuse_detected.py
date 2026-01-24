@@ -52,7 +52,7 @@ def check_device_limit(user_id: int, hwid: str, ip_address: str = None) -> Dict[
         # Получаем активные ключи пользователя
         cursor.execute("""
             SELECT vk.id, vk.hwid_hash, vk.last_used, vk.last_ip, u.telegram_id, u.username
-            FROM vpn_keys vk
+            FROM devices vk
             JOIN users u ON vk.user_id = u.id
             WHERE vk.user_id = ? AND vk.status = 'Active'
         """, (user_id,))
@@ -125,7 +125,7 @@ def check_traffic_abuse(user_id: int, vpn_key_id: int, traffic_bytes: float) -> 
         # Получаем трафик за сегодня
         cursor.execute("""
             SELECT traffic_bytes FROM traffic_stats
-            WHERE vpn_key_id = ? AND date = ?
+            WHERE device_id = ? AND date = ?
         """, (vpn_key_id, today))
         
         result = cursor.fetchone()
@@ -143,7 +143,7 @@ def check_traffic_abuse(user_id: int, vpn_key_id: int, traffic_bytes: float) -> 
             
             # Блокируем подписку
             cursor.execute("""
-                UPDATE vpn_keys
+                UPDATE devices
                 SET status = 'Banned'
                 WHERE id = ?
             """, (vpn_key_id,))
@@ -228,9 +228,9 @@ def update_traffic_stats(vpn_key_id: int, user_id: int, traffic_bytes: float):
         today = datetime.now().date()
         
         cursor.execute("""
-            INSERT INTO traffic_stats (vpn_key_id, user_id, date, traffic_bytes)
+            INSERT INTO traffic_stats (device_id, user_id, date, traffic_bytes)
             VALUES (?, ?, ?, ?)
-            ON CONFLICT(vpn_key_id, date) DO UPDATE SET
+            ON CONFLICT(device_id, date) DO UPDATE SET
                 traffic_bytes = traffic_bytes + ?
         """, (vpn_key_id, user_id, today, traffic_bytes, traffic_bytes))
         
@@ -248,13 +248,13 @@ def update_key_hwid(vpn_key_id: int, hwid: str, ip_address: str = None):
         
         if ip_address:
             cursor.execute("""
-                UPDATE vpn_keys
+                UPDATE devices
                 SET hwid_hash = ?, last_ip = ?, last_used = CURRENT_TIMESTAMP
                 WHERE id = ?
             """, (hwid_hash, ip_address, vpn_key_id))
         else:
             cursor.execute("""
-                UPDATE vpn_keys
+                UPDATE devices
                 SET hwid_hash = ?, last_used = CURRENT_TIMESTAMP
                 WHERE id = ?
             """, (hwid_hash, vpn_key_id))
@@ -279,7 +279,7 @@ def check_ip_abuse(user_id: int, vpn_key_id: int, ip_address: str) -> Dict[str, 
         # Получаем информацию о ключе
         cursor.execute("""
             SELECT vk.last_ip, vk.last_used, u.telegram_id, u.username
-            FROM vpn_keys vk
+            FROM devices vk
             JOIN users u ON vk.user_id = u.id
             WHERE vk.id = ?
         """, (vpn_key_id,))
@@ -324,7 +324,7 @@ def check_ip_abuse(user_id: int, vpn_key_id: int, ip_address: str) -> Dict[str, 
                 
                 # Блокируем ключ
                 cursor.execute("""
-                    UPDATE vpn_keys SET status = 'Banned' WHERE id = ?
+                    UPDATE devices SET status = 'Banned' WHERE id = ?
                 """, (vpn_key_id,))
                 
                 cursor.execute("""
