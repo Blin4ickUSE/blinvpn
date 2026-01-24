@@ -574,7 +574,7 @@ def get_user_devices():
                 
                 if rw_uuid and traffic_used > 0:
                     cursor_sync.execute("""
-                        UPDATE devices SET traffic_used = ? WHERE key_uuid = ?
+                        UPDATE vpn_keys SET traffic_used = ? WHERE key_uuid = ?
                     """, (traffic_used, rw_uuid))
             conn_sync.commit()
             conn_sync.close()
@@ -586,28 +586,27 @@ def get_user_devices():
     
     try:
         cursor.execute("""
-            SELECT id, name, platform, added_date, is_active,
-                   key_config, key_uuid, status as key_status, expiry_date,
-                   traffic_used, traffic_limit, plan_type
-            FROM devices
-            WHERE user_id = ? AND is_active = 1 AND key_uuid IS NOT NULL
-            ORDER BY added_date DESC
+            SELECT id, key_config, key_uuid, status as key_status, expiry_date,
+                   traffic_used, traffic_limit, plan_type, created_at
+            FROM vpn_keys
+            WHERE user_id = ? AND key_uuid IS NOT NULL AND status != 'Deleted'
+            ORDER BY created_at DESC
         """, (user['id'],))
         
         rows = cursor.fetchall()
         devices = []
         for row in rows:
             from datetime import datetime
-            added_date = row['added_date']
-            if added_date:
+            created_at = row['created_at']
+            if created_at:
                 try:
-                    if isinstance(added_date, str):
-                        dt = datetime.fromisoformat(added_date.replace('Z', '+00:00'))
+                    if isinstance(created_at, str):
+                        dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
                     else:
-                        dt = added_date
+                        dt = created_at
                     added_formatted = dt.strftime('%d.%m.%Y')
                 except:
-                    added_formatted = str(added_date)[:10]
+                    added_formatted = str(created_at)[:10]
             else:
                 added_formatted = datetime.now().strftime('%d.%m.%Y')
             
@@ -652,10 +651,14 @@ def get_user_devices():
             # Короткий UUID для отображения (первые 8 символов)
             short_uuid = row['key_uuid'][:8] if row['key_uuid'] else None
             
+            # Определяем тип устройства по plan_type
+            plan_type = row['plan_type'] or 'vpn'
+            device_name = 'Обход блокировок' if plan_type == 'whitelist' else 'VPN подписка'
+            
             devices.append({
                 'id': row['id'],
-                'name': row['name'] or 'Устройство',
-                'type': row['platform'] or 'unknown',
+                'name': device_name,
+                'type': 'universal',
                 'added': added_formatted,
                 'key_config': row['key_config'],
                 'key_uuid': row['key_uuid'],
@@ -666,7 +669,8 @@ def get_user_devices():
                 'is_expired': is_expired,
                 'expiry_date': expiry_date_str,
                 'traffic_used': row['traffic_used'],
-                'traffic_limit': row['traffic_limit']
+                'traffic_limit': row['traffic_limit'],
+                'plan_type': plan_type
             })
         
         return jsonify(devices)
@@ -826,7 +830,7 @@ def delete_user_device(device_id: int):
     try:
         # Проверяем, что устройство принадлежит пользователю
         cursor.execute("""
-            SELECT id, key_uuid FROM devices
+            SELECT id, key_uuid FROM vpn_keys
             WHERE id = ? AND user_id = ?
         """, (device_id, user['id']))
         device = cursor.fetchone()
@@ -845,7 +849,7 @@ def delete_user_device(device_id: int):
                 logger.error(f"Failed to delete key {key_uuid} from Remnawave: {e}")
         
         # Удаляем устройство/ключ (теперь это одна запись)
-        cursor.execute("DELETE FROM devices WHERE id = ?", (device_id,))
+        cursor.execute("DELETE FROM vpn_keys WHERE id = ?", (device_id,))
         
         conn.commit()
         logger.info(f"Device {device_id} deleted for user {telegram_id}")
@@ -1434,7 +1438,7 @@ def get_user_subscriptions(user_id: int):
             SELECT vk.id, vk.key_uuid, vk.status, vk.expiry_date, 
                    vk.traffic_used, vk.traffic_limit, vk.created_at,
                    CASE WHEN vk.traffic_limit > 0 AND vk.traffic_limit < 100000000000 THEN 'whitelist' ELSE 'vpn' END as type
-            FROM devices vk
+            FROM vpn_keys vk
             WHERE vk.user_id = ?
             ORDER BY vk.created_at DESC
         """, (user_id,))
@@ -1555,7 +1559,7 @@ def get_keys():
                 vk.devices_limit,
                 vk.server_location,
                 vk.created_at
-            FROM devices vk
+            FROM vpn_keys vk
             LEFT JOIN users u ON vk.user_id = u.id
             ORDER BY vk.created_at DESC
             LIMIT ? OFFSET ?
@@ -1724,24 +1728,24 @@ def create_key():
         subscription_url = remnawave_user.subscription_url if hasattr(remnawave_user, 'subscription_url') else remnawave_user.get('subscription_url', '')
         
         # Проверяем существует ли уже ключ для этого пользователя
-        cursor.execute("SELECT id FROM devices WHERE user_id = ? AND key_uuid = ?", (user_id, key_uuid))
+        cursor.execute("SELECT id FROM vpn_keys WHERE user_id = ? AND key_uuid = ?", (user_id, key_uuid))
         existing_key = cursor.fetchone()
         
         if existing_key:
-            # Обновляем существующий ключ/устройство
+            # Обновляем существующий ключ
             cursor.execute("""
-                UPDATE devices
+                UPDATE vpn_keys
                 SET status = 'Active', expiry_date = ?, traffic_limit = ?, devices_limit = ?, 
-                    key_config = ?, updated_at = CURRENT_TIMESTAMP
+                    key_config = ?
                 WHERE id = ?
             """, (expiry_date, traffic_bytes, devices, subscription_url, existing_key['id']))
             key_id = existing_key['id']
         else:
-            # Создаем новый ключ/устройство (теперь одна запись)
+            # Создаем новый ключ
             cursor.execute("""
-                INSERT INTO devices (user_id, key_uuid, key_config, status, expiry_date, 
-                                    devices_limit, traffic_limit, plan_type, name, platform, is_active)
-                VALUES (?, ?, ?, 'Active', ?, ?, ?, ?, 'Устройство', 'unknown', 1)
+                INSERT INTO vpn_keys (user_id, key_uuid, key_config, status, expiry_date, 
+                                    devices_limit, traffic_limit, plan_type)
+                VALUES (?, ?, ?, 'Active', ?, ?, ?, ?)
             """, (user_id, key_uuid, subscription_url, expiry_date, devices, traffic_bytes, plan_type))
             key_id = cursor.lastrowid
         
@@ -1782,7 +1786,7 @@ def toggle_key_block(key_id):
         # Обновляем статус ключа
         new_status = 'Blocked' if blocked else 'Active'
         cursor.execute("""
-            UPDATE devices 
+            UPDATE vpn_keys 
             SET status = ?, last_used = CURRENT_TIMESTAMP
             WHERE id = ?
         """, (new_status, key_id))
@@ -1793,7 +1797,7 @@ def toggle_key_block(key_id):
         conn.commit()
         
         # Если блокируем, также отключаем в Remnawave через update_user
-        cursor.execute("SELECT key_uuid FROM devices WHERE id = ?", (key_id,))
+        cursor.execute("SELECT key_uuid FROM vpn_keys WHERE id = ?", (key_id,))
         row = cursor.fetchone()
         
         if row and row['key_uuid']:
@@ -1832,7 +1836,7 @@ def delete_key(key_id: int):
     
     try:
         # Получаем информацию о ключе
-        cursor.execute("SELECT key_uuid, user_id FROM devices WHERE id = ?", (key_id,))
+        cursor.execute("SELECT key_uuid, user_id FROM vpn_keys WHERE id = ?", (key_id,))
         row = cursor.fetchone()
         
         if not row:
@@ -1850,7 +1854,7 @@ def delete_key(key_id: int):
                 logger.error(f"Failed to delete key {key_uuid} from Remnawave: {e}")
         
         # Удаляем ключ/устройство (теперь одна запись)
-        cursor.execute("DELETE FROM devices WHERE id = ?", (key_id,))
+        cursor.execute("DELETE FROM vpn_keys WHERE id = ?", (key_id,))
         
         conn.commit()
         
@@ -1884,7 +1888,7 @@ def update_key(key_id: int):
     
     try:
         # Получаем информацию о ключе
-        cursor.execute("SELECT key_uuid, expiry_date, traffic_limit, devices_limit FROM devices WHERE id = ?", (key_id,))
+        cursor.execute("SELECT key_uuid, expiry_date, traffic_limit, devices_limit FROM vpn_keys WHERE id = ?", (key_id,))
         row = cursor.fetchone()
         
         if not row:
@@ -1917,7 +1921,7 @@ def update_key(key_id: int):
         
         if updates:
             values.append(key_id)
-            cursor.execute(f"UPDATE devices SET {', '.join(updates)} WHERE id = ?", tuple(values))
+            cursor.execute(f"UPDATE vpn_keys SET {', '.join(updates)} WHERE id = ?", tuple(values))
             conn.commit()
         
         # Обновляем в Remnawave
@@ -2294,7 +2298,7 @@ def get_stats_charts():
         cursor.execute(
             """
             SELECT DATE(created_at) as d, COUNT(*) as cnt
-            FROM devices
+            FROM vpn_keys
             GROUP BY DATE(created_at)
             """
         )
@@ -2329,7 +2333,7 @@ def get_stats_summary():
         total_users = cursor.fetchone()["cnt"] or 0
 
         # Активные ключи
-        cursor.execute("SELECT COUNT(*) AS cnt FROM devices WHERE status = 'Active'")
+        cursor.execute("SELECT COUNT(*) AS cnt FROM vpn_keys WHERE status = 'Active'")
         active_keys = cursor.fetchone()["cnt"] or 0
 
         # Доход за текущий месяц (по депозитам)
@@ -2433,7 +2437,7 @@ def get_full_statistics():
         cursor.execute("SELECT COUNT(*) AS cnt FROM users")
         total_users = cursor.fetchone()['cnt'] or 0
         
-        cursor.execute("SELECT COUNT(*) AS cnt FROM devices WHERE status = 'Active'")
+        cursor.execute("SELECT COUNT(*) AS cnt FROM vpn_keys WHERE status = 'Active'")
         active_subscriptions = cursor.fetchone()['cnt'] or 0
         
         today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -2464,7 +2468,7 @@ def get_full_statistics():
         
         # Распределение пользователей (на основе состояния их ключей)
         cursor.execute("""
-            SELECT COUNT(DISTINCT user_id) AS cnt FROM devices 
+            SELECT COUNT(DISTINCT user_id) AS cnt FROM vpn_keys 
             WHERE status = 'Active' AND expiry_date > datetime('now')
         """)
         active_users = cursor.fetchone()['cnt'] or 0
@@ -2476,7 +2480,7 @@ def get_full_statistics():
         banned_users = cursor.fetchone()['cnt'] or 0
         
         cursor.execute("""
-            SELECT COUNT(DISTINCT user_id) AS cnt FROM devices 
+            SELECT COUNT(DISTINCT user_id) AS cnt FROM vpn_keys 
             WHERE status = 'Expired' OR (expiry_date IS NOT NULL AND expiry_date < datetime('now'))
         """)
         expired_users = cursor.fetchone()['cnt'] or 0
@@ -2510,14 +2514,14 @@ def get_full_statistics():
             })
         
         # Подписки
-        cursor.execute("SELECT COUNT(*) AS cnt FROM devices")
+        cursor.execute("SELECT COUNT(*) AS cnt FROM vpn_keys")
         total_subscriptions = cursor.fetchone()['cnt'] or 0
-        cursor.execute("SELECT COUNT(*) AS cnt FROM devices WHERE status = 'Active' AND expiry_date > datetime('now')")
+        cursor.execute("SELECT COUNT(*) AS cnt FROM vpn_keys WHERE status = 'Active' AND expiry_date > datetime('now')")
         paid_subscriptions = cursor.fetchone()['cnt'] or 0
         
         week_start = datetime.utcnow() - timedelta(days=7)
         cursor.execute("""
-            SELECT COUNT(*) AS cnt FROM devices
+            SELECT COUNT(*) AS cnt FROM vpn_keys
             WHERE created_at >= ?
         """, (week_start.isoformat(),))
         bought_this_week = cursor.fetchone()['cnt'] or 0
@@ -3473,7 +3477,7 @@ def mass_user_action():
             elif action_type == 'MASS_ADD_DAYS':
                 days = int(value)
                 cursor.execute("""
-                    UPDATE devices SET expiry_date = datetime(
+                    UPDATE vpn_keys SET expiry_date = datetime(
                         CASE WHEN expiry_date > datetime('now') THEN expiry_date ELSE datetime('now') END,
                         '+' || ? || ' days'
                     ) WHERE user_id = ?
@@ -3501,7 +3505,7 @@ def mass_user_action():
                 affected += 1
                 
             elif action_type == 'MASS_DELETE_KEYS':
-                cursor.execute("DELETE FROM devices WHERE user_id = ?", (user_id,))
+                cursor.execute("DELETE FROM vpn_keys WHERE user_id = ?", (user_id,))
                 if notify:
                     notifications.append((telegram_id, "🔑 Ваши VPN ключи были удалены."))
                 affected += 1
@@ -3589,7 +3593,7 @@ def single_user_action(user_id):
         elif action_type == 'EXTEND_SUB':
             days = int(value)
             cursor.execute("""
-                UPDATE devices SET expiry_date = datetime(
+                UPDATE vpn_keys SET expiry_date = datetime(
                     CASE WHEN expiry_date > datetime('now') THEN expiry_date ELSE datetime('now') END,
                     '+' || ? || ' days'
                 ) WHERE user_id = ?
@@ -3599,19 +3603,19 @@ def single_user_action(user_id):
         elif action_type == 'REDUCE_SUB':
             days = int(value)
             cursor.execute("""
-                UPDATE devices SET expiry_date = datetime(expiry_date, '-' || ? || ' days')
+                UPDATE vpn_keys SET expiry_date = datetime(expiry_date, '-' || ? || ' days')
                 WHERE user_id = ?
             """, (days, user_id))
             notification_msg = f"⏰ Срок вашей подписки уменьшен на {days} дней."
             
         elif action_type == 'SET_TRAFFIC':
             limit_gb = int(value)
-            cursor.execute("UPDATE devices SET traffic_limit = ? WHERE user_id = ?", (limit_gb * 1024 * 1024 * 1024, user_id))
+            cursor.execute("UPDATE vpn_keys SET traffic_limit = ? WHERE user_id = ?", (limit_gb * 1024 * 1024 * 1024, user_id))
             notification_msg = f"📊 Ваш лимит трафика установлен: {limit_gb} ГБ"
             
         elif action_type == 'SET_DEVICES':
             limit = int(value)
-            cursor.execute("UPDATE devices SET devices_limit = ? WHERE user_id = ?", (limit, user_id))
+            cursor.execute("UPDATE vpn_keys SET devices_limit = ? WHERE user_id = ?", (limit, user_id))
             notification_msg = f"📱 Ваш лимит устройств: {limit}"
             
         elif action_type == 'BAN':
@@ -4031,7 +4035,7 @@ def export_data(data_type: str):
         if data_type == 'users':
             cursor.execute("SELECT * FROM users ORDER BY id")
         elif data_type == 'keys':
-            cursor.execute("SELECT * FROM devices ORDER BY id")
+            cursor.execute("SELECT * FROM vpn_keys ORDER BY id")
         elif data_type == 'transactions':
             cursor.execute("SELECT * FROM transactions ORDER BY id DESC LIMIT 10000")
         else:
@@ -4057,19 +4061,19 @@ def get_diagnostics():
         users_count = cursor.fetchone()[0]
         
         # Количество ключей
-        cursor.execute("SELECT COUNT(*) FROM devices")
+        cursor.execute("SELECT COUNT(*) FROM vpn_keys")
         keys_count = cursor.fetchone()[0]
         
         # Активные ключи
-        cursor.execute("SELECT COUNT(*) FROM devices WHERE status = 'Active' AND expires_at > datetime('now')")
+        cursor.execute("SELECT COUNT(*) FROM vpn_keys WHERE status = 'Active' AND expiry_date > datetime('now')")
         active_keys = cursor.fetchone()[0]
         
         # Истёкшие ключи
-        cursor.execute("SELECT COUNT(*) FROM devices WHERE expires_at < datetime('now')")
+        cursor.execute("SELECT COUNT(*) FROM vpn_keys WHERE expiry_date < datetime('now')")
         expired_keys = cursor.fetchone()[0]
         
         # Забаненные пользователи
-        cursor.execute("SELECT COUNT(*) FROM users WHERE status = 'Banned'")
+        cursor.execute("SELECT COUNT(*) FROM users WHERE is_banned = 1")
         banned_users = cursor.fetchone()[0]
         
         # Проверка Remnawave
@@ -4114,8 +4118,8 @@ def cleanup_expired_keys():
     try:
         # Получаем ключи для удаления
         cursor.execute("""
-            SELECT key_uuid FROM devices 
-            WHERE expires_at < datetime('now', '-30 days')
+            SELECT key_uuid FROM vpn_keys 
+            WHERE expiry_date < datetime('now', '-30 days')
         """)
         keys_to_delete = [row[0] for row in cursor.fetchall()]
         
@@ -4130,8 +4134,8 @@ def cleanup_expired_keys():
         
         # Удаляем из базы
         cursor.execute("""
-            DELETE FROM devices 
-            WHERE expires_at < datetime('now', '-30 days')
+            DELETE FROM vpn_keys 
+            WHERE expiry_date < datetime('now', '-30 days')
         """)
         conn.commit()
         
