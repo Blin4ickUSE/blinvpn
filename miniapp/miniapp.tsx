@@ -1558,9 +1558,9 @@ export default function App() {
                     wizardType === 'whitelist' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-400 hover:text-white'
                 }`}
                 >
-                Обход
+                Обход белых списков
                 <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                    NEW
+                    Мобильный интернет
                 </span>
                 </button>
             </div>
@@ -1593,7 +1593,7 @@ export default function App() {
                 </div>
             ) : (
                 <div className="flex-1 flex flex-col">
-                    <p className="text-slate-400 text-sm mb-4">Работает при «Беспилотной опасности» и блокировках:</p>
+                    <p className="text-slate-400 text-sm mb-4">Работает при «Беспилотной опасности» и других глушилок:</p>
                     
                     {/* Карточка тарифа */}
                     <div 
@@ -2978,3 +2978,4 @@ export default function App() {
     </div>
   );
 }
+
