@@ -52,7 +52,7 @@ def check_device_limit(user_id: int, hwid: str, ip_address: str = None) -> Dict[
         # Получаем активные ключи пользователя
         cursor.execute("""
             SELECT vk.id, vk.hwid_hash, vk.last_used, vk.last_ip, u.telegram_id, u.username
-            FROM devices vk
+            FROM vpn_keys vk
             JOIN users u ON vk.user_id = u.id
             WHERE vk.user_id = ? AND vk.status = 'Active'
         """, (user_id,))
@@ -143,7 +143,7 @@ def check_traffic_abuse(user_id: int, vpn_key_id: int, traffic_bytes: float) -> 
             
             # Блокируем подписку
             cursor.execute("""
-                UPDATE devices
+                UPDATE vpn_keys
                 SET status = 'Banned'
                 WHERE id = ?
             """, (vpn_key_id,))
@@ -248,13 +248,13 @@ def update_key_hwid(vpn_key_id: int, hwid: str, ip_address: str = None):
         
         if ip_address:
             cursor.execute("""
-                UPDATE devices
+                UPDATE vpn_keys
                 SET hwid_hash = ?, last_ip = ?, last_used = CURRENT_TIMESTAMP
                 WHERE id = ?
             """, (hwid_hash, ip_address, vpn_key_id))
         else:
             cursor.execute("""
-                UPDATE devices
+                UPDATE vpn_keys
                 SET hwid_hash = ?, last_used = CURRENT_TIMESTAMP
                 WHERE id = ?
             """, (hwid_hash, vpn_key_id))
@@ -279,7 +279,7 @@ def check_ip_abuse(user_id: int, vpn_key_id: int, ip_address: str) -> Dict[str, 
         # Получаем информацию о ключе
         cursor.execute("""
             SELECT vk.last_ip, vk.last_used, u.telegram_id, u.username
-            FROM devices vk
+            FROM vpn_keys vk
             JOIN users u ON vk.user_id = u.id
             WHERE vk.id = ?
         """, (vpn_key_id,))
@@ -324,7 +324,7 @@ def check_ip_abuse(user_id: int, vpn_key_id: int, ip_address: str) -> Dict[str, 
                 
                 # Блокируем ключ
                 cursor.execute("""
-                    UPDATE devices SET status = 'Banned' WHERE id = ?
+                    UPDATE vpn_keys SET status = 'Banned' WHERE id = ?
                 """, (vpn_key_id,))
                 
                 cursor.execute("""
