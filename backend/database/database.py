@@ -1,6 +1,6 @@
 """
 Модуль для работы с базой данных SQLite
-ВЕРСИЯ 2.0 - Рефакторинг: devices содержит все данные ключей
+ВЕРСИЯ 2.1 - Безопасная миграция с восстановлением данных
 """
 import sqlite3
 import os
@@ -12,7 +12,6 @@ import hashlib
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv('DB_PATH', 'data.db')
-DB_VERSION = 2  # Версия схемы БД
 
 def get_db_connection():
     """Получить соединение с базой данных (WAL, таймаут)"""
@@ -27,152 +26,67 @@ def get_db_connection():
     return conn
 
 
-def run_migrations(conn, cursor):
-    """Выполнить миграции базы данных"""
+def safe_migrate_and_restore(conn, cursor):
+    """
+    Безопасная миграция и восстановление данных.
+    Восстанавливает ключи из vpn_keys_backup если vpn_keys пустая.
+    """
+    logger.info("Проверка и восстановление данных...")
     
-    # Проверяем текущую версию
-    cursor.execute("SELECT setting_value FROM system_settings WHERE setting_key = 'db_version'")
-    row = cursor.fetchone()
-    current_version = int(row['setting_value']) if row else 1
+    # Проверяем какие таблицы существуют
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    existing_tables = {row[0] for row in cursor.fetchall()}
     
-    if current_version >= DB_VERSION:
-        return
+    has_vpn_keys = 'vpn_keys' in existing_tables
+    has_vpn_keys_backup = 'vpn_keys_backup' in existing_tables
     
-    logger.info(f"Миграция БД с версии {current_version} до {DB_VERSION}")
+    # Проверяем есть ли данные в vpn_keys
+    vpn_keys_count = 0
+    if has_vpn_keys:
+        try:
+            cursor.execute("SELECT COUNT(*) FROM vpn_keys")
+            vpn_keys_count = cursor.fetchone()[0]
+        except:
+            pass
     
-    # ===== МИГРАЦИЯ НА ВЕРСИЮ 2 =====
-    if current_version < 2:
-        logger.info("Выполняем миграцию на версию 2: объединение vpn_keys в devices")
-        
-        # 1. Проверяем, есть ли старая таблица vpn_keys
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='vpn_keys'")
-        has_vpn_keys = cursor.fetchone() is not None
-        
-        if has_vpn_keys:
-            # 2. Добавляем новые колонки в devices если их нет
-            columns_to_add = [
-                ("key_uuid", "TEXT UNIQUE"),
-                ("key_config", "TEXT"),
-                ("status", "TEXT DEFAULT 'Active'"),
-                ("expiry_date", "TIMESTAMP"),
-                ("traffic_used", "REAL DEFAULT 0"),
-                ("traffic_limit", "REAL"),
-                ("devices_limit", "INTEGER DEFAULT 1"),
-                ("server_location", "TEXT"),
-                ("last_used", "TIMESTAMP"),
-                ("last_ip", "TEXT"),
-                ("squad_uuid", "TEXT"),
-                ("plan_type", "TEXT DEFAULT 'vpn'"),
-                ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
-            ]
+    # Если vpn_keys пустая но есть backup - восстанавливаем
+    if vpn_keys_count == 0 and has_vpn_keys_backup:
+        try:
+            cursor.execute("SELECT COUNT(*) FROM vpn_keys_backup")
+            backup_count = cursor.fetchone()[0]
             
-            for col_name, col_type in columns_to_add:
-                try:
-                    cursor.execute(f"ALTER TABLE devices ADD COLUMN {col_name} {col_type}")
-                    logger.info(f"  Добавлена колонка devices.{col_name}")
-                except sqlite3.OperationalError:
-                    pass  # Колонка уже существует
-            
-            # 3. Мигрируем данные из vpn_keys в devices
-            cursor.execute("""
-                SELECT vk.*, d.id as device_id
-                FROM vpn_keys vk
-                LEFT JOIN devices d ON d.vpn_key_id = vk.id
-            """)
-            vpn_keys = cursor.fetchall()
-            
-            migrated = 0
-            for vk in vpn_keys:
-                vk = dict(vk)
+            if backup_count > 0:
+                logger.info(f"Восстановление {backup_count} ключей из vpn_keys_backup...")
                 
-                if vk.get('device_id'):
-                    # Обновляем существующую запись в devices
-                    cursor.execute("""
-                        UPDATE devices SET
-                            key_uuid = ?,
-                            key_config = ?,
-                            status = ?,
-                            expiry_date = ?,
-                            traffic_used = ?,
-                            traffic_limit = ?,
-                            devices_limit = ?,
-                            server_location = ?,
-                            last_used = ?,
-                            last_ip = ?,
-                            squad_uuid = ?,
-                            plan_type = ?,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ?
-                    """, (
-                        vk.get('key_uuid'),
-                        vk.get('key_config'),
-                        vk.get('status', 'Active'),
-                        vk.get('expiry_date'),
-                        vk.get('traffic_used', 0),
-                        vk.get('traffic_limit'),
-                        vk.get('devices_limit', 1),
-                        vk.get('server_location'),
-                        vk.get('last_used'),
-                        vk.get('last_ip'),
-                        vk.get('squad_uuid'),
-                        vk.get('plan_type', 'vpn'),
-                        vk['device_id']
-                    ))
-                else:
-                    # Создаём новую запись в devices
-                    cursor.execute("""
-                        INSERT INTO devices (
-                            user_id, name, platform, is_active,
-                            key_uuid, key_config, status, expiry_date,
-                            traffic_used, traffic_limit, devices_limit,
-                            server_location, last_used, last_ip,
-                            squad_uuid, plan_type
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        vk['user_id'],
-                        'Устройство',
-                        'unknown',
-                        1,
-                        vk.get('key_uuid'),
-                        vk.get('key_config'),
-                        vk.get('status', 'Active'),
-                        vk.get('expiry_date'),
-                        vk.get('traffic_used', 0),
-                        vk.get('traffic_limit'),
-                        vk.get('devices_limit', 1),
-                        vk.get('server_location'),
-                        vk.get('last_used'),
-                        vk.get('last_ip'),
-                        vk.get('squad_uuid'),
-                        vk.get('plan_type', 'vpn')
-                    ))
-                migrated += 1
-            
-            logger.info(f"  Мигрировано {migrated} ключей из vpn_keys в devices")
-            
-            # 4. Удаляем колонку vpn_key_id из devices (через пересоздание)
-            # SQLite не поддерживает DROP COLUMN в старых версиях, поэтому просто игнорируем
-            
-            # 5. Переименовываем vpn_keys в vpn_keys_backup
-            try:
-                cursor.execute("ALTER TABLE vpn_keys RENAME TO vpn_keys_backup")
-                logger.info("  Таблица vpn_keys переименована в vpn_keys_backup")
-            except:
-                pass
-        
-        # 6. Удаляем таблицы тикетов
-        cursor.execute("DROP TABLE IF EXISTS ticket_messages")
-        cursor.execute("DROP TABLE IF EXISTS tickets")
-        logger.info("  Удалены таблицы tickets и ticket_messages")
-        
-        # 7. Обновляем версию
-        cursor.execute("""
-            INSERT OR REPLACE INTO system_settings (setting_key, setting_value, updated_at)
-            VALUES ('db_version', '2', CURRENT_TIMESTAMP)
-        """)
-        
-        conn.commit()
-        logger.info("Миграция на версию 2 завершена")
+                # Копируем все данные из backup в vpn_keys
+                cursor.execute("""
+                    INSERT INTO vpn_keys (
+                        user_id, key_uuid, key_config, status, expiry_date,
+                        traffic_used, traffic_limit, devices_limit, server_location,
+                        hwid_hash, last_used, last_ip, squad_uuid, plan_type, created_at
+                    )
+                    SELECT 
+                        user_id, key_uuid, key_config, status, expiry_date,
+                        traffic_used, traffic_limit, devices_limit, server_location,
+                        hwid_hash, last_used, last_ip, squad_uuid, plan_type, created_at
+                    FROM vpn_keys_backup
+                    WHERE key_uuid IS NOT NULL
+                """)
+                
+                conn.commit()
+                
+                cursor.execute("SELECT COUNT(*) FROM vpn_keys")
+                restored = cursor.fetchone()[0]
+                logger.info(f"Восстановлено {restored} ключей из vpn_keys_backup")
+        except Exception as e:
+            logger.error(f"Ошибка восстановления из backup: {e}")
+    
+    # Создаём индексы если их нет
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_vpn_keys_key_uuid ON vpn_keys(key_uuid)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_devices_key_uuid ON devices(key_uuid)")
+    except:
+        pass
 
 
 def init_database():
@@ -182,8 +96,6 @@ def init_database():
     
     try:
         # ===== ТАБЛИЦА ПОЛЬЗОВАТЕЛЕЙ =====
-        # Примечание: status убран из логики, но колонка остаётся для совместимости
-        # full_name обновляется автоматически при входе в miniapp
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -210,18 +122,40 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА УСТРОЙСТВ/КЛЮЧЕЙ (ОБЪЕДИНЁННАЯ) =====
+        # ===== ТАБЛИЦА VPN КЛЮЧЕЙ (для обратной совместимости) =====
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS vpn_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                key_uuid TEXT UNIQUE,
+                key_config TEXT,
+                status TEXT DEFAULT 'Active',
+                expiry_date TIMESTAMP,
+                traffic_used REAL DEFAULT 0,
+                traffic_limit REAL,
+                devices_limit INTEGER DEFAULT 1,
+                server_location TEXT,
+                hwid_hash TEXT,
+                last_used TIMESTAMP,
+                last_ip TEXT,
+                squad_uuid TEXT,
+                plan_type TEXT DEFAULT 'vpn',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+        
+        # ===== ТАБЛИЦА УСТРОЙСТВ =====
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS devices (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
+                vpn_key_id INTEGER,
                 name TEXT DEFAULT 'Устройство',
                 platform TEXT DEFAULT 'unknown',
                 hwid_hash TEXT,
                 is_active INTEGER DEFAULT 1,
-                
-                -- Данные ключа VPN (ранее в vpn_keys)
-                key_uuid TEXT UNIQUE,
+                key_uuid TEXT,
                 key_config TEXT,
                 status TEXT DEFAULT 'Active',
                 expiry_date TIMESTAMP,
@@ -233,14 +167,10 @@ def init_database():
                 last_ip TEXT,
                 squad_uuid TEXT,
                 plan_type TEXT DEFAULT 'vpn',
-                
                 added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                
-                -- Обратная совместимость
-                vpn_key_id INTEGER,
-                
-                FOREIGN KEY (user_id) REFERENCES users(id)
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (vpn_key_id) REFERENCES vpn_keys(id)
             )
         """)
         
@@ -295,13 +225,13 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS traffic_stats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                device_id INTEGER NOT NULL,
+                vpn_key_id INTEGER,
+                device_id INTEGER,
                 user_id INTEGER NOT NULL,
                 date DATE NOT NULL,
                 traffic_bytes REAL DEFAULT 0,
                 unique_hwids INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (device_id) REFERENCES devices(id),
                 FOREIGN KEY (user_id) REFERENCES users(id),
                 UNIQUE(device_id, date)
             )
@@ -507,10 +437,12 @@ def init_database():
         # ===== ИНДЕКСЫ =====
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_vpn_keys_user_id ON vpn_keys(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_vpn_keys_status ON vpn_keys(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_vpn_keys_key_uuid ON vpn_keys(key_uuid)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_devices_user_id ON devices(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_devices_key_uuid ON devices(key_uuid)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_devices_plan_type ON devices(plan_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_devices_hwid ON devices(hwid_hash)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_traffic_stats_date ON traffic_stats(date)")
@@ -518,8 +450,8 @@ def init_database():
         
         conn.commit()
         
-        # ===== ВЫПОЛНЯЕМ МИГРАЦИИ =====
-        run_migrations(conn, cursor)
+        # ===== ВОССТАНОВЛЕНИЕ ДАННЫХ =====
+        safe_migrate_and_restore(conn, cursor)
         
         # ===== ИНИЦИАЛИЗАЦИЯ ДЕФОЛТНЫХ ДАННЫХ =====
         
@@ -559,7 +491,7 @@ def init_database():
                 cursor.execute("INSERT INTO payment_fees (payment_method, fee_percent, fee_fixed) VALUES (?, 0.0, 0.0)", (method,))
         
         conn.commit()
-        logger.info("База данных успешно инициализирована (версия 2)")
+        logger.info("База данных успешно инициализирована")
         
     except Exception as e:
         logger.error(f"Ошибка при инициализации базы данных: {e}")
@@ -647,7 +579,7 @@ def update_user_balance(user_id: int, amount: float, ensure_non_negative: bool =
 
 
 def update_user_full_name(telegram_id: int, full_name: str) -> bool:
-    """Обновить полное имя пользователя (автоматически при входе в miniapp)"""
+    """Обновить полное имя пользователя"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -688,28 +620,221 @@ def get_all_users(limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         conn.close()
 
 
-# ========== ФУНКЦИИ ДЛЯ РАБОТЫ С УСТРОЙСТВАМИ/КЛЮЧАМИ ==========
+# ========== ФУНКЦИИ ДЛЯ РАБОТЫ С КЛЮЧАМИ (УНИВЕРСАЛЬНЫЕ) ==========
 
-def create_device(user_id: int, key_uuid: str = None, key_config: str = None,
-                  plan_type: str = 'vpn', expiry_date: str = None,
-                  traffic_limit: float = None, squad_uuid: str = None,
-                  name: str = 'Устройство', platform: str = 'unknown') -> int:
-    """Создать устройство/ключ"""
+def get_user_keys(user_id: int) -> List[Dict[str, Any]]:
+    """
+    Получить все ключи пользователя.
+    Проверяет обе таблицы: devices (с key_uuid) и vpn_keys для совместимости.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Сначала проверяем devices
+        cursor.execute("""
+            SELECT * FROM devices 
+            WHERE user_id = ? AND key_uuid IS NOT NULL
+            ORDER BY added_date DESC
+        """, (user_id,))
+        devices_keys = [dict(row) for row in cursor.fetchall()]
+        
+        if devices_keys:
+            return devices_keys
+        
+        # Если в devices пусто, проверяем vpn_keys
+        cursor.execute("""
+            SELECT * FROM vpn_keys WHERE user_id = ? ORDER BY created_at DESC
+        """, (user_id,))
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_key_by_uuid(key_uuid: str) -> Optional[Dict[str, Any]]:
+    """Получить ключ по UUID"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Сначала в devices
+        cursor.execute("SELECT * FROM devices WHERE key_uuid = ?", (key_uuid,))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        
+        # Потом в vpn_keys
+        cursor.execute("SELECT * FROM vpn_keys WHERE key_uuid = ?", (key_uuid,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def create_key(user_id: int, key_uuid: str, key_config: str = None,
+               plan_type: str = 'vpn', expiry_date: str = None,
+               traffic_limit: float = None, squad_uuid: str = None,
+               name: str = 'Устройство', platform: str = 'unknown') -> int:
+    """Создать новый ключ (в обе таблицы для совместимости)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Создаём в devices
+        cursor.execute("""
+            INSERT INTO devices (
+                user_id, name, platform, is_active,
+                key_uuid, key_config, status, expiry_date,
+                traffic_limit, squad_uuid, plan_type
+            ) VALUES (?, ?, ?, 1, ?, ?, 'Active', ?, ?, ?, ?)
+        """, (user_id, name, platform, key_uuid, key_config,
+              expiry_date, traffic_limit, squad_uuid, plan_type))
+        device_id = cursor.lastrowid
+        
+        # Также создаём в vpn_keys для обратной совместимости
+        cursor.execute("""
+            INSERT OR IGNORE INTO vpn_keys (
+                user_id, key_uuid, key_config, status, expiry_date,
+                traffic_limit, squad_uuid, plan_type
+            ) VALUES (?, ?, ?, 'Active', ?, ?, ?, ?)
+        """, (user_id, key_uuid, key_config, expiry_date,
+              traffic_limit, squad_uuid, plan_type))
+        
+        conn.commit()
+        return device_id
+    finally:
+        conn.close()
+
+
+def update_key(key_uuid: str, **kwargs) -> bool:
+    """Обновить ключ по UUID (в обеих таблицах)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        allowed_fields = ['status', 'expiry_date', 'traffic_used', 'traffic_limit',
+                          'key_config', 'last_used', 'last_ip', 'squad_uuid', 
+                          'plan_type', 'hwid_hash', 'name', 'platform']
+        
+        updates = []
+        values = []
+        for key, value in kwargs.items():
+            if key in allowed_fields:
+                updates.append(f"{key} = ?")
+                values.append(value)
+        
+        if not updates:
+            return False
+        
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        values.append(key_uuid)
+        
+        # Обновляем в devices
+        cursor.execute(f"""
+            UPDATE devices SET {', '.join(updates[:-1])}, updated_at = CURRENT_TIMESTAMP
+            WHERE key_uuid = ?
+        """, values)
+        
+        # Обновляем в vpn_keys (без updated_at)
+        vpn_updates = [u for u in updates[:-1] if 'updated_at' not in u and 'name' not in u and 'platform' not in u]
+        if vpn_updates:
+            vpn_values = [v for i, v in enumerate(values[:-1]) if updates[i] in vpn_updates]
+            vpn_values.append(key_uuid)
+            cursor.execute(f"""
+                UPDATE vpn_keys SET {', '.join(vpn_updates)} WHERE key_uuid = ?
+            """, vpn_values)
+        
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def delete_key(key_uuid: str) -> bool:
+    """Удалить ключ по UUID (из обеих таблиц)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("DELETE FROM devices WHERE key_uuid = ?", (key_uuid,))
+        cursor.execute("DELETE FROM vpn_keys WHERE key_uuid = ?", (key_uuid,))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def update_key_traffic(key_uuid: str, traffic_used: float) -> bool:
+    """Обновить использованный трафик"""
+    return update_key(key_uuid, traffic_used=traffic_used)
+
+
+# ========== СОВМЕСТИМОСТЬ СО СТАРЫМ КОДОМ ==========
+
+def get_device_by_key_uuid(key_uuid: str) -> Optional[Dict[str, Any]]:
+    """Алиас для совместимости"""
+    return get_key_by_uuid(key_uuid)
+
+
+def get_vpn_key_by_uuid(key_uuid: str) -> Optional[Dict[str, Any]]:
+    """Алиас для совместимости"""
+    return get_key_by_uuid(key_uuid)
+
+
+def get_user_devices(user_id: int, active_only: bool = False) -> List[Dict[str, Any]]:
+    """Получить устройства/ключи пользователя"""
+    return get_user_keys(user_id)
+
+
+def get_user_devices_by_telegram_id(telegram_id: int) -> List[Dict[str, Any]]:
+    """Получить устройства пользователя по Telegram ID"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
     try:
         cursor.execute("""
-            INSERT INTO devices (
-                user_id, name, platform, key_uuid, key_config,
-                plan_type, expiry_date, traffic_limit, squad_uuid, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active')
-        """, (user_id, name, platform, key_uuid, key_config,
-              plan_type, expiry_date, traffic_limit, squad_uuid))
-        conn.commit()
-        return cursor.lastrowid
+            SELECT d.* FROM devices d
+            JOIN users u ON d.user_id = u.id
+            WHERE u.telegram_id = ? AND d.key_uuid IS NOT NULL
+            ORDER BY d.added_date DESC
+        """, (telegram_id,))
+        devices = [dict(row) for row in cursor.fetchall()]
+        
+        if devices:
+            return devices
+        
+        # Проверяем vpn_keys
+        cursor.execute("""
+            SELECT vk.* FROM vpn_keys vk
+            JOIN users u ON vk.user_id = u.id
+            WHERE u.telegram_id = ?
+            ORDER BY vk.created_at DESC
+        """, (telegram_id,))
+        return [dict(row) for row in cursor.fetchall()]
     finally:
         conn.close()
+
+
+def get_user_vpn_keys(user_id: int) -> List[Dict[str, Any]]:
+    """Алиас для совместимости"""
+    return get_user_keys(user_id)
+
+
+def create_vpn_key(user_id: int, key_uuid: str, key_config: str = None,
+                   plan_type: str = 'vpn', expiry_date: str = None,
+                   traffic_limit: float = None, squad_uuid: str = None) -> int:
+    """Алиас для совместимости"""
+    return create_key(user_id, key_uuid, key_config, plan_type,
+                      expiry_date, traffic_limit, squad_uuid)
+
+
+def create_device(user_id: int, key_uuid: str = None, key_config: str = None,
+                  plan_type: str = 'vpn', expiry_date: str = None,
+                  traffic_limit: float = None, squad_uuid: str = None,
+                  name: str = 'Устройство', platform: str = 'unknown') -> int:
+    """Алиас для совместимости"""
+    return create_key(user_id, key_uuid, key_config, plan_type,
+                      expiry_date, traffic_limit, squad_uuid, name, platform)
 
 
 def get_device_by_id(device_id: int) -> Optional[Dict[str, Any]]:
@@ -725,59 +850,8 @@ def get_device_by_id(device_id: int) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
-def get_device_by_key_uuid(key_uuid: str) -> Optional[Dict[str, Any]]:
-    """Получить устройство по UUID ключа"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("SELECT * FROM devices WHERE key_uuid = ?", (key_uuid,))
-        row = cursor.fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
-
-
-def get_user_devices(user_id: int, active_only: bool = False) -> List[Dict[str, Any]]:
-    """Получить устройства пользователя"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        if active_only:
-            cursor.execute("""
-                SELECT * FROM devices 
-                WHERE user_id = ? AND is_active = 1 AND status = 'Active'
-                ORDER BY added_date DESC
-            """, (user_id,))
-        else:
-            cursor.execute("""
-                SELECT * FROM devices WHERE user_id = ? ORDER BY added_date DESC
-            """, (user_id,))
-        return [dict(row) for row in cursor.fetchall()]
-    finally:
-        conn.close()
-
-
-def get_user_devices_by_telegram_id(telegram_id: int) -> List[Dict[str, Any]]:
-    """Получить устройства пользователя по Telegram ID"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("""
-            SELECT d.* FROM devices d
-            JOIN users u ON d.user_id = u.id
-            WHERE u.telegram_id = ? AND d.key_uuid IS NOT NULL
-            ORDER BY d.added_date DESC
-        """, (telegram_id,))
-        return [dict(row) for row in cursor.fetchall()]
-    finally:
-        conn.close()
-
-
 def update_device(device_id: int, **kwargs) -> bool:
-    """Обновить устройство"""
+    """Обновить устройство по ID"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -808,37 +882,35 @@ def update_device(device_id: int, **kwargs) -> bool:
         conn.close()
 
 
-def update_device_traffic(key_uuid: str, traffic_used: float) -> bool:
-    """Обновить использованный трафик устройства"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("""
-            UPDATE devices SET traffic_used = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE key_uuid = ?
-        """, (traffic_used, key_uuid))
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
-
-
 def delete_device(device_id: int) -> bool:
-    """Удалить устройство"""
+    """Удалить устройство по ID"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
     try:
+        # Получаем key_uuid для удаления из vpn_keys тоже
+        cursor.execute("SELECT key_uuid FROM devices WHERE id = ?", (device_id,))
+        row = cursor.fetchone()
+        key_uuid = row['key_uuid'] if row else None
+        
         cursor.execute("DELETE FROM devices WHERE id = ?", (device_id,))
+        
+        if key_uuid:
+            cursor.execute("DELETE FROM vpn_keys WHERE key_uuid = ?", (key_uuid,))
+        
         conn.commit()
-        return cursor.rowcount > 0
+        return True
     finally:
         conn.close()
+
+
+def update_device_traffic(key_uuid: str, traffic_used: float) -> bool:
+    """Обновить трафик устройства"""
+    return update_key_traffic(key_uuid, traffic_used)
 
 
 def count_user_active_devices(user_id: int, plan_type: str = None) -> int:
-    """Подсчитать активные устройства пользователя"""
+    """Подсчитать активные устройства"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -846,11 +918,11 @@ def count_user_active_devices(user_id: int, plan_type: str = None) -> int:
         if plan_type:
             cursor.execute("""
                 SELECT COUNT(*) FROM devices 
-                WHERE user_id = ? AND status = 'Active' AND plan_type = ?
+                WHERE user_id = ? AND status = 'Active' AND plan_type = ? AND key_uuid IS NOT NULL
             """, (user_id, plan_type))
         else:
             cursor.execute("""
-                SELECT COUNT(*) FROM devices WHERE user_id = ? AND status = 'Active'
+                SELECT COUNT(*) FROM devices WHERE user_id = ? AND status = 'Active' AND key_uuid IS NOT NULL
             """, (user_id,))
         return cursor.fetchone()[0]
     finally:
@@ -882,27 +954,6 @@ def get_all_devices(limit: int = 100, offset: int = 0, plan_type: str = None) ->
         return [dict(row) for row in cursor.fetchall()]
     finally:
         conn.close()
-
-
-# ========== СОВМЕСТИМОСТЬ СО СТАРЫМ КОДОМ (vpn_keys) ==========
-# Эти функции - алиасы для плавного перехода
-
-def get_vpn_key_by_uuid(key_uuid: str) -> Optional[Dict[str, Any]]:
-    """Алиас для совместимости"""
-    return get_device_by_key_uuid(key_uuid)
-
-
-def get_user_vpn_keys(user_id: int) -> List[Dict[str, Any]]:
-    """Алиас для совместимости"""
-    return get_user_devices(user_id)
-
-
-def create_vpn_key(user_id: int, key_uuid: str, key_config: str = None,
-                   plan_type: str = 'vpn', expiry_date: str = None,
-                   traffic_limit: float = None, squad_uuid: str = None) -> int:
-    """Алиас для совместимости"""
-    return create_device(user_id, key_uuid, key_config, plan_type,
-                         expiry_date, traffic_limit, squad_uuid)
 
 
 # ========== СИСТЕМНЫЕ НАСТРОЙКИ ==========
@@ -943,7 +994,7 @@ def set_system_setting(key: str, value: str) -> bool:
 
 
 def get_default_squads(plan_type: str = 'vpn') -> List[str]:
-    """Получить сквады по умолчанию для типа подписки"""
+    """Получить сквады по умолчанию"""
     import json
     key = f'default_squads_{plan_type}'
     value = get_system_setting(key, '[]')
@@ -982,7 +1033,7 @@ def check_referral_rate_limit(referrer_telegram_id: int, limit: int = 25, window
 
 
 def set_referrer_for_user(user_id: int, referrer_id: int) -> bool:
-    """Установить реферера для пользователя"""
+    """Установить реферера"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -1177,11 +1228,13 @@ def sync_squad_user_counts() -> None:
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        # Используем devices вместо vpn_keys
+        # Считаем из обеих таблиц
         cursor.execute("""
-            SELECT squad_uuid, COUNT(*) as cnt FROM devices
-            WHERE squad_uuid IS NOT NULL AND status = 'Active'
-            GROUP BY squad_uuid
+            SELECT squad_uuid, COUNT(*) as cnt FROM (
+                SELECT squad_uuid FROM devices WHERE squad_uuid IS NOT NULL AND status = 'Active'
+                UNION ALL
+                SELECT squad_uuid FROM vpn_keys WHERE squad_uuid IS NOT NULL AND status = 'Active'
+            ) GROUP BY squad_uuid
         """)
         counts = {row['squad_uuid']: row['cnt'] for row in cursor.fetchall()}
         
