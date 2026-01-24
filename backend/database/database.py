@@ -1,6 +1,5 @@
 """
 Модуль для работы с базой данных SQLite
-ВЕРСИЯ 2.1 - Безопасная миграция с восстановлением данных
 """
 import sqlite3
 import os
@@ -13,8 +12,9 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv('DB_PATH', 'data.db')
 
+
 def get_db_connection():
-    """Получить соединение с базой данных (WAL, таймаут)"""
+    """Получить соединение с базой данных"""
     db_dir = os.path.dirname(os.path.abspath(DB_PATH))
     if db_dir and not os.path.exists(db_dir):
         os.makedirs(db_dir, exist_ok=True)
@@ -26,76 +26,13 @@ def get_db_connection():
     return conn
 
 
-def safe_migrate_and_restore(conn, cursor):
-    """
-    Безопасная миграция и восстановление данных.
-    Восстанавливает ключи из vpn_keys_backup если vpn_keys пустая.
-    """
-    logger.info("Проверка и восстановление данных...")
-    
-    # Проверяем какие таблицы существуют
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    existing_tables = {row[0] for row in cursor.fetchall()}
-    
-    has_vpn_keys = 'vpn_keys' in existing_tables
-    has_vpn_keys_backup = 'vpn_keys_backup' in existing_tables
-    
-    # Проверяем есть ли данные в vpn_keys
-    vpn_keys_count = 0
-    if has_vpn_keys:
-        try:
-            cursor.execute("SELECT COUNT(*) FROM vpn_keys")
-            vpn_keys_count = cursor.fetchone()[0]
-        except:
-            pass
-    
-    # Если vpn_keys пустая но есть backup - восстанавливаем
-    if vpn_keys_count == 0 and has_vpn_keys_backup:
-        try:
-            cursor.execute("SELECT COUNT(*) FROM vpn_keys_backup")
-            backup_count = cursor.fetchone()[0]
-            
-            if backup_count > 0:
-                logger.info(f"Восстановление {backup_count} ключей из vpn_keys_backup...")
-                
-                # Копируем все данные из backup в vpn_keys
-                cursor.execute("""
-                    INSERT INTO vpn_keys (
-                        user_id, key_uuid, key_config, status, expiry_date,
-                        traffic_used, traffic_limit, devices_limit, server_location,
-                        hwid_hash, last_used, last_ip, squad_uuid, plan_type, created_at
-                    )
-                    SELECT 
-                        user_id, key_uuid, key_config, status, expiry_date,
-                        traffic_used, traffic_limit, devices_limit, server_location,
-                        hwid_hash, last_used, last_ip, squad_uuid, plan_type, created_at
-                    FROM vpn_keys_backup
-                    WHERE key_uuid IS NOT NULL
-                """)
-                
-                conn.commit()
-                
-                cursor.execute("SELECT COUNT(*) FROM vpn_keys")
-                restored = cursor.fetchone()[0]
-                logger.info(f"Восстановлено {restored} ключей из vpn_keys_backup")
-        except Exception as e:
-            logger.error(f"Ошибка восстановления из backup: {e}")
-    
-    # Создаём индексы если их нет
-    try:
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_vpn_keys_key_uuid ON vpn_keys(key_uuid)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_devices_key_uuid ON devices(key_uuid)")
-    except:
-        pass
-
-
 def init_database():
-    """Инициализация базы данных - создание всех таблиц"""
+    """Инициализация базы данных"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
     try:
-        # ===== ТАБЛИЦА ПОЛЬЗОВАТЕЛЕЙ =====
+        # Пользователи
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,7 +59,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА VPN КЛЮЧЕЙ (для обратной совместимости) =====
+        # VPN ключи
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS vpn_keys (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -145,36 +82,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА УСТРОЙСТВ =====
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS devices (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                vpn_key_id INTEGER,
-                name TEXT DEFAULT 'Устройство',
-                platform TEXT DEFAULT 'unknown',
-                hwid_hash TEXT,
-                is_active INTEGER DEFAULT 1,
-                key_uuid TEXT,
-                key_config TEXT,
-                status TEXT DEFAULT 'Active',
-                expiry_date TIMESTAMP,
-                traffic_used REAL DEFAULT 0,
-                traffic_limit REAL,
-                devices_limit INTEGER DEFAULT 1,
-                server_location TEXT,
-                last_used TIMESTAMP,
-                last_ip TEXT,
-                squad_uuid TEXT,
-                plan_type TEXT DEFAULT 'vpn',
-                added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id),
-                FOREIGN KEY (vpn_key_id) REFERENCES vpn_keys(id)
-            )
-        """)
-        
-        # ===== ТАБЛИЦА ТРАНЗАКЦИЙ =====
+        # Транзакции
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,7 +100,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА ПРОМОКОДОВ =====
+        # Промокоды
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS promocodes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -208,7 +116,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА ИСПОЛЬЗОВАНИЯ ПРОМОКОДОВ =====
+        # Использование промокодов
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS promocode_uses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -221,23 +129,23 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА СТАТИСТИКИ ТРАФИКА =====
+        # Статистика трафика
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS traffic_stats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 vpn_key_id INTEGER,
-                device_id INTEGER,
                 user_id INTEGER NOT NULL,
                 date DATE NOT NULL,
                 traffic_bytes REAL DEFAULT 0,
                 unique_hwids INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (vpn_key_id) REFERENCES vpn_keys(id),
                 FOREIGN KEY (user_id) REFERENCES users(id),
-                UNIQUE(device_id, date)
+                UNIQUE(vpn_key_id, date)
             )
         """)
         
-        # ===== ТАБЛИЦА ЧЕРНОГО СПИСКА =====
+        # Черный список
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS blacklist (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -246,7 +154,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА РАССЫЛОК =====
+        # Рассылки
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS mailings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -263,7 +171,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА ТАРИФНЫХ ПЛАНОВ =====
+        # Тарифные планы
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tariff_plans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -278,7 +186,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА НАСТРОЕК WHITELIST BYPASS =====
+        # Настройки whitelist
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS whitelist_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -293,7 +201,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА АВТО-СКИДОК =====
+        # Авто-скидки
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS auto_discounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -308,7 +216,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА ПУБЛИЧНЫХ СТРАНИЦ =====
+        # Публичные страницы
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS public_pages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -318,7 +226,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА НАСТРОЕК СИСТЕМЫ =====
+        # Системные настройки
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS system_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -328,7 +236,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА КОМИССИЙ ПЛАТЕЖНЫХ СИСТЕМ =====
+        # Комиссии платежных систем
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS payment_fees (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -339,7 +247,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА СОХРАНЕННЫХ СПОСОБОВ ОПЛАТЫ =====
+        # Сохраненные способы оплаты
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS saved_payment_methods (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -357,7 +265,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА НАСТРОЕК ПЛАТЕЖНЫХ ПРОВАЙДЕРОВ =====
+        # Настройки провайдеров
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS payment_provider_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -369,7 +277,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА НАСТРОЕК РЕЗЕРВНОГО КОПИРОВАНИЯ =====
+        # Настройки бэкапов
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS backup_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -380,11 +288,11 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА КОНФИГУРАЦИИ СКВАДОВ =====
+        # Конфигурация сквадов
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS squad_configs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                squad_uuid TEXT NOT NULL,
+                squad_uuid TEXT UNIQUE NOT NULL,
                 squad_name TEXT NOT NULL,
                 squad_type TEXT NOT NULL,
                 max_users INTEGER DEFAULT 0,
@@ -392,12 +300,11 @@ def init_database():
                 is_active INTEGER DEFAULT 1,
                 priority INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(squad_uuid)
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         
-        # ===== ТАБЛИЦА ПРИВЯЗКИ ПОДПИСОК К СКВАДАМ =====
+        # Привязка подписок к сквадам
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS subscription_squad_mapping (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -409,7 +316,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА АДМИНИСТРАТОРОВ ПАНЕЛИ =====
+        # Администраторы панели
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS panel_admins (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -422,7 +329,7 @@ def init_database():
             )
         """)
         
-        # ===== ТАБЛИЦА СЕССИЙ ПАНЕЛИ =====
+        # Сессии панели
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS panel_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -434,31 +341,22 @@ def init_database():
             )
         """)
         
-        # ===== ИНДЕКСЫ =====
+        # Индексы
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_vpn_keys_user_id ON vpn_keys(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_vpn_keys_status ON vpn_keys(status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_vpn_keys_key_uuid ON vpn_keys(key_uuid)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_devices_user_id ON devices(user_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_devices_key_uuid ON devices(key_uuid)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_devices_hwid ON devices(hwid_hash)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_traffic_stats_date ON traffic_stats(date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_telegram_id ON blacklist(telegram_id)")
         
         conn.commit()
         
-        # ===== ВОССТАНОВЛЕНИЕ ДАННЫХ =====
-        safe_migrate_and_restore(conn, cursor)
-        
-        # ===== ИНИЦИАЛИЗАЦИЯ ДЕФОЛТНЫХ ДАННЫХ =====
-        
-        # Дефолтные тарифы VPN
+        # Дефолтные тарифы
         cursor.execute("SELECT COUNT(*) FROM tariff_plans WHERE plan_type = 'vpn'")
         if cursor.fetchone()[0] == 0:
-            default_vpn_plans = [
+            default_plans = [
                 ('vpn', '1 месяц', 99, 30, 1),
                 ('vpn', '3 месяца', 249, 90, 2),
                 ('vpn', '6 месяцев', 449, 180, 3),
@@ -468,7 +366,7 @@ def init_database():
             cursor.executemany("""
                 INSERT INTO tariff_plans (plan_type, name, price, duration_days, sort_order)
                 VALUES (?, ?, ?, ?, ?)
-            """, default_vpn_plans)
+            """, default_plans)
         
         # Настройки whitelist
         cursor.execute("SELECT COUNT(*) FROM whitelist_settings")
@@ -484,54 +382,48 @@ def init_database():
             if cursor.fetchone()[0] == 0:
                 cursor.execute("INSERT INTO public_pages (page_type, content) VALUES (?, '')", (page_type,))
         
-        # Комиссии платежных систем
+        # Комиссии
         for method in ['yookassa', 'heleket', 'platega', 'crypto']:
             cursor.execute("SELECT COUNT(*) FROM payment_fees WHERE payment_method = ?", (method,))
             if cursor.fetchone()[0] == 0:
-                cursor.execute("INSERT INTO payment_fees (payment_method, fee_percent, fee_fixed) VALUES (?, 0.0, 0.0)", (method,))
+                cursor.execute("INSERT INTO payment_fees (payment_method) VALUES (?)", (method,))
         
         conn.commit()
-        logger.info("База данных успешно инициализирована")
+        logger.info("Database initialized")
         
     except Exception as e:
-        logger.error(f"Ошибка при инициализации базы данных: {e}")
+        logger.error(f"Database init error: {e}")
         conn.rollback()
         raise
     finally:
         conn.close()
 
 
-# ========== ФУНКЦИИ ДЛЯ РАБОТЫ С ПОЛЬЗОВАТЕЛЯМИ ==========
+# ===== ПОЛЬЗОВАТЕЛИ =====
 
 def create_user(telegram_id: int, username: str = None, full_name: str = None, referred_by: int = None) -> int:
-    """Создать нового пользователя"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
         referral_code = f"REF{telegram_id}"
-        
         cursor.execute("""
             INSERT INTO users (telegram_id, username, full_name, referral_code, referred_by)
             VALUES (?, ?, ?, ?, ?)
         """, (telegram_id, username, full_name, referral_code, referred_by))
-        
         user_id = cursor.lastrowid
         conn.commit()
         return user_id
     except sqlite3.IntegrityError:
         cursor.execute("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,))
-        result = cursor.fetchone()
-        return result[0] if result else None
+        row = cursor.fetchone()
+        return row[0] if row else None
     finally:
         conn.close()
 
 
 def get_user_by_telegram_id(telegram_id: int) -> Optional[Dict[str, Any]]:
-    """Получить пользователя по Telegram ID"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
         cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
         row = cursor.fetchone()
@@ -541,10 +433,8 @@ def get_user_by_telegram_id(telegram_id: int) -> Optional[Dict[str, Any]]:
 
 
 def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
-    """Получить пользователя по ID"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
         cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
         row = cursor.fetchone()
@@ -554,10 +444,8 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
 
 
 def update_user_balance(user_id: int, amount: float, ensure_non_negative: bool = False) -> bool:
-    """Обновить баланс пользователя"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
         cursor.execute("BEGIN IMMEDIATE")
         cursor.execute("SELECT balance FROM users WHERE id = ?", (user_id,))
@@ -569,9 +457,8 @@ def update_user_balance(user_id: int, amount: float, ensure_non_negative: bool =
         if ensure_non_negative and new_balance < 0:
             conn.rollback()
             return False
-        cursor.execute("""
-            UPDATE users SET balance = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-        """, (new_balance, user_id))
+        cursor.execute("UPDATE users SET balance = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                      (new_balance, user_id))
         conn.commit()
         return cursor.rowcount > 0
     finally:
@@ -579,14 +466,11 @@ def update_user_balance(user_id: int, amount: float, ensure_non_negative: bool =
 
 
 def update_user_full_name(telegram_id: int, full_name: str) -> bool:
-    """Обновить полное имя пользователя"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
-        cursor.execute("""
-            UPDATE users SET full_name = ?, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = ?
-        """, (full_name, telegram_id))
+        cursor.execute("UPDATE users SET full_name = ?, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = ?",
+                      (full_name, telegram_id))
         conn.commit()
         return cursor.rowcount > 0
     finally:
@@ -594,14 +478,11 @@ def update_user_full_name(telegram_id: int, full_name: str) -> bool:
 
 
 def update_user_username(telegram_id: int, username: str) -> bool:
-    """Обновить username пользователя"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
-        cursor.execute("""
-            UPDATE users SET username = ?, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = ?
-        """, (username, telegram_id))
+        cursor.execute("UPDATE users SET username = ?, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = ?",
+                      (username, telegram_id))
         conn.commit()
         return cursor.rowcount > 0
     finally:
@@ -609,10 +490,8 @@ def update_user_username(telegram_id: int, username: str) -> bool:
 
 
 def get_all_users(limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
-    """Получить всех пользователей"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
         cursor.execute("SELECT * FROM users ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
         return [dict(row) for row in cursor.fetchall()]
@@ -620,50 +499,22 @@ def get_all_users(limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         conn.close()
 
 
-# ========== ФУНКЦИИ ДЛЯ РАБОТЫ С КЛЮЧАМИ (УНИВЕРСАЛЬНЫЕ) ==========
+# ===== VPN КЛЮЧИ =====
 
-def get_user_keys(user_id: int) -> List[Dict[str, Any]]:
-    """
-    Получить все ключи пользователя.
-    Проверяет обе таблицы: devices (с key_uuid) и vpn_keys для совместимости.
-    """
+def get_user_vpn_keys(user_id: int) -> List[Dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
-        # Сначала проверяем devices
-        cursor.execute("""
-            SELECT * FROM devices 
-            WHERE user_id = ? AND key_uuid IS NOT NULL
-            ORDER BY added_date DESC
-        """, (user_id,))
-        devices_keys = [dict(row) for row in cursor.fetchall()]
-        
-        if devices_keys:
-            return devices_keys
-        
-        # Если в devices пусто, проверяем vpn_keys
-        cursor.execute("""
-            SELECT * FROM vpn_keys WHERE user_id = ? ORDER BY created_at DESC
-        """, (user_id,))
+        cursor.execute("SELECT * FROM vpn_keys WHERE user_id = ? ORDER BY created_at DESC", (user_id,))
         return [dict(row) for row in cursor.fetchall()]
     finally:
         conn.close()
 
 
-def get_key_by_uuid(key_uuid: str) -> Optional[Dict[str, Any]]:
-    """Получить ключ по UUID"""
+def get_vpn_key_by_uuid(key_uuid: str) -> Optional[Dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
-        # Сначала в devices
-        cursor.execute("SELECT * FROM devices WHERE key_uuid = ?", (key_uuid,))
-        row = cursor.fetchone()
-        if row:
-            return dict(row)
-        
-        # Потом в vpn_keys
         cursor.execute("SELECT * FROM vpn_keys WHERE key_uuid = ?", (key_uuid,))
         row = cursor.fetchone()
         return dict(row) if row else None
@@ -671,300 +522,122 @@ def get_key_by_uuid(key_uuid: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
-def create_key(user_id: int, key_uuid: str, key_config: str = None,
-               plan_type: str = 'vpn', expiry_date: str = None,
-               traffic_limit: float = None, squad_uuid: str = None,
-               name: str = 'Устройство', platform: str = 'unknown') -> int:
-    """Создать новый ключ (в обе таблицы для совместимости)"""
+def get_vpn_key_by_id(key_id: int) -> Optional[Dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
-        # Создаём в devices
-        cursor.execute("""
-            INSERT INTO devices (
-                user_id, name, platform, is_active,
-                key_uuid, key_config, status, expiry_date,
-                traffic_limit, squad_uuid, plan_type
-            ) VALUES (?, ?, ?, 1, ?, ?, 'Active', ?, ?, ?, ?)
-        """, (user_id, name, platform, key_uuid, key_config,
-              expiry_date, traffic_limit, squad_uuid, plan_type))
-        device_id = cursor.lastrowid
-        
-        # Также создаём в vpn_keys для обратной совместимости
-        cursor.execute("""
-            INSERT OR IGNORE INTO vpn_keys (
-                user_id, key_uuid, key_config, status, expiry_date,
-                traffic_limit, squad_uuid, plan_type
-            ) VALUES (?, ?, ?, 'Active', ?, ?, ?, ?)
-        """, (user_id, key_uuid, key_config, expiry_date,
-              traffic_limit, squad_uuid, plan_type))
-        
-        conn.commit()
-        return device_id
-    finally:
-        conn.close()
-
-
-def update_key(key_uuid: str, **kwargs) -> bool:
-    """Обновить ключ по UUID (в обеих таблицах)"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        allowed_fields = ['status', 'expiry_date', 'traffic_used', 'traffic_limit',
-                          'key_config', 'last_used', 'last_ip', 'squad_uuid', 
-                          'plan_type', 'hwid_hash', 'name', 'platform']
-        
-        updates = []
-        values = []
-        for key, value in kwargs.items():
-            if key in allowed_fields:
-                updates.append(f"{key} = ?")
-                values.append(value)
-        
-        if not updates:
-            return False
-        
-        updates.append("updated_at = CURRENT_TIMESTAMP")
-        values.append(key_uuid)
-        
-        # Обновляем в devices
-        cursor.execute(f"""
-            UPDATE devices SET {', '.join(updates[:-1])}, updated_at = CURRENT_TIMESTAMP
-            WHERE key_uuid = ?
-        """, values)
-        
-        # Обновляем в vpn_keys (без updated_at)
-        vpn_updates = [u for u in updates[:-1] if 'updated_at' not in u and 'name' not in u and 'platform' not in u]
-        if vpn_updates:
-            vpn_values = [v for i, v in enumerate(values[:-1]) if updates[i] in vpn_updates]
-            vpn_values.append(key_uuid)
-            cursor.execute(f"""
-                UPDATE vpn_keys SET {', '.join(vpn_updates)} WHERE key_uuid = ?
-            """, vpn_values)
-        
-        conn.commit()
-        return True
-    finally:
-        conn.close()
-
-
-def delete_key(key_uuid: str) -> bool:
-    """Удалить ключ по UUID (из обеих таблиц)"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("DELETE FROM devices WHERE key_uuid = ?", (key_uuid,))
-        cursor.execute("DELETE FROM vpn_keys WHERE key_uuid = ?", (key_uuid,))
-        conn.commit()
-        return True
-    finally:
-        conn.close()
-
-
-def update_key_traffic(key_uuid: str, traffic_used: float) -> bool:
-    """Обновить использованный трафик"""
-    return update_key(key_uuid, traffic_used=traffic_used)
-
-
-# ========== СОВМЕСТИМОСТЬ СО СТАРЫМ КОДОМ ==========
-
-def get_device_by_key_uuid(key_uuid: str) -> Optional[Dict[str, Any]]:
-    """Алиас для совместимости"""
-    return get_key_by_uuid(key_uuid)
-
-
-def get_vpn_key_by_uuid(key_uuid: str) -> Optional[Dict[str, Any]]:
-    """Алиас для совместимости"""
-    return get_key_by_uuid(key_uuid)
-
-
-def get_user_devices(user_id: int, active_only: bool = False) -> List[Dict[str, Any]]:
-    """Получить устройства/ключи пользователя"""
-    return get_user_keys(user_id)
-
-
-def get_user_devices_by_telegram_id(telegram_id: int) -> List[Dict[str, Any]]:
-    """Получить устройства пользователя по Telegram ID"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("""
-            SELECT d.* FROM devices d
-            JOIN users u ON d.user_id = u.id
-            WHERE u.telegram_id = ? AND d.key_uuid IS NOT NULL
-            ORDER BY d.added_date DESC
-        """, (telegram_id,))
-        devices = [dict(row) for row in cursor.fetchall()]
-        
-        if devices:
-            return devices
-        
-        # Проверяем vpn_keys
-        cursor.execute("""
-            SELECT vk.* FROM vpn_keys vk
-            JOIN users u ON vk.user_id = u.id
-            WHERE u.telegram_id = ?
-            ORDER BY vk.created_at DESC
-        """, (telegram_id,))
-        return [dict(row) for row in cursor.fetchall()]
-    finally:
-        conn.close()
-
-
-def get_user_vpn_keys(user_id: int) -> List[Dict[str, Any]]:
-    """Алиас для совместимости"""
-    return get_user_keys(user_id)
-
-
-def create_vpn_key(user_id: int, key_uuid: str, key_config: str = None,
-                   plan_type: str = 'vpn', expiry_date: str = None,
-                   traffic_limit: float = None, squad_uuid: str = None) -> int:
-    """Алиас для совместимости"""
-    return create_key(user_id, key_uuid, key_config, plan_type,
-                      expiry_date, traffic_limit, squad_uuid)
-
-
-def create_device(user_id: int, key_uuid: str = None, key_config: str = None,
-                  plan_type: str = 'vpn', expiry_date: str = None,
-                  traffic_limit: float = None, squad_uuid: str = None,
-                  name: str = 'Устройство', platform: str = 'unknown') -> int:
-    """Алиас для совместимости"""
-    return create_key(user_id, key_uuid, key_config, plan_type,
-                      expiry_date, traffic_limit, squad_uuid, name, platform)
-
-
-def get_device_by_id(device_id: int) -> Optional[Dict[str, Any]]:
-    """Получить устройство по ID"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("SELECT * FROM devices WHERE id = ?", (device_id,))
+        cursor.execute("SELECT * FROM vpn_keys WHERE id = ?", (key_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
 
 
-def update_device(device_id: int, **kwargs) -> bool:
-    """Обновить устройство по ID"""
+def create_vpn_key(user_id: int, key_uuid: str, key_config: str = None,
+                   plan_type: str = 'vpn', expiry_date: str = None,
+                   traffic_limit: float = None, squad_uuid: str = None) -> int:
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
-        allowed_fields = ['name', 'platform', 'status', 'expiry_date', 'traffic_used',
-                          'traffic_limit', 'key_config', 'last_used', 'last_ip',
-                          'squad_uuid', 'plan_type', 'is_active', 'hwid_hash']
-        
+        cursor.execute("""
+            INSERT INTO vpn_keys (user_id, key_uuid, key_config, plan_type, expiry_date, traffic_limit, squad_uuid)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, key_uuid, key_config, plan_type, expiry_date, traffic_limit, squad_uuid))
+        key_id = cursor.lastrowid
+        conn.commit()
+        return key_id
+    finally:
+        conn.close()
+
+
+def update_vpn_key(key_id: int, **kwargs) -> bool:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        allowed = ['status', 'expiry_date', 'traffic_used', 'traffic_limit', 'key_config',
+                   'last_used', 'last_ip', 'squad_uuid', 'plan_type', 'hwid_hash', 'devices_limit']
         updates = []
         values = []
-        for key, value in kwargs.items():
-            if key in allowed_fields:
-                updates.append(f"{key} = ?")
-                values.append(value)
-        
+        for k, v in kwargs.items():
+            if k in allowed:
+                updates.append(f"{k} = ?")
+                values.append(v)
         if not updates:
             return False
-        
-        updates.append("updated_at = CURRENT_TIMESTAMP")
-        values.append(device_id)
-        
-        cursor.execute(f"""
-            UPDATE devices SET {', '.join(updates)} WHERE id = ?
-        """, values)
+        values.append(key_id)
+        cursor.execute(f"UPDATE vpn_keys SET {', '.join(updates)} WHERE id = ?", values)
         conn.commit()
         return cursor.rowcount > 0
     finally:
         conn.close()
 
 
-def delete_device(device_id: int) -> bool:
-    """Удалить устройство по ID"""
+def delete_vpn_key(key_id: int) -> bool:
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
-        # Получаем key_uuid для удаления из vpn_keys тоже
-        cursor.execute("SELECT key_uuid FROM devices WHERE id = ?", (device_id,))
-        row = cursor.fetchone()
-        key_uuid = row['key_uuid'] if row else None
-        
-        cursor.execute("DELETE FROM devices WHERE id = ?", (device_id,))
-        
-        if key_uuid:
-            cursor.execute("DELETE FROM vpn_keys WHERE key_uuid = ?", (key_uuid,))
-        
+        cursor.execute("DELETE FROM vpn_keys WHERE id = ?", (key_id,))
         conn.commit()
-        return True
+        return cursor.rowcount > 0
     finally:
         conn.close()
 
 
-def update_device_traffic(key_uuid: str, traffic_used: float) -> bool:
-    """Обновить трафик устройства"""
-    return update_key_traffic(key_uuid, traffic_used)
-
-
-def count_user_active_devices(user_id: int, plan_type: str = None) -> int:
-    """Подсчитать активные устройства"""
+def update_vpn_key_traffic(key_uuid: str, traffic_used: float) -> bool:
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+    try:
+        cursor.execute("UPDATE vpn_keys SET traffic_used = ? WHERE key_uuid = ?", (traffic_used, key_uuid))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def count_user_active_keys(user_id: int, plan_type: str = None) -> int:
+    conn = get_db_connection()
+    cursor = conn.cursor()
     try:
         if plan_type:
             cursor.execute("""
-                SELECT COUNT(*) FROM devices 
-                WHERE user_id = ? AND status = 'Active' AND plan_type = ? AND key_uuid IS NOT NULL
+                SELECT COUNT(*) FROM vpn_keys 
+                WHERE user_id = ? AND status = 'Active' AND plan_type = ?
             """, (user_id, plan_type))
         else:
-            cursor.execute("""
-                SELECT COUNT(*) FROM devices WHERE user_id = ? AND status = 'Active' AND key_uuid IS NOT NULL
-            """, (user_id,))
+            cursor.execute("SELECT COUNT(*) FROM vpn_keys WHERE user_id = ? AND status = 'Active'", (user_id,))
         return cursor.fetchone()[0]
     finally:
         conn.close()
 
 
-def get_all_devices(limit: int = 100, offset: int = 0, plan_type: str = None) -> List[Dict[str, Any]]:
-    """Получить все устройства/ключи"""
+def get_all_vpn_keys(limit: int = 100, offset: int = 0, plan_type: str = None) -> List[Dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
         if plan_type:
             cursor.execute("""
-                SELECT d.*, u.telegram_id, u.username 
-                FROM devices d
-                LEFT JOIN users u ON d.user_id = u.id
-                WHERE d.plan_type = ? AND d.key_uuid IS NOT NULL
-                ORDER BY d.id DESC LIMIT ? OFFSET ?
+                SELECT vk.*, u.telegram_id, u.username 
+                FROM vpn_keys vk LEFT JOIN users u ON vk.user_id = u.id
+                WHERE vk.plan_type = ? ORDER BY vk.id DESC LIMIT ? OFFSET ?
             """, (plan_type, limit, offset))
         else:
             cursor.execute("""
-                SELECT d.*, u.telegram_id, u.username 
-                FROM devices d
-                LEFT JOIN users u ON d.user_id = u.id
-                WHERE d.key_uuid IS NOT NULL
-                ORDER BY d.id DESC LIMIT ? OFFSET ?
+                SELECT vk.*, u.telegram_id, u.username 
+                FROM vpn_keys vk LEFT JOIN users u ON vk.user_id = u.id
+                ORDER BY vk.id DESC LIMIT ? OFFSET ?
             """, (limit, offset))
         return [dict(row) for row in cursor.fetchall()]
     finally:
         conn.close()
 
 
-# ========== СИСТЕМНЫЕ НАСТРОЙКИ ==========
+# ===== СИСТЕМНЫЕ НАСТРОЙКИ =====
 
 def hash_hwid(hwid: str) -> str:
-    """Хешировать HWID"""
     return hashlib.sha256(hwid.encode()).hexdigest()
 
 
 def get_system_setting(key: str, default: str = None) -> Optional[str]:
-    """Получить системную настройку"""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -976,7 +649,6 @@ def get_system_setting(key: str, default: str = None) -> Optional[str]:
 
 
 def set_system_setting(key: str, value: str) -> bool:
-    """Установить системную настройку"""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -986,18 +658,15 @@ def set_system_setting(key: str, value: str) -> bool:
         """, (key, value))
         conn.commit()
         return True
-    except Exception as e:
-        logger.error(f"Error setting system setting {key}: {e}")
+    except:
         return False
     finally:
         conn.close()
 
 
 def get_default_squads(plan_type: str = 'vpn') -> List[str]:
-    """Получить сквады по умолчанию"""
     import json
-    key = f'default_squads_{plan_type}'
-    value = get_system_setting(key, '[]')
+    value = get_system_setting(f'default_squads_{plan_type}', '[]')
     try:
         return json.loads(value)
     except:
@@ -1005,47 +674,37 @@ def get_default_squads(plan_type: str = 'vpn') -> List[str]:
 
 
 def set_default_squads(squad_uuids: List[str], plan_type: str = 'vpn') -> bool:
-    """Установить сквады по умолчанию"""
     import json
-    key = f'default_squads_{plan_type}'
-    unique_uuids = list(dict.fromkeys(squad_uuids))
-    return set_system_setting(key, json.dumps(unique_uuids))
+    return set_system_setting(f'default_squads_{plan_type}', json.dumps(list(dict.fromkeys(squad_uuids))))
 
 
-# ========== РЕФЕРАЛЫ ==========
+# ===== РЕФЕРАЛЫ =====
 
 def check_referral_rate_limit(referrer_telegram_id: int, limit: int = 25, window_seconds: int = 60) -> bool:
-    """Проверить лимит рефералов"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
-        cutoff_time = datetime.now() - timedelta(seconds=window_seconds)
+        cutoff = datetime.now() - timedelta(seconds=window_seconds)
         cursor.execute("""
-            SELECT COUNT(*) as count FROM users
+            SELECT COUNT(*) FROM users
             WHERE referred_by = (SELECT id FROM users WHERE telegram_id = ?)
             AND registration_date > ?
-        """, (referrer_telegram_id, cutoff_time.isoformat()))
-        result = cursor.fetchone()
-        return (result['count'] if result else 0) < limit
+        """, (referrer_telegram_id, cutoff.isoformat()))
+        return cursor.fetchone()[0] < limit
     finally:
         conn.close()
 
 
 def set_referrer_for_user(user_id: int, referrer_id: int) -> bool:
-    """Установить реферера"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
         cursor.execute("SELECT referred_by FROM users WHERE id = ?", (user_id,))
         row = cursor.fetchone()
         if not row or row['referred_by'] is not None:
             return False
-        
-        cursor.execute("""
-            UPDATE users SET referred_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-        """, (referrer_id, user_id))
+        cursor.execute("UPDATE users SET referred_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                      (referrer_id, user_id))
         conn.commit()
         return cursor.rowcount > 0
     finally:
@@ -1053,10 +712,8 @@ def set_referrer_for_user(user_id: int, referrer_id: int) -> bool:
 
 
 def get_user_by_referral_code(referral_code: str) -> Optional[Dict[str, Any]]:
-    """Получить пользователя по реферальному коду"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
         cursor.execute("SELECT * FROM users WHERE referral_code = ?", (referral_code,))
         row = cursor.fetchone()
@@ -1066,29 +723,22 @@ def get_user_by_referral_code(referral_code: str) -> Optional[Dict[str, Any]]:
 
 
 def credit_referral_income(user_id: int, purchase_amount: float, description: str = None) -> Optional[Dict]:
-    """Начислить доход рефереру"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
         cursor.execute("""
             SELECT u.id, u.username, u.referred_by,
                    r.id as referrer_id, r.telegram_id as referrer_telegram_id,
                    r.partner_rate, r.username as referrer_username
-            FROM users u
-            LEFT JOIN users r ON u.referred_by = r.id
+            FROM users u LEFT JOIN users r ON u.referred_by = r.id
             WHERE u.id = ?
         """, (user_id,))
-        
         row = cursor.fetchone()
         if not row or not row['referrer_id']:
             return None
         
         referrer_id = row['referrer_id']
-        referrer_telegram_id = row['referrer_telegram_id']
         partner_rate = row['partner_rate'] or 20
-        referral_username = row['username'] or f"id{user_id}"
-        
         income = purchase_amount * (partner_rate / 100)
         if income <= 0:
             return None
@@ -1096,27 +746,25 @@ def credit_referral_income(user_id: int, purchase_amount: float, description: st
         cursor.execute("""
             UPDATE users SET partner_balance = partner_balance + ?,
                            total_earned = total_earned + ?,
-                           updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
+                           updated_at = CURRENT_TIMESTAMP WHERE id = ?
         """, (income, income, referrer_id))
         
-        trans_description = description or f"Доход от реферала @{referral_username}: {partner_rate}% от {purchase_amount}₽"
+        desc = description or f"Доход от реферала @{row['username'] or user_id}: {partner_rate}% от {purchase_amount}₽"
         cursor.execute("""
             INSERT INTO transactions (user_id, type, amount, status, description)
             VALUES (?, 'referral_income', ?, 'Success', ?)
-        """, (referrer_id, income, trans_description))
+        """, (referrer_id, income, desc))
         
         conn.commit()
-        
         return {
             'referrer_id': referrer_id,
-            'referrer_telegram_id': referrer_telegram_id,
+            'referrer_telegram_id': row['referrer_telegram_id'],
             'income': income,
             'rate': partner_rate,
             'purchase_amount': purchase_amount
         }
     except Exception as e:
-        logger.error(f"Error crediting referral income: {e}")
+        logger.error(f"Referral income error: {e}")
         conn.rollback()
         return None
     finally:
@@ -1124,15 +772,12 @@ def credit_referral_income(user_id: int, purchase_amount: float, description: st
 
 
 def get_referrer_info(user_id: int) -> Optional[Dict]:
-    """Получить информацию о реферере"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
         cursor.execute("""
             SELECT r.id, r.telegram_id, r.username, r.full_name
-            FROM users u JOIN users r ON u.referred_by = r.id
-            WHERE u.id = ?
+            FROM users u JOIN users r ON u.referred_by = r.id WHERE u.id = ?
         """, (user_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
@@ -1140,10 +785,9 @@ def get_referrer_info(user_id: int) -> Optional[Dict]:
         conn.close()
 
 
-# ========== СКВАДЫ ==========
+# ===== СКВАДЫ =====
 
 def get_all_squad_configs() -> List[Dict[str, Any]]:
-    """Получить все конфигурации сквадов"""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -1154,7 +798,6 @@ def get_all_squad_configs() -> List[Dict[str, Any]]:
 
 
 def get_squads_for_subscription(subscription_type: str) -> List[Dict[str, Any]]:
-    """Получить сквады для типа подписки"""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -1170,27 +813,22 @@ def get_squads_for_subscription(subscription_type: str) -> List[Dict[str, Any]]:
 
 
 def get_best_squad_for_subscription(subscription_type: str) -> Optional[Dict[str, Any]]:
-    """Выбрать лучший сквад (балансировка)"""
     squads = get_squads_for_subscription(subscription_type)
     if not squads:
         return None
-    
-    available_squads = [s for s in squads if s['max_users'] == 0 or s['current_users'] < s['max_users']]
-    if not available_squads:
-        available_squads = squads
-    
-    return min(available_squads, key=lambda s: s['current_users'])
+    available = [s for s in squads if s['max_users'] == 0 or s['current_users'] < s['max_users']]
+    if not available:
+        available = squads
+    return min(available, key=lambda s: s['current_users'])
 
 
 def update_squad_user_count(squad_uuid: str, delta: int = 1) -> bool:
-    """Обновить счётчик пользователей в скваде"""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("""
             UPDATE squad_configs SET current_users = MAX(0, current_users + ?),
-                                    updated_at = CURRENT_TIMESTAMP
-            WHERE squad_uuid = ?
+                                    updated_at = CURRENT_TIMESTAMP WHERE squad_uuid = ?
         """, (delta, squad_uuid))
         conn.commit()
         return cursor.rowcount > 0
@@ -1200,7 +838,6 @@ def update_squad_user_count(squad_uuid: str, delta: int = 1) -> bool:
 
 def upsert_squad_config(squad_uuid: str, squad_name: str, squad_type: str,
                         max_users: int = 0, priority: int = 0) -> bool:
-    """Создать или обновить конфигурацию сквада"""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -1208,56 +845,41 @@ def upsert_squad_config(squad_uuid: str, squad_name: str, squad_type: str,
             INSERT INTO squad_configs (squad_uuid, squad_name, squad_type, max_users, priority)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(squad_uuid) DO UPDATE SET
-                squad_name = excluded.squad_name,
-                squad_type = excluded.squad_type,
-                max_users = excluded.max_users,
-                priority = excluded.priority,
+                squad_name = excluded.squad_name, squad_type = excluded.squad_type,
+                max_users = excluded.max_users, priority = excluded.priority,
                 updated_at = CURRENT_TIMESTAMP
         """, (squad_uuid, squad_name, squad_type, max_users, priority))
         conn.commit()
         return True
-    except Exception as e:
-        logger.error(f"Error upserting squad config: {e}")
+    except:
         return False
     finally:
         conn.close()
 
 
 def sync_squad_user_counts() -> None:
-    """Синхронизировать счётчики пользователей в сквадах"""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        # Считаем из обеих таблиц
         cursor.execute("""
-            SELECT squad_uuid, COUNT(*) as cnt FROM (
-                SELECT squad_uuid FROM devices WHERE squad_uuid IS NOT NULL AND status = 'Active'
-                UNION ALL
-                SELECT squad_uuid FROM vpn_keys WHERE squad_uuid IS NOT NULL AND status = 'Active'
-            ) GROUP BY squad_uuid
+            SELECT squad_uuid, COUNT(*) as cnt FROM vpn_keys 
+            WHERE squad_uuid IS NOT NULL AND status = 'Active' GROUP BY squad_uuid
         """)
         counts = {row['squad_uuid']: row['cnt'] for row in cursor.fetchall()}
         
         cursor.execute("SELECT squad_uuid FROM squad_configs")
         for row in cursor.fetchall():
-            uuid = row['squad_uuid']
-            count = counts.get(uuid, 0)
-            cursor.execute("""
-                UPDATE squad_configs SET current_users = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE squad_uuid = ?
-            """, (count, uuid))
-        
+            cursor.execute("UPDATE squad_configs SET current_users = ?, updated_at = CURRENT_TIMESTAMP WHERE squad_uuid = ?",
+                          (counts.get(row['squad_uuid'], 0), row['squad_uuid']))
         conn.commit()
-        logger.info("Squad user counts synchronized")
     except Exception as e:
-        logger.error(f"Error syncing squad user counts: {e}")
+        logger.error(f"Sync squad counts error: {e}")
         conn.rollback()
     finally:
         conn.close()
 
 
 def get_subscription_squad_mapping() -> Dict[str, List[str]]:
-    """Получить маппинг подписок на сквады"""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -1272,41 +894,34 @@ def get_subscription_squad_mapping() -> Dict[str, List[str]]:
 
 
 def set_subscription_squads(subscription_type: str, squad_uuids: List[str]) -> bool:
-    """Установить сквады для типа подписки"""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("DELETE FROM subscription_squad_mapping WHERE subscription_type = ?", (subscription_type,))
-        for squad_uuid in squad_uuids:
-            cursor.execute("""
-                INSERT INTO subscription_squad_mapping (subscription_type, squad_uuid)
-                VALUES (?, ?)
-            """, (subscription_type, squad_uuid))
+        for uuid in squad_uuids:
+            cursor.execute("INSERT INTO subscription_squad_mapping (subscription_type, squad_uuid) VALUES (?, ?)",
+                          (subscription_type, uuid))
         conn.commit()
         return True
-    except Exception as e:
-        logger.error(f"Error setting subscription squads: {e}")
+    except:
         conn.rollback()
         return False
     finally:
         conn.close()
 
 
-# ========== АВТОРИЗАЦИЯ ПАНЕЛИ ==========
+# ===== АВТОРИЗАЦИЯ ПАНЕЛИ =====
 
 def create_panel_admin(username: str, password: str) -> Optional[int]:
-    """Создать администратора панели"""
     import secrets
-    
     salt = secrets.token_hex(16)
     password_hash = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
-    full_hash = f"{salt}:{password_hash}"
     
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("INSERT INTO panel_admins (username, password_hash) VALUES (?, ?)",
-                      (username, full_hash))
+                      (username, f"{salt}:{password_hash}"))
         conn.commit()
         return cursor.lastrowid
     except sqlite3.IntegrityError:
@@ -1316,60 +931,47 @@ def create_panel_admin(username: str, password: str) -> Optional[int]:
 
 
 def verify_panel_admin(username: str, password: str) -> Optional[Dict[str, Any]]:
-    """Проверить логин/пароль администратора"""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("""
-            SELECT id, username, password_hash, is_active FROM panel_admins
-            WHERE username = ? AND is_active = 1
-        """, (username,))
-        
+        cursor.execute("SELECT id, username, password_hash, is_active FROM panel_admins WHERE username = ? AND is_active = 1",
+                      (username,))
         row = cursor.fetchone()
         if not row:
             return None
         
-        salt, expected_hash = row['password_hash'].split(':', 1)
-        computed_hash = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
-        
-        if computed_hash != expected_hash:
+        salt, expected = row['password_hash'].split(':', 1)
+        computed = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+        if computed != expected:
             return None
         
-        cursor.execute("UPDATE panel_admins SET last_login = CURRENT_TIMESTAMP WHERE id = ?",
-                      (row['id'],))
+        cursor.execute("UPDATE panel_admins SET last_login = CURRENT_TIMESTAMP WHERE id = ?", (row['id'],))
         conn.commit()
-        
         return {'id': row['id'], 'username': row['username']}
     finally:
         conn.close()
 
 
 def create_panel_session(admin_id: int) -> Optional[str]:
-    """Создать сессию для администратора"""
     import secrets
-    
-    session_token = secrets.token_urlsafe(32)
-    expires_at = datetime.now() + timedelta(days=7)
+    token = secrets.token_urlsafe(32)
+    expires = datetime.now() + timedelta(days=7)
     
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("DELETE FROM panel_sessions WHERE admin_id = ?", (admin_id,))
-        cursor.execute("""
-            INSERT INTO panel_sessions (admin_id, session_token, expires_at)
-            VALUES (?, ?, ?)
-        """, (admin_id, session_token, expires_at.isoformat()))
+        cursor.execute("INSERT INTO panel_sessions (admin_id, session_token, expires_at) VALUES (?, ?, ?)",
+                      (admin_id, token, expires.isoformat()))
         conn.commit()
-        return session_token
-    except Exception as e:
-        logger.error(f"Error creating panel session: {e}")
+        return token
+    except:
         return None
     finally:
         conn.close()
 
 
 def verify_panel_session(session_token: str) -> Optional[Dict[str, Any]]:
-    """Проверить сессию панели"""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -1385,7 +987,6 @@ def verify_panel_session(session_token: str) -> Optional[Dict[str, Any]]:
 
 
 def delete_panel_session(session_token: str) -> bool:
-    """Удалить сессию панели"""
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -1397,44 +998,35 @@ def delete_panel_session(session_token: str) -> bool:
 
 
 def get_or_create_default_admin() -> Dict[str, str]:
-    """Получить или создать дефолтного администратора"""
     import secrets
-    
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("SELECT id, username FROM panel_admins WHERE is_active = 1 LIMIT 1")
         row = cursor.fetchone()
-        
         if row:
             return {'username': row['username'], 'password': None, 'exists': True}
         
         username = 'admin'
         password = secrets.token_urlsafe(12)
-        
         admin_id = create_panel_admin(username, password)
         if admin_id:
             return {'username': username, 'password': password, 'exists': False}
-        
         return {'username': None, 'password': None, 'exists': False}
     finally:
         conn.close()
 
 
 def update_admin_password(admin_id: int, new_password: str) -> bool:
-    """Изменить пароль администратора"""
     import secrets
-    
     salt = secrets.token_hex(16)
     password_hash = hashlib.sha256(f"{salt}:{new_password}".encode()).hexdigest()
-    full_hash = f"{salt}:{password_hash}"
     
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("""
-            UPDATE panel_admins SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-        """, (full_hash, admin_id))
+        cursor.execute("UPDATE panel_admins SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                      (f"{salt}:{password_hash}", admin_id))
         conn.commit()
         return cursor.rowcount > 0
     finally:
