@@ -1438,12 +1438,6 @@ export default function App() {
               </button>
             </div>
             
-            {/* Подсказка про глушилки */}
-            <div className="flex items-center justify-center gap-2 px-3 py-2 bg-gradient-to-r from-orange-500/10 to-pink-500/10 rounded-xl border border-orange-500/20">
-              <Sparkles className="text-orange-400 shrink-0" size={14} />
-              <span className="text-orange-300 text-xs font-medium">Обход работает даже при глушилках!</span>
-            </div>
-            
             {!isTrialUsed && (
                 <div className="text-center">
                     <span className="text-xs text-blue-300 font-medium bg-blue-500/10 px-3 py-1 rounded-full border border-blue-500/20">
@@ -2979,3 +2973,4 @@ export default function App() {
     </div>
   );
 }
+
