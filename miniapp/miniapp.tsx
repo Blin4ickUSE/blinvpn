@@ -1606,6 +1606,8 @@ export default function App() {
                 }`}
                 >
                 VPN
+                <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                WiFi
                 </button>
                 <button 
                 onClick={() => setWizardType('whitelist')} 
@@ -1613,9 +1615,9 @@ export default function App() {
                     wizardType === 'whitelist' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-400 hover:text-white'
                 }`}
                 >
-                Обход
+                Обход белых списков
                 <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                    NEW
+                    Мобильный
                 </span>
                 </button>
             </div>
