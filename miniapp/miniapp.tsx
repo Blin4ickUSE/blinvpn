@@ -488,7 +488,7 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const Button: React.FC<ButtonProps> = ({ children, onClick, variant = 'primary', className = '', disabled = false }) => {
-  const baseStyle = "w-full py-3.5 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50 disabled:active:scale-100 disabled:cursor-not-allowed";
+  const baseStyle = "w-full py-3.5 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 active:scale-[0.97] disabled:opacity-50 disabled:active:scale-100 disabled:cursor-not-allowed ripple";
   const variants = {
     primary: "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/40",
     secondary: "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700",
@@ -1582,17 +1582,56 @@ export default function App() {
       )}
 
       {wizardStep === 2 && (
-        <div className="flex-1 flex flex-col">
-            <div className="space-y-3">
-                <p className="text-slate-400 text-sm mb-2">Выберите период защиты для <b>{PLATFORMS.find(p => p.id === wizardPlatform)?.name}</b>:</p>
-                    {(vpnPlans || VPN_PLANS_DEFAULT).filter(plan => !plan.isTrial || !isTrialUsed).map(plan => (
+        <div className="flex-1 flex flex-col animate-fade-in">
+            {/* Подсказка о новом тарифе */}
+            <div className="bg-gradient-to-r from-orange-500/20 to-pink-500/20 border border-orange-500/30 rounded-2xl p-4 mb-5 animate-slide-down">
+                <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-orange-500 flex items-center justify-center shrink-0">
+                        <Zap size={20} className="text-white" />
+                    </div>
+                    <div className="flex-1">
+                        <div className="font-bold text-white text-sm mb-1">Новинка: Обход белых списков</div>
+                        <div className="text-orange-200/80 text-xs leading-relaxed">
+                            Работает даже при «Беспилотной опасности» и других блокировках. Для мобильных операторов.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="bg-slate-800 p-1 rounded-xl flex gap-1 mb-6">
+                <button 
+                onClick={() => setWizardType('vpn')} 
+                className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${
+                    wizardType === 'vpn' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                }`}
+                >
+                VPN
+                </button>
+                <button 
+                onClick={() => setWizardType('whitelist')} 
+                className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all relative ${
+                    wizardType === 'whitelist' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                }`}
+                >
+                Обход
+                <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                    NEW
+                </span>
+                </button>
+            </div>
+
+            {wizardType === 'vpn' ? (
+                <div className="space-y-3">
+                    <p className="text-slate-400 text-sm mb-2">Выберите период защиты для <b>{PLATFORMS.find(p => p.id === wizardPlatform)?.name}</b>:</p>
+                    {(vpnPlans || VPN_PLANS_DEFAULT).filter(plan => !plan.isTrial || !isTrialUsed).map((plan, idx) => (
                         <div 
                             key={plan.id}
                             onClick={() => { setWizardPlan(plan); setWizardStep(3); }}
-                            className={`relative p-4 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-center ${
+                            className={`relative p-4 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-center card-hover animate-slide-up ${
                                 plan.isTrial ? 'border-purple-500 bg-purple-900/20' : 
                                 (plan.highlight ? 'border-amber-500/50 bg-gradient-to-r from-amber-900/20 to-transparent' : 'border-slate-800 bg-slate-800/50 hover:border-slate-600')
                             }`}
+                            style={{ animationDelay: `${idx * 0.05}s` }}
                         >
                             <div>
                                 <div className={`font-bold text-lg ${plan.highlight ? 'text-amber-400 flex items-center gap-2' : 'text-white'}`}>
@@ -1608,54 +1647,101 @@ export default function App() {
                         </div>
                     ))}
                 </div>
-            </div>
+            ) : (
+                <div className="flex-1 flex flex-col animate-fade-in">
+                    <p className="text-slate-400 text-sm mb-4">Работает при «Беспилотной опасности» и блокировках:</p>
+                    
+                    {/* Карточка тарифа */}
+                    <div 
+                        onClick={() => setWizardStep(3)}
+                        className="relative p-6 rounded-2xl border-2 border-blue-500 bg-blue-900/20 mb-6 cursor-pointer hover:bg-blue-900/30 transition-all card-hover animate-scale-in"
+                    >
+                        <div className="absolute -top-3 left-4 bg-blue-600 text-white text-xs font-bold px-3 py-1 rounded-full">
+                            РЕКОМЕНДУЕМ
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <div>
+                                <div className="text-xl font-bold text-white mb-1">1 месяц</div>
+                                <div className="text-slate-400 text-sm">{WHITELIST_GB} ГБ трафика</div>
+                            </div>
+                            <div className="text-right">
+                                <div className="text-3xl font-bold text-white">{WHITELIST_PRICE} ₽</div>
+                                <div className="text-slate-500 text-xs">≈ {Math.round(WHITELIST_PRICE / WHITELIST_GB * 10) / 10} ₽/ГБ</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Что включено */}
+                    <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4 space-y-3 animate-slide-up" style={{ animationDelay: '0.1s' }}>
+                        <div className="flex items-center gap-3">
+                            <CheckCircle className="text-green-400 shrink-0" size={18} />
+                            <span className="text-slate-300 text-sm">{WHITELIST_GB} ГБ высокоскоростного трафика</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <CheckCircle className="text-green-400 shrink-0" size={18} />
+                            <span className="text-slate-300 text-sm">Работает при «Беспилотной опасности»</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <CheckCircle className="text-green-400 shrink-0" size={18} />
+                            <span className="text-slate-300 text-sm">Работает с безлимитными тарифами</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <Zap className="text-blue-400 shrink-0" size={18} />
+                            <span className="text-slate-300 text-sm">Автоматическое продление</span>
+                        </div>
+                    </div>
+
+                    <Button onClick={() => setWizardStep(3)}>Подключить за {WHITELIST_PRICE} ₽</Button>
+                </div>
+            )}
+        </div>
       )}
 
       {wizardStep === 3 && (
-        <div className="flex-1 flex flex-col">
-            <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 mb-6 text-center">
+        <div className="flex-1 flex flex-col animate-fade-in">
+            <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 mb-6 text-center animate-scale-in">
                 <div className="text-slate-400 mb-2">Вы подключаете</div>
                 <div className="text-2xl font-bold text-white mb-6">
-                    {wizardPlan?.duration || 'VPN'}
+                    {wizardType === 'vpn' ? wizardPlan?.duration : `Обход белых списков (${WHITELIST_GB} ГБ)`}
                 </div>
                 
                 <div className="border-t border-slate-700 pt-4 flex justify-between items-center">
                     <span className="text-slate-400">Стоимость:</span>
                     <span className="text-xl font-bold text-white">
-                        {wizardPlan?.price || 0} ₽
+                        {wizardType === 'vpn' ? wizardPlan?.price : WHITELIST_PRICE} ₽
                     </span>
                 </div>
             </div>
 
-            <div className="bg-yellow-500/10 border border-yellow-500/20 p-4 rounded-xl mb-6 flex gap-3 items-start">
+            <div className="bg-yellow-500/10 border border-yellow-500/20 p-4 rounded-xl mb-6 flex gap-3 items-start animate-slide-up" style={{ animationDelay: '0.1s' }}>
                 <AlertTriangle className="text-yellow-500 shrink-0 mt-0.5" size={18} />
                 <div className="text-yellow-400 text-xs leading-relaxed">
                     <strong>Важно:</strong> 1 подписка может использоваться только на 1 устройстве. При попытке использовать на нескольких устройствах одновременно подписка будет заблокирована.
                 </div>
             </div>
 
-            <div className="mt-auto">
+            <div className="mt-auto animate-slide-up" style={{ animationDelay: '0.15s' }}>
                 <div className="flex justify-between items-center mb-4 text-sm">
                     <span className="text-slate-400">Ваш баланс:</span>
-                    <span className={`${balance < (wizardPlan?.price || 0) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
+                    <span className={`${balance < (wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
                 </div>
 
-                {balance >= (wizardPlan?.price || 0) ? (
-                    <Button onClick={wizardActivate} variant={wizardPlan?.isTrial ? 'trial' : 'primary'}>
-                        {wizardPlan?.isTrial ? 'Активировать бесплатно' : 'Оплатить и подключить'}
+                {balance >= (wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE) ? (
+                    <Button onClick={wizardActivate} variant={wizardType === 'vpn' && wizardPlan?.isTrial ? 'trial' : 'primary'}>
+                        {wizardType === 'vpn' && wizardPlan?.isTrial ? 'Активировать бесплатно' : 'Оплатить и подключить'}
                     </Button>
                 ) : (
                     <Button onClick={() => {
-                        const price = wizardPlan?.price || 0;
+                        const price = wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE;
                         setPendingAction({
                             type: 'wizard',
-                            payload: { wizardType: 'vpn', wizardPlan, useAutoPay, selectedPaymentMethodId, price, name: `VPN (${wizardPlan?.duration})` }
+                            payload: { wizardType, wizardPlan, whitelistGB: WHITELIST_GB, useAutoPay, selectedPaymentMethodId, price, name: wizardType === 'vpn' ? `VPN (${wizardPlan?.duration})` : `Whitelist (${WHITELIST_GB} ГБ)` }
                         });
                         setTopupAmount(price - balance);
                         setTopupStep(2);
                         setView('topup');
                     }}>
-                        Пополнить на {(wizardPlan?.price || 0) - balance} ₽
+                        Пополнить на {(wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE) - balance} ₽
                     </Button>
                 )}
             </div>
@@ -1663,13 +1749,13 @@ export default function App() {
       )}
 
       {wizardStep === 4 && (
-        <div className="flex-1 flex flex-col h-full">
+        <div className="flex-1 flex flex-col h-full animate-fade-in">
             <div className="text-center mb-6">
-                <div className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center text-green-500 mx-auto mb-4">
+                <div className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center text-green-500 mx-auto mb-4 animate-scale-in">
                     <CheckCircle size={32} />
                 </div>
-                <h2 className="text-2xl font-bold text-white">Успешно!</h2>
-                <p className="text-slate-400">Подписка активирована. Настройте ваше устройство:</p>
+                <h2 className="text-2xl font-bold text-white animate-slide-up">Успешно!</h2>
+                <p className="text-slate-400 animate-slide-up" style={{ animationDelay: '0.1s' }}>Подписка активирована. Настройте ваше устройство:</p>
             </div>
 
             <div className="flex-1 overflow-y-auto bg-slate-800/50 rounded-2xl p-4 border border-slate-700">
