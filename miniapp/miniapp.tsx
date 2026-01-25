@@ -500,14 +500,14 @@ const Button: React.FC<ButtonProps> = ({ children, onClick, variant = 'primary',
   };
 
   return (
-    <button onClick={onClick} className={`${baseStyle} ${variants[variant]} ${className}`} disabled={disabled}>
+    <button onClick={onClick} className={`${baseStyle} ${variants[variant]} ripple ${className}`} disabled={disabled}>
       {children}
     </button>
   );
 };
 
 const Card: React.FC<{ children: React.ReactNode, className?: string, onClick?: () => void }> = ({ children, className = '', onClick }) => (
-  <div onClick={onClick} className={`bg-slate-900/80 backdrop-blur-md border border-slate-800 rounded-2xl p-5 ${className}`}>
+  <div onClick={onClick} className={`bg-slate-900/80 backdrop-blur-md border border-slate-800 rounded-2xl p-5 card-hover ${className}`}>
     {children}
   </div>
 );
@@ -665,7 +665,11 @@ export default function App() {
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<string | null>(null);
 
   // Buy Device State (Legacy for whitelist tab)
-  const [buyTab, setBuyTab] = useState<'vpn' | 'whitelist'>('vpn'); 
+  const [buyTab, setBuyTab] = useState<'vpn' | 'whitelist'>('vpn');
+  
+  // Extend subscription state - для продления существующего ключа
+  const [extendingDevice, setExtendingDevice] = useState<Device | null>(null);
+  const [extendPlan, setExtendPlan] = useState<Plan | null>(null); 
   
   // Instructions State
   const [activePlatform, setActivePlatform] = useState<string>('android');
@@ -1267,6 +1271,57 @@ export default function App() {
     }
   }
 
+  // Функция продления существующей подписки
+  const extendSubscription = async (device: Device, plan: Plan) => {
+    const price = plan.price;
+    const currentUserId = await ensureUserId();
+    
+    if (!currentUserId) {
+      alert('Не удалось загрузить данные пользователя. Попробуйте перезагрузить приложение.');
+      return;
+    }
+    
+    if (balance < price) {
+      // Недостаточно средств - переходим к пополнению
+      if(window.confirm(`Недостаточно средств. Стоимость: ${price} ₽. Ваш баланс: ${balance} ₽. Пополнить баланс?`)) {
+        setPendingAction({
+          type: 'extend',
+          payload: { device, plan, price, name: `Продление VPN (${plan.duration})` }
+        });
+        setTopupAmount(price - balance);
+        setTopupStep(2);
+        setView('topup');
+      }
+      return;
+    }
+    
+    try {
+      const res = await miniApiFetch('/subscription/extend', {
+        method: 'POST',
+        body: JSON.stringify({
+          user_id: currentUserId,
+          key_id: device.id,
+          days: plan.days,
+          price: price,
+        }),
+      });
+      
+      if (res && res.success) {
+        addHistoryItem('extend', `Продление подписки (${plan.duration})`, -price);
+        await refreshAll();
+        setExtendingDevice(null);
+        setExtendPlan(null);
+        setView('devices');
+        alert('Подписка успешно продлена!');
+      } else {
+        alert(res?.error || 'Не удалось продлить подписку');
+      }
+    } catch (e) {
+      console.error('Failed to extend subscription', e);
+      alert('Ошибка продления подписки');
+    }
+  };
+
   const wizardActivate = async () => {
     let price = 0;
     let name = '';
@@ -1528,46 +1583,8 @@ export default function App() {
 
       {wizardStep === 2 && (
         <div className="flex-1 flex flex-col">
-            {/* Подсказка о новом тарифе */}
-            <div className="bg-gradient-to-r from-orange-500/20 to-pink-500/20 border border-orange-500/30 rounded-2xl p-4 mb-5">
-                <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-orange-500 flex items-center justify-center shrink-0">
-                        <Zap size={20} className="text-white" />
-                    </div>
-                    <div className="flex-1">
-                        <div className="font-bold text-white text-sm mb-1">Новинка: Обход белых списков</div>
-                        <div className="text-orange-200/80 text-xs leading-relaxed">
-                            Работает даже при «Беспилотной опасности» и других блокировках. Для мобильных операторов.
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div className="bg-slate-800 p-1 rounded-xl flex gap-1 mb-6">
-                <button 
-                onClick={() => setWizardType('vpn')} 
-                className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${
-                    wizardType === 'vpn' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-                }`}
-                >
-                VPN
-                </button>
-                <button 
-                onClick={() => setWizardType('whitelist')} 
-                className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all relative ${
-                    wizardType === 'whitelist' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-400 hover:text-white'
-                }`}
-                >
-                Обход белых списков
-                <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                    Мобильный интернет
-                </span>
-                </button>
-            </div>
-
-            {wizardType === 'vpn' ? (
-                <div className="space-y-3">
-                    <p className="text-slate-400 text-sm mb-2">Выберите период защиты для <b>{PLATFORMS.find(p => p.id === wizardPlatform)?.name}</b>:</p>
+            <div className="space-y-3">
+                <p className="text-slate-400 text-sm mb-2">Выберите период защиты для <b>{PLATFORMS.find(p => p.id === wizardPlatform)?.name}</b>:</p>
                     {(vpnPlans || VPN_PLANS_DEFAULT).filter(plan => !plan.isTrial || !isTrialUsed).map(plan => (
                         <div 
                             key={plan.id}
@@ -1591,69 +1608,7 @@ export default function App() {
                         </div>
                     ))}
                 </div>
-            ) : (
-                <div className="flex-1 flex flex-col">
-                    <p className="text-slate-400 text-sm mb-4">Работает при «Беспилотной опасности» и других глушилок:</p>
-                    
-                    {/* Карточка тарифа */}
-                    <div 
-                        onClick={() => setWizardStep(3)}
-                        className="relative p-6 rounded-2xl border-2 border-blue-500 bg-blue-900/20 mb-6 cursor-pointer hover:bg-blue-900/30 transition-all"
-                    >
-                        <div className="absolute -top-3 left-4 bg-blue-600 text-white text-xs font-bold px-3 py-1 rounded-full">
-                            РЕКОМЕНДУЕМ
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <div>
-                                <div className="text-xl font-bold text-white mb-1">1 месяц</div>
-                                <div className="text-slate-400 text-sm">{WHITELIST_GB} ГБ трафика</div>
-                            </div>
-                            <div className="text-right">
-                                <div className="text-3xl font-bold text-white">{WHITELIST_PRICE} ₽</div>
-                                <div className="text-slate-500 text-xs">≈ {Math.round(WHITELIST_PRICE / WHITELIST_GB * 10) / 10} ₽/ГБ</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Что включено */}
-                    <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4 space-y-3">
-                        <div className="flex items-center gap-3">
-                            <CheckCircle className="text-green-400 shrink-0" size={18} />
-                            <span className="text-slate-300 text-sm">{WHITELIST_GB} ГБ высокоскоростного трафика</span>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <CheckCircle className="text-green-400 shrink-0" size={18} />
-                            <span className="text-slate-300 text-sm">Работает при «Беспилотной опасности»</span>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <CheckCircle className="text-green-400 shrink-0" size={18} />
-                            <span className="text-slate-300 text-sm">Работает с безлимитными тарифами</span>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <Zap className="text-blue-400 shrink-0" size={18} />
-                            <span className="text-slate-300 text-sm">Автоматическое продление</span>
-                        </div>
-                    </div>
-
-                    {/* Новинка - работает при глушилках */}
-                    <div className="bg-gradient-to-r from-pink-500/10 to-orange-500/10 border border-pink-500/30 p-3 rounded-xl mb-4 flex gap-3 items-start">
-                        <Zap className="text-pink-400 shrink-0 mt-0.5" size={18} />
-                        <div className="text-pink-300 text-xs leading-relaxed">
-                            <b className="text-pink-400">НОВИНКА!</b> Теперь работает даже при глушилках интернета. Оставайтесь на связи в любой ситуации!
-                        </div>
-                    </div>
-
-                    <div className="bg-yellow-500/10 border border-yellow-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
-                        <AlertTriangle className="text-yellow-500 shrink-0 mt-0.5" size={18} />
-                        <div className="text-yellow-400 text-xs leading-relaxed">
-                            <b>Внимание:</b> Функция является экспериментальной и может быть нестабильной в некоторых регионах.
-                        </div>
-                    </div>
-
-                    <Button onClick={() => setWizardStep(3)}>Подключить за {WHITELIST_PRICE} ₽</Button>
-                </div>
-            )}
-        </div>
+            </div>
       )}
 
       {wizardStep === 3 && (
@@ -1661,13 +1616,13 @@ export default function App() {
             <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 mb-6 text-center">
                 <div className="text-slate-400 mb-2">Вы подключаете</div>
                 <div className="text-2xl font-bold text-white mb-6">
-                    {wizardType === 'vpn' ? wizardPlan?.duration : `Обход белых списков (${WHITELIST_GB} ГБ)`}
+                    {wizardPlan?.duration || 'VPN'}
                 </div>
                 
                 <div className="border-t border-slate-700 pt-4 flex justify-between items-center">
                     <span className="text-slate-400">Стоимость:</span>
                     <span className="text-xl font-bold text-white">
-                        {wizardType === 'vpn' ? wizardPlan?.price : WHITELIST_PRICE} ₽
+                        {wizardPlan?.price || 0} ₽
                     </span>
                 </div>
             </div>
@@ -1682,25 +1637,25 @@ export default function App() {
             <div className="mt-auto">
                 <div className="flex justify-between items-center mb-4 text-sm">
                     <span className="text-slate-400">Ваш баланс:</span>
-                    <span className={`${balance < (wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
+                    <span className={`${balance < (wizardPlan?.price || 0) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
                 </div>
 
-                {balance >= (wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE) ? (
-                    <Button onClick={wizardActivate} variant={wizardType === 'vpn' && wizardPlan?.isTrial ? 'trial' : 'primary'}>
-                        {wizardType === 'vpn' && wizardPlan?.isTrial ? 'Активировать бесплатно' : 'Оплатить и подключить'}
+                {balance >= (wizardPlan?.price || 0) ? (
+                    <Button onClick={wizardActivate} variant={wizardPlan?.isTrial ? 'trial' : 'primary'}>
+                        {wizardPlan?.isTrial ? 'Активировать бесплатно' : 'Оплатить и подключить'}
                     </Button>
                 ) : (
                     <Button onClick={() => {
-                        const price = wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE;
+                        const price = wizardPlan?.price || 0;
                         setPendingAction({
                             type: 'wizard',
-                            payload: { wizardType, wizardPlan, whitelistGB: WHITELIST_GB, useAutoPay, selectedPaymentMethodId, price, name: wizardType === 'vpn' ? `VPN (${wizardPlan?.duration})` : `Whitelist (${WHITELIST_GB} ГБ)` }
+                            payload: { wizardType: 'vpn', wizardPlan, useAutoPay, selectedPaymentMethodId, price, name: `VPN (${wizardPlan?.duration})` }
                         });
                         setTopupAmount(price - balance);
-                        setTopupStep(2); // Сразу к способу оплаты
+                        setTopupStep(2);
                         setView('topup');
                     }}>
-                        Пополнить на {(wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE) - balance} ₽
+                        Пополнить на {(wizardPlan?.price || 0) - balance} ₽
                     </Button>
                 )}
             </div>
@@ -1789,16 +1744,16 @@ export default function App() {
           const isLowTime = !isExpired && !isForever && (device.days_left !== undefined && device.days_left <= 3);
           
           return (
-          <div key={device.id} className={`rounded-xl p-4 border ${isExpired ? 'bg-red-900/20 border-red-500/50' : 'bg-slate-800 border-slate-700'}`}>
+          <div key={device.id} className={`rounded-xl p-4 border card-hover animate-slide-up ${isExpired ? 'bg-red-900/20 border-red-500/50' : 'bg-slate-800 border-slate-700'}`} style={{ animationDelay: `${devices.indexOf(device) * 0.05}s` }}>
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-4">
                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isExpired ? 'bg-red-900/30 text-red-400' : 'bg-slate-700 text-slate-300'}`}>
                   {device.type === 'ios' || device.type === 'android' ? <Smartphone size={20} /> : <Monitor size={20} />}
                 </div>
                 <div>
-                  <div className="font-bold text-white">{device.name}</div>
-                  <div className="text-xs text-blue-400 font-mono">
-                    VPN: #{device.short_uuid || device.key_uuid?.slice(0, 8) || 'N/A'}
+                  <div className="font-bold text-white">
+                    {device.is_trial ? 'Пробная подписка' : 
+                     device.plan_type === 'whitelist' ? 'Подписка LTE' : 'Подписка VPN'} | #{device.id}
                   </div>
                   {timeLeftText ? (
                     <div className={`text-xs font-medium ${isExpired ? 'text-red-400' : isLowTime ? 'text-orange-400' : isForever ? 'text-yellow-400' : 'text-slate-400'}`}>
@@ -1826,7 +1781,11 @@ export default function App() {
             </div>
             {isExpired ? (
               <button 
-                onClick={() => { setActivePlatform(device.type); setWizardStep(1); setView('wizard'); }}
+                onClick={() => { 
+                  setExtendingDevice(device);
+                  setExtendPlan(null);
+                  setView('extend_subscription');
+                }}
                 className="w-full bg-red-600 hover:bg-red-500 py-2 rounded-lg text-sm text-white font-medium flex items-center justify-center gap-2 transition-colors"
               >
                 <Zap size={16} /> Продлить подписку
@@ -1852,6 +1811,76 @@ export default function App() {
       </div>
     </div>
   );
+
+  // View для продления подписки - выбор тарифа
+  const ExtendSubscriptionView = () => {
+    const plansForExtend = vpnPlans.filter(p => !p.isTrial); // Без триала
+    
+    return (
+      <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
+        <Header 
+          title="Продление подписки" 
+          onBack={() => {
+            setExtendingDevice(null);
+            setExtendPlan(null);
+            setView('devices');
+          }} 
+        />
+        
+        {extendingDevice && (
+          <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4">
+            <div className="text-slate-400 text-sm mb-1">Продление ключа</div>
+            <div className="text-white font-medium">
+              {extendingDevice.plan_type === 'whitelist' ? 'Подписка LTE' : 
+               extendingDevice.is_trial ? 'Пробная подписка' : 'Подписка VPN'} | #{extendingDevice.id}
+            </div>
+          </div>
+        )}
+        
+        <div className="flex-1">
+          <div className="text-slate-400 text-sm mb-4">Выберите период продления:</div>
+          <div className="grid gap-3">
+            {plansForExtend.map(plan => (
+              <button
+                key={plan.id}
+                onClick={() => setExtendPlan(plan)}
+                className={`p-4 rounded-xl text-left transition-all border ${
+                  extendPlan?.id === plan.id
+                    ? 'bg-blue-600/20 border-blue-500 ring-1 ring-blue-500'
+                    : 'bg-slate-800 border-slate-700 hover:bg-slate-750'
+                }`}
+              >
+                <div className="flex justify-between items-center">
+                  <div>
+                    <div className={`font-bold ${extendPlan?.id === plan.id ? 'text-blue-400' : 'text-white'}`}>
+                      {plan.duration}
+                    </div>
+                    <div className="text-slate-500 text-sm">{plan.days} дней</div>
+                  </div>
+                  <div className={`text-lg font-bold ${extendPlan?.id === plan.id ? 'text-blue-400' : 'text-slate-300'}`}>
+                    {plan.price} ₽
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+        
+        <div className="mt-6 mb-4">
+          <Button 
+            disabled={!extendPlan || !extendingDevice}
+            onClick={() => {
+              if (extendPlan && extendingDevice) {
+                extendSubscription(extendingDevice, extendPlan);
+              }
+            }}
+          >
+            <Zap size={18} /> Продлить за {extendPlan?.price || 0} ₽
+          </Button>
+        </div>
+      </div>
+    );
+  };
 
   const TopUpView = () => (
     <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
@@ -2183,37 +2212,61 @@ export default function App() {
             // Проверяем, достаточно ли средств теперь
             if (newBalance >= payload.price) {
               try {
-                // Создаём подписку
                 const currentUserId = await ensureUserId();
                 if (currentUserId) {
-                  const res = await miniApiFetch('/subscription/create', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                      user_id: currentUserId,
-                      days: action.type === 'wizard' && payload.wizardType === 'vpn' ? payload.wizardPlan?.days : 30,
-                      type: action.type === 'wizard' ? payload.wizardType : 'whitelist',
-                      whitelist_gb: (action.type === 'legacy_whitelist' || payload.wizardType === 'whitelist') ? payload.whitelistGB : undefined,
-                      price: payload.price,
-                    }),
-                  });
-                  
-                  if (res && res.success) {
-                    addHistoryItem('buy_dev', `Подключение: ${payload.name}`, -payload.price);
-                    setPendingAction(null);
-                    setPaymentUrl(null);
-                    setActivePlatform(wizardPlatform);
-                    await refreshAll();
-                    setWizardStep(4);
-                    setView('wizard');
-                    return;
+                  // Если это продление существующей подписки
+                  if (action.type === 'extend' && payload.device && payload.plan) {
+                    const res = await miniApiFetch('/subscription/extend', {
+                      method: 'POST',
+                      body: JSON.stringify({
+                        user_id: currentUserId,
+                        key_id: payload.device.id,
+                        days: payload.plan.days,
+                        price: payload.price,
+                      }),
+                    });
+                    
+                    if (res && res.success) {
+                      addHistoryItem('extend', `Продление подписки (${payload.plan.duration})`, -payload.price);
+                      setPendingAction(null);
+                      setPaymentUrl(null);
+                      setExtendingDevice(null);
+                      setExtendPlan(null);
+                      await refreshAll();
+                      setView('devices');
+                      return;
+                    }
+                  } else {
+                    // Создаём новую подписку
+                    const res = await miniApiFetch('/subscription/create', {
+                      method: 'POST',
+                      body: JSON.stringify({
+                        user_id: currentUserId,
+                        days: action.type === 'wizard' && payload.wizardType === 'vpn' ? payload.wizardPlan?.days : 30,
+                        type: action.type === 'wizard' ? payload.wizardType : 'whitelist',
+                        whitelist_gb: (action.type === 'legacy_whitelist' || payload.wizardType === 'whitelist') ? payload.whitelistGB : undefined,
+                        price: payload.price,
+                      }),
+                    });
+                    
+                    if (res && res.success) {
+                      addHistoryItem('buy_dev', `Подключение: ${payload.name}`, -payload.price);
+                      setPendingAction(null);
+                      setPaymentUrl(null);
+                      setActivePlatform(wizardPlatform);
+                      await refreshAll();
+                      setWizardStep(4);
+                      setView('wizard');
+                      return;
+                    }
                   }
                 }
               } catch (e) {
-                console.error('Failed to create subscription after payment', e);
+                console.error('Failed to process pending action after payment', e);
               }
             }
             
-            // Если не удалось создать подписку - просто переходим к инструкциям
+            // Если не удалось выполнить действие - просто переходим к инструкциям
             setPendingAction(null);
             setPaymentUrl(null);
             setActivePlatform(wizardPlatform);
@@ -2684,6 +2737,7 @@ export default function App() {
         {view === 'wait_payment' && <PaymentWaitView />}
         {view === 'success_payment' && <PaymentSuccessView />}
         {view === 'devices' && <DevicesView />}
+        {view === 'extend_subscription' && <ExtendSubscriptionView />}
         {view === 'buy_device' && <BuyDeviceView />}
         {view === 'instruction_view' && <InstructionView />}
         {view === 'history' && <HistoryView />}
@@ -2978,4 +3032,3 @@ export default function App() {
     </div>
   );
 }
-
