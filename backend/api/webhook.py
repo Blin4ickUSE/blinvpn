@@ -309,8 +309,56 @@ def platega_webhook():
             else:
                 method_name = 'Platega'
             
-            # Обновляем баланс
-            database.update_user_balance(user_id, amount)
+            # Проверяем авто-скидки на пополнение
+            bonus_amount = 0
+            bonus_name = None
+            try:
+                conn = database.get_db_connection()
+                cursor = conn.cursor()
+                
+                # Проверяем скидки по сумме пополнения
+                cursor.execute("""
+                    SELECT * FROM auto_discounts 
+                    WHERE is_active = 1 AND condition_type = 'payment_amount'
+                    ORDER BY CAST(condition_value AS REAL) DESC
+                """)
+                discounts = cursor.fetchall()
+                
+                for discount in discounts:
+                    try:
+                        min_amount = float(discount['condition_value'])
+                        if amount >= min_amount:
+                            if discount['discount_type'] == 'percent':
+                                bonus_amount = round(amount * float(discount['discount_value']) / 100, 2)
+                            else:
+                                bonus_amount = float(discount['discount_value'])
+                            bonus_name = discount['name']
+                            break
+                    except (ValueError, TypeError):
+                        continue
+                
+                # Проверяем скидки по методу оплаты
+                if bonus_amount == 0:
+                    cursor.execute("""
+                        SELECT * FROM auto_discounts 
+                        WHERE is_active = 1 AND condition_type = 'payment_method'
+                          AND LOWER(condition_value) = LOWER(?)
+                    """, (method_name,))
+                    method_discount = cursor.fetchone()
+                    if method_discount:
+                        if method_discount['discount_type'] == 'percent':
+                            bonus_amount = round(amount * float(method_discount['discount_value']) / 100, 2)
+                        else:
+                            bonus_amount = float(method_discount['discount_value'])
+                        bonus_name = method_discount['name']
+                
+                conn.close()
+            except Exception as e:
+                logger.error(f"Error checking auto-discounts for Platega: {e}")
+            
+            # Обновляем баланс (с бонусом если есть)
+            total_amount = amount + bonus_amount
+            database.update_user_balance(user_id, total_amount)
             
             # Создаем транзакцию
             conn = database.get_db_connection()
@@ -318,17 +366,26 @@ def platega_webhook():
             cursor.execute("""
                 INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id)
                 VALUES (?, 'deposit', ?, 'Success', ?, 'Platega', ?)
-            """, (user_id, amount, method_name, transaction_id))
+            """, (user_id, total_amount, method_name, transaction_id))
+            
+            # Если был бонус, создаем отдельную транзакцию для него
+            if bonus_amount > 0:
+                cursor.execute("""
+                    INSERT INTO transactions (user_id, type, amount, status, description)
+                    VALUES (?, 'bonus', ?, 'Success', ?)
+                """, (user_id, bonus_amount, f"Бонус: {bonus_name}"))
+            
             conn.commit()
             conn.close()
             
             # Уведомление пользователю
             user = database.get_user_by_id(user_id)
             if user:
-                core.send_notification_to_user(
-                    user['telegram_id'], 
-                    f"✅ Баланс пополнен на {amount}₽ через Platega ({method_name})"
-                )
+                if bonus_amount > 0:
+                    msg = f"✅ Баланс пополнен на {amount}₽ + бонус {bonus_amount}₽ через Platega ({method_name})"
+                else:
+                    msg = f"✅ Баланс пополнен на {amount}₽ через Platega ({method_name})"
+                core.send_notification_to_user(user['telegram_id'], msg)
                 
                 # Уведомление администратору о пополнении
                 notify_admin_about_deposit(user, amount, method_name, 'Platega')
