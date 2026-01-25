@@ -456,6 +456,143 @@ async def subscription_notifications_task():
             await asyncio.sleep(60)
 
 
+async def auto_renewal_task():
+    """Фоновая задача для автоматического продления подписок за 60 минут до истечения"""
+    while True:
+        try:
+            await asyncio.sleep(300)  # Проверка каждые 5 минут
+            
+            conn = database.get_db_connection()
+            cursor = conn.cursor()
+            
+            from datetime import datetime, timedelta
+            now = datetime.now()
+            
+            # Находим подписки, истекающие через 55-65 минут (окно 10 минут)
+            check_window_start = now + timedelta(minutes=55)
+            check_window_end = now + timedelta(minutes=65)
+            
+            cursor.execute("""
+                SELECT vk.id, vk.key_uuid, vk.expiry_date, vk.plan_type, vk.traffic_limit,
+                       u.id as user_id, u.telegram_id, u.balance, u.username
+                FROM vpn_keys vk
+                JOIN users u ON vk.user_id = u.id
+                WHERE vk.status = 'Active'
+                  AND datetime(vk.expiry_date) BETWEEN ? AND ?
+            """, (check_window_start.isoformat(), check_window_end.isoformat()))
+            
+            expiring_keys = cursor.fetchall()
+            
+            for row in expiring_keys:
+                key_id = row['id']
+                key_uuid = row['key_uuid']
+                user_id = row['user_id']
+                telegram_id = row['telegram_id']
+                balance = float(row['balance'] or 0)
+                plan_type = row['plan_type'] or 'vpn'
+                
+                # Получаем минимальную цену продления (1 месяц VPN = 99₽)
+                renewal_price = 99  # Базовая цена за 1 месяц
+                renewal_days = 30
+                
+                # Проверяем, достаточно ли средств на балансе
+                if balance >= renewal_price:
+                    try:
+                        # Списываем баланс
+                        cursor.execute("BEGIN IMMEDIATE")
+                        cursor.execute("SELECT balance FROM users WHERE id = ?", (user_id,))
+                        current_balance = float(cursor.fetchone()['balance'] or 0)
+                        
+                        if current_balance >= renewal_price:
+                            # Списываем
+                            new_balance = current_balance - renewal_price
+                            cursor.execute("UPDATE users SET balance = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                         (new_balance, user_id))
+                            
+                            # Рассчитываем новую дату истечения
+                            current_expiry = datetime.fromisoformat(row['expiry_date'].replace('Z', '+00:00').replace('+00:00', ''))
+                            new_expiry = current_expiry + timedelta(days=renewal_days)
+                            
+                            # Обновляем ключ в Remnawave
+                            if key_uuid:
+                                try:
+                                    from backend.api import remnawave
+                                    remnawave.remnawave_api.update_user_sync(
+                                        uuid=key_uuid,
+                                        expire_at=new_expiry
+                                    )
+                                except Exception as e:
+                                    logger.error(f"Failed to update key {key_uuid} in Remnawave: {e}")
+                                    cursor.execute("ROLLBACK")
+                                    continue
+                            
+                            # Обновляем ключ в БД
+                            cursor.execute("""
+                                UPDATE vpn_keys SET expiry_date = ? WHERE id = ?
+                            """, (new_expiry.isoformat(), key_id))
+                            
+                            # Создаем транзакцию
+                            cursor.execute("""
+                                INSERT INTO transactions (user_id, type, amount, status, description, payment_method)
+                                VALUES (?, 'auto_renewal', ?, 'Success', 'Автоматическое продление подписки (30 дней)', 'Balance')
+                            """, (user_id, -renewal_price))
+                            
+                            conn.commit()
+                            
+                            # Уведомляем пользователя
+                            core.send_notification_to_user(
+                                telegram_id,
+                                f"✅ <b>Подписка автоматически продлена!</b>\n\n"
+                                f"💳 Списано с баланса: {renewal_price}₽\n"
+                                f"📅 Новая дата окончания: {new_expiry.strftime('%d.%m.%Y')}\n"
+                                f"💰 Остаток на балансе: {new_balance:.2f}₽\n\n"
+                                f"Если вы не хотите автопродления, уменьшите баланс до 0."
+                            )
+                            
+                            logger.info(f"Auto-renewed subscription for user {user_id} (key {key_id})")
+                        else:
+                            conn.rollback()
+                            
+                    except Exception as e:
+                        logger.error(f"Error auto-renewing subscription for key {key_id}: {e}")
+                        try:
+                            conn.rollback()
+                        except:
+                            pass
+                else:
+                    # Недостаточно средств - уведомляем пользователя (только один раз)
+                    # Проверяем, не отправляли ли уже уведомление
+                    cursor.execute("""
+                        SELECT COUNT(*) as cnt FROM transactions 
+                        WHERE user_id = ? AND type = 'auto_renewal_warning' 
+                        AND created_at > datetime('now', '-2 hours')
+                    """, (user_id,))
+                    
+                    if cursor.fetchone()['cnt'] == 0:
+                        core.send_notification_to_user(
+                            telegram_id,
+                            f"⚠️ <b>Подписка истекает через 1 час!</b>\n\n"
+                            f"Для автоматического продления на балансе должно быть минимум {renewal_price}₽.\n"
+                            f"💰 Ваш баланс: {balance:.2f}₽\n\n"
+                            f"Пополните баланс, чтобы не потерять доступ к VPN!"
+                        )
+                        
+                        # Записываем предупреждение чтобы не спамить
+                        cursor.execute("""
+                            INSERT INTO transactions (user_id, type, amount, status, description)
+                            VALUES (?, 'auto_renewal_warning', 0, 'Info', 'Уведомление о недостатке средств для автопродления')
+                        """, (user_id,))
+                        conn.commit()
+            
+            conn.close()
+            
+        except Exception as e:
+            logger.error(f"Error in auto_renewal_task: {e}")
+            import traceback
+            traceback.print_exc()
+            await asyncio.sleep(60)
+
+
 async def weekly_reminder_task():
     """Еженедельное напоминание для неактивных пользователей (в течение полугода)"""
     while True:
@@ -574,6 +711,7 @@ async def main():
     asyncio.create_task(auto_refund_expired_withdrawals())
     asyncio.create_task(subscription_notifications_task())
     asyncio.create_task(weekly_reminder_task())
+    asyncio.create_task(auto_renewal_task())  # Автопродление за 60 минут до истечения
     
     logger.info("Бот запущен...")
     await bot.delete_webhook(drop_pending_updates=True)
