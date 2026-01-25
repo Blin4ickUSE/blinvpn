@@ -386,12 +386,13 @@ def get_user_info():
             database.update_user_full_name(telegram_id, first_name)
             user = database.get_user_by_telegram_id(telegram_id)
     
-    # Проверка бана
-    ban_status = abuse_detected.check_user_ban_status(user['id'])
+    # Проверка бана (включая черный список)
+    ban_status = abuse_detected.check_user_ban_status(user['id'], telegram_id)
     if ban_status.get('banned'):
         return jsonify({
             'banned': True,
-            'reason': ban_status.get('reason', 'Account banned')
+            'reason': ban_status.get('reason', 'Аккаунт заблокирован'),
+            'blacklisted': ban_status.get('blacklisted', False)
         }), 403
     
     stats = core.get_referral_stats(user['id'])
@@ -1134,12 +1135,22 @@ def create_subscription():
 @app.route('/api/panel/users', methods=['GET'])
 @require_auth
 def get_users():
-    """Получить список пользователей"""
+    """Получить список пользователей с информацией о черном списке"""
     limit = request.args.get('limit', 100, type=int)
     offset = request.args.get('offset', 0, type=int)
     raw_users = database.get_all_users(limit, offset)
-
-    # Небольшой маппинг под фронтенд (оставляем столбцы как есть, чтобы панель могла сама адаптировать)
+    
+    # Получаем telegram_id всех пользователей из черного списка
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT telegram_id FROM blacklist")
+    blacklisted_ids = set(row['telegram_id'] for row in cursor.fetchall())
+    conn.close()
+    
+    # Добавляем статус черного списка к каждому пользователю
+    for user in raw_users:
+        user['in_blacklist'] = user.get('telegram_id') in blacklisted_ids
+    
     return jsonify(raw_users)
 
 @app.route('/api/panel/promocodes', methods=['GET'])
@@ -1709,7 +1720,7 @@ def get_user_subscriptions(user_id: int):
 @app.route('/api/panel/users/<int:user_id>/unban', methods=['POST'])
 @require_auth
 def unban_user(user_id: int):
-    """Разбанить пользователя"""
+    """Разбанить пользователя (снять is_banned и удалить из черного списка)"""
     conn = database.get_db_connection()
     cursor = conn.cursor()
     
@@ -1721,17 +1732,30 @@ def unban_user(user_id: int):
         if not user:
             return jsonify({'success': False, 'error': 'Пользователь не найден'}), 404
         
-        if not user['is_banned']:
+        telegram_id = user['telegram_id']
+        
+        # Проверяем, в черном списке ли пользователь
+        cursor.execute("SELECT 1 FROM blacklist WHERE telegram_id = ?", (telegram_id,))
+        in_blacklist = cursor.fetchone() is not None
+        
+        # Если не забанен И не в черном списке - ошибка
+        if not user['is_banned'] and not in_blacklist:
             return jsonify({'success': False, 'error': 'Пользователь не заблокирован'}), 400
         
-        # Разбаниваем пользователя
-        cursor.execute("UPDATE users SET is_banned = 0 WHERE id = ?", (user_id,))
+        # Разбаниваем пользователя (снимаем is_banned)
+        cursor.execute("UPDATE users SET is_banned = 0, ban_reason = NULL WHERE id = ?", (user_id,))
+        
+        # Удаляем из черного списка
+        if in_blacklist:
+            cursor.execute("DELETE FROM blacklist WHERE telegram_id = ?", (telegram_id,))
+            logger.info(f"User {user_id} (telegram_id={telegram_id}) removed from blacklist")
+        
         conn.commit()
         
         # Уведомляем пользователя
-        if user['telegram_id']:
+        if telegram_id:
             core.send_notification_to_user(
-                user['telegram_id'],
+                telegram_id,
                 "✅ Ваш аккаунт разблокирован! Вы снова можете пользоваться сервисом."
             )
         
@@ -1739,7 +1763,8 @@ def unban_user(user_id: int):
         
         return jsonify({
             'success': True,
-            'message': f'Пользователь @{user["username"] or user_id} разблокирован'
+            'message': f'Пользователь @{user["username"] or user_id} разблокирован',
+            'was_blacklisted': in_blacklist
         })
         
     except Exception as e:
@@ -3879,7 +3904,9 @@ def single_user_action(user_id):
             notification_msg = f"⛔ Ваш аккаунт заблокирован. Причина: {value or 'Не указана'}"
             
         elif action_type == 'UNBAN':
-            cursor.execute("UPDATE users SET is_banned = 0 WHERE id = ?", (user_id,))
+            cursor.execute("UPDATE users SET is_banned = 0, ban_reason = NULL WHERE id = ?", (user_id,))
+            # Также удаляем из черного списка
+            cursor.execute("DELETE FROM blacklist WHERE telegram_id = ?", (telegram_id,))
             notification_msg = "✅ Ваш аккаунт разблокирован!"
             
         elif action_type == 'NOTIFY':
