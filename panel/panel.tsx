@@ -144,6 +144,7 @@ interface User {
   partnerRate: number;
   referrals: number;
   totalEarned: number;
+  inBlacklist: boolean;
 }
 
 interface KeyItem {
@@ -939,7 +940,7 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
         {activeAction && <UserActionModal type={activeAction} onClose={() => setActiveAction(null)} onConfirm={confirmAction} />}
         <div className="bg-gray-950 border border-gray-800 rounded-2xl w-full max-w-4xl shadow-2xl relative animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
             <div className="p-6 border-b border-gray-800 flex justify-between items-start bg-gray-900 rounded-t-2xl">
-                <div className="flex items-center gap-4"><div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center text-2xl font-bold text-gray-500 border border-gray-700">{user.username.charAt(1).toUpperCase()}</div><div><h2 className="text-2xl font-bold text-white flex items-center">{user.username} {user.status === 'Active' && <CheckCircle size={18} className="text-green-500 ml-2" />}{user.status === 'Banned' && <Ban size={18} className="text-red-500 ml-2" />}</h2><div className="flex items-center gap-3 text-sm text-gray-400 mt-1"><span className="flex items-center bg-gray-800 px-2 py-0.5 rounded"><Hash size={12} className="mr-1"/> ID: {user.telegramId}</span><span className="flex items-center"><Calendar size={12} className="mr-1"/> Рег: {user.regDate}</span></div></div></div>
+                <div className="flex items-center gap-4"><div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center text-2xl font-bold text-gray-500 border border-gray-700">{user.username.charAt(1).toUpperCase()}</div><div><h2 className="text-2xl font-bold text-white flex items-center">{user.username} {user.status === 'Active' && <CheckCircle size={18} className="text-green-500 ml-2" />}{user.status === 'Banned' && <Ban size={18} className="text-red-500 ml-2" />}{user.inBlacklist && <span className="ml-2 text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full border border-red-500/30">Чёрный список</span>}</h2><div className="flex items-center gap-3 text-sm text-gray-400 mt-1"><span className="flex items-center bg-gray-800 px-2 py-0.5 rounded"><Hash size={12} className="mr-1"/> ID: {user.telegramId}</span><span className="flex items-center"><Calendar size={12} className="mr-1"/> Рег: {user.regDate}</span></div></div></div>
                 <button onClick={onClose} className="text-gray-400 hover:text-white"><X size={24} /></button>
             </div>
             <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1050,13 +1051,13 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
                            <button onClick={handleNotify} className="bg-yellow-600/10 hover:bg-yellow-600/20 text-yellow-400 border border-yellow-600/20 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-center">
                              <Bell size={16} className="mr-2" /> Уведомить пользователя
                            </button>
-                           {user.status !== 'Banned' ? (
+                           {user.status !== 'Banned' && !user.inBlacklist ? (
                              <button onClick={() => handleAction('BAN')} className="bg-red-600/10 hover:bg-red-600/20 text-red-400 border border-red-600/20 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-center">
                                <Ban size={16} className="mr-2" /> Заблокировать
                              </button>
                            ) : (
                              <button onClick={() => handleAction('UNBAN')} className="bg-green-600/10 hover:bg-green-600/20 text-green-400 border border-green-600/20 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-center">
-                               <CheckCircle size={16} className="mr-2" /> Разблокировать
+                               <CheckCircle size={16} className="mr-2" /> Разблокировать{user.inBlacklist ? ' (из ЧС)' : ''}
                              </button>
                            )}
                          </div>
@@ -1426,8 +1427,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
               username: u.username ? (u.username.startsWith('@') ? u.username : `@${u.username}`) : `id${u.telegram_id}`,
               name: u.full_name || '',
               balance: u.balance ?? 0,
-              // Приоритет: is_banned -> Banned, иначе статус из БД или Trial
-              status: u.is_banned ? 'Banned' : ((u.status as UserStatus) || 'Trial'),
+              // Приоритет: in_blacklist -> Banned, is_banned -> Banned, иначе статус из БД или Trial
+              status: (u.in_blacklist || u.is_banned) ? 'Banned' : ((u.status as UserStatus) || 'Trial'),
               traffic: 0,
               maxTraffic: 100,
               devices: 0,
@@ -1445,6 +1446,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
               partnerRate: u.partner_rate ?? 20,
               referrals: 0,
               totalEarned: u.total_earned ?? 0,
+              inBlacklist: !!u.in_blacklist,
             }));
             setUsers(mapped);
           }
