@@ -176,17 +176,32 @@ def check_traffic_abuse(user_id: int, vpn_key_id: int, traffic_bytes: float) -> 
     finally:
         conn.close()
 
-def check_user_ban_status(user_id: int) -> Dict[str, Any]:
+def check_blacklist(telegram_id: int) -> bool:
     """
-    Проверка статуса бана пользователя
-    Если у пользователя 3+ забаненных ключей - бан аккаунта
+    Проверка наличия telegram_id в черном списке
     """
     conn = database.get_db_connection()
     cursor = conn.cursor()
     
     try:
+        cursor.execute("SELECT 1 FROM blacklist WHERE telegram_id = ?", (telegram_id,))
+        return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def check_user_ban_status(user_id: int, telegram_id: int = None) -> Dict[str, Any]:
+    """
+    Проверка статуса бана пользователя
+    Проверяет: 1) черный список, 2) is_banned флаг, 3) лимит забаненных ключей
+    """
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Сначала получаем данные пользователя
         cursor.execute("""
-            SELECT banned_keys_count, is_banned
+            SELECT banned_keys_count, is_banned, ban_reason, telegram_id
             FROM users
             WHERE id = ?
         """, (user_id,))
@@ -195,11 +210,31 @@ def check_user_ban_status(user_id: int) -> Dict[str, Any]:
         if not result:
             return {'banned': False}
         
-        banned_keys_count = result[0]
-        is_banned = result[1]
+        banned_keys_count = result['banned_keys_count'] or 0
+        is_banned = result['is_banned']
+        ban_reason = result['ban_reason']
+        user_telegram_id = telegram_id or result['telegram_id']
         
-        if banned_keys_count >= MAX_BANNED_KEYS_FOR_BAN and not is_banned:
-            # Баним аккаунт
+        # Проверка черного списка (приоритетная)
+        if user_telegram_id:
+            cursor.execute("SELECT 1 FROM blacklist WHERE telegram_id = ?", (user_telegram_id,))
+            if cursor.fetchone():
+                return {
+                    'banned': True,
+                    'reason': 'Ваш аккаунт находится в черном списке',
+                    'blacklisted': True
+                }
+        
+        # Проверка флага is_banned
+        if is_banned:
+            return {
+                'banned': True,
+                'reason': ban_reason or 'Аккаунт заблокирован',
+                'banned_keys_count': banned_keys_count
+            }
+        
+        # Авто-бан при превышении лимита забаненных ключей
+        if banned_keys_count >= MAX_BANNED_KEYS_FOR_BAN:
             cursor.execute("""
                 UPDATE users
                 SET is_banned = 1, ban_reason = 'Превышен лимит забаненных ключей (3+)'
@@ -213,7 +248,7 @@ def check_user_ban_status(user_id: int) -> Dict[str, Any]:
             }
         
         return {
-            'banned': bool(is_banned),
+            'banned': False,
             'banned_keys_count': banned_keys_count
         }
     finally:
