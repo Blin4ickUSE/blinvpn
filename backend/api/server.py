@@ -861,6 +861,134 @@ def delete_user_device(device_id: int):
     finally:
         conn.close()
 
+@app.route('/api/subscription/extend', methods=['POST'])
+def extend_subscription():
+    """Продлить существующую подписку (не создавать новый ключ)"""
+    data = request.json
+    user_id = data.get('user_id')
+    key_id = data.get('key_id')  # ID существующего ключа для продления
+    days = data.get('days')
+    price = data.get('price', 0)
+    
+    if not user_id or not key_id or not days:
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    user = database.get_user_by_id(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    # Получаем существующий ключ
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT id, key_uuid, expiry_date, plan_type, traffic_limit, status
+            FROM vpn_keys WHERE id = ? AND user_id = ?
+        """, (key_id, user_id))
+        key_row = cursor.fetchone()
+        
+        if not key_row:
+            return jsonify({'error': 'Key not found'}), 404
+        
+        key_uuid = key_row['key_uuid']
+        current_expiry = key_row['expiry_date']
+        plan_type = key_row['plan_type'] or 'vpn'
+        
+        # Списываем баланс
+        if price > 0:
+            deducted = database.update_user_balance(user_id, -price, ensure_non_negative=True)
+            if not deducted:
+                return jsonify({'error': 'Insufficient balance'}), 400
+        
+        # Рассчитываем новую дату истечения
+        from datetime import datetime, timedelta
+        
+        # Если ключ истёк, продлеваем от текущей даты
+        # Если активен - добавляем к существующей дате
+        if current_expiry:
+            try:
+                expiry_dt = datetime.fromisoformat(current_expiry.replace('Z', '+00:00').replace('+00:00', ''))
+            except:
+                expiry_dt = datetime.now()
+            
+            if expiry_dt < datetime.now():
+                # Ключ истёк - продлеваем от сейчас
+                new_expiry = datetime.now() + timedelta(days=days)
+            else:
+                # Ключ ещё активен - добавляем дни
+                new_expiry = expiry_dt + timedelta(days=days)
+        else:
+            new_expiry = datetime.now() + timedelta(days=days)
+        
+        new_expiry_str = new_expiry.isoformat()
+        
+        # Обновляем ключ в Remnawave
+        if key_uuid:
+            try:
+                remnawave.remnawave_api.update_user_sync(
+                    uuid=key_uuid,
+                    expire_at=new_expiry,
+                    status=remnawave.UserStatus.ACTIVE
+                )
+            except Exception as e:
+                logger.error(f"Failed to update key in Remnawave: {e}")
+                # Возвращаем баланс если не удалось обновить
+                if price > 0:
+                    database.update_user_balance(user_id, price)
+                return jsonify({'error': 'Failed to extend subscription in VPN system'}), 500
+        
+        # Обновляем ключ в БД
+        cursor.execute("""
+            UPDATE vpn_keys SET 
+                status = 'Active',
+                expiry_date = ?
+            WHERE id = ?
+        """, (new_expiry_str, key_id))
+        conn.commit()
+        
+        # Создаем транзакцию
+        description = f"Продление подписки ({days} дней)"
+        cursor.execute("""
+            INSERT INTO transactions (user_id, type, amount, status, description, payment_method)
+            VALUES (?, 'subscription_extend', ?, 'Success', ?, 'Balance')
+        """, (user_id, -price, description))
+        conn.commit()
+        
+        # Начисляем доход рефереру
+        if price > 0:
+            referral_result = database.credit_referral_income(user_id, price, f"Доход от продления подписки ({description})")
+            if referral_result:
+                logger.info(f"Credited {referral_result['income']}₽ to referrer for extension")
+                try:
+                    referrer_telegram_id = referral_result['referrer_telegram_id']
+                    income = referral_result['income']
+                    rate = referral_result['rate']
+                    msg = (
+                        f"💰 <b>Реферальный доход!</b>\n\n"
+                        f"Ваш реферал продлил подписку.\n"
+                        f"Ваша комиссия ({rate}%): <b>{income:.2f}₽</b>\n\n"
+                        f"Доступно для вывода: проверьте в разделе «Рефералы»"
+                    )
+                    core.send_notification_to_user(referrer_telegram_id, msg)
+                except Exception as e:
+                    logger.error(f"Failed to notify referrer: {e}")
+        
+        return jsonify({
+            'success': True,
+            'key_id': key_id,
+            'new_expiry': new_expiry_str
+        })
+        
+    except Exception as e:
+        logger.error(f"Error extending subscription: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
 @app.route('/api/subscription/create', methods=['POST'])
 def create_subscription():
     """Создать подписку"""
@@ -1137,6 +1265,32 @@ def send_mailing():
         if target_users == 'all':
             cursor.execute("SELECT id, telegram_id FROM users WHERE is_banned = 0 OR is_banned IS NULL")
             user_rows = cursor.fetchall()
+        elif target_users == 'active':
+            # Пользователи с активными подписками
+            cursor.execute("""
+                SELECT DISTINCT u.id, u.telegram_id FROM users u
+                JOIN vpn_keys vk ON u.id = vk.user_id
+                WHERE (u.is_banned = 0 OR u.is_banned IS NULL)
+                  AND vk.status = 'Active' AND vk.expiry_date > datetime('now')
+            """)
+            user_rows = cursor.fetchall()
+        elif target_users == 'expired':
+            # Пользователи с истёкшими подписками
+            cursor.execute("""
+                SELECT DISTINCT u.id, u.telegram_id FROM users u
+                JOIN vpn_keys vk ON u.id = vk.user_id
+                WHERE (u.is_banned = 0 OR u.is_banned IS NULL)
+                  AND (vk.status = 'Expired' OR vk.expiry_date < datetime('now'))
+            """)
+            user_rows = cursor.fetchall()
+        elif target_users == 'no_subscription':
+            # Пользователи без подписок
+            cursor.execute("""
+                SELECT u.id, u.telegram_id FROM users u
+                WHERE (u.is_banned = 0 OR u.is_banned IS NULL)
+                  AND u.id NOT IN (SELECT DISTINCT user_id FROM vpn_keys)
+            """)
+            user_rows = cursor.fetchall()
         elif isinstance(target_users, list):
             placeholders = ",".join("?" for _ in target_users)
             cursor.execute(
@@ -1147,16 +1301,36 @@ def send_mailing():
 
         # Формируем кнопки если есть
         reply_markup = None
+        miniapp_url = os.getenv('MINIAPP_URL', 'https://your-domain.com/miniapp')
+        
         if button_type and button_value:
-            if button_type == 'url':
+            if button_type == 'external_link' or button_type == 'url':
+                # Внешняя ссылка: значение может быть "Текст|URL" или просто URL
+                if '|' in button_value:
+                    btn_text, btn_url = button_value.split('|', 1)
+                else:
+                    btn_text = 'Перейти'
+                    btn_url = button_value
                 reply_markup = {
-                    'inline_keyboard': [[{'text': button_value.split('|')[0] if '|' in button_value else 'Перейти', 
-                                          'url': button_value.split('|')[1] if '|' in button_value else button_value}]]
+                    'inline_keyboard': [[{'text': btn_text, 'url': btn_url}]]
                 }
-            elif button_type == 'webapp':
+            elif button_type == 'open_miniapp' or button_type == 'webapp':
+                # Открытие мини-приложения
+                btn_text = button_value if button_value else 'Открыть приложение'
                 reply_markup = {
-                    'inline_keyboard': [[{'text': button_value.split('|')[0] if '|' in button_value else 'Открыть', 
-                                          'web_app': {'url': button_value.split('|')[1] if '|' in button_value else button_value}}]]
+                    'inline_keyboard': [[{'text': btn_text, 'web_app': {'url': miniapp_url}}]]
+                }
+            elif button_type == 'activate_promo':
+                # Кнопка с промокодом - добавляет промокод в deep link
+                promo_url = f"https://t.me/{os.getenv('BOT_USERNAME', 'your_bot')}?start=promo_{button_value}"
+                reply_markup = {
+                    'inline_keyboard': [[{'text': f'🎁 Активировать промокод {button_value}', 'url': promo_url}]]
+                }
+            elif button_type == 'add_balance':
+                # Кнопка пополнения баланса - открывает мини-приложение на странице пополнения
+                balance_url = f"{miniapp_url}?view=topup&amount={button_value}"
+                reply_markup = {
+                    'inline_keyboard': [[{'text': f'💰 Пополнить на {button_value}₽', 'web_app': {'url': balance_url}}]]
                 }
 
         sent = 0
@@ -1429,11 +1603,16 @@ def refund_transaction(transaction_id: int):
 @app.route('/api/panel/users/<int:user_id>/subscriptions', methods=['GET'])
 @require_auth
 def get_user_subscriptions(user_id: int):
-    """Получить все подписки (ключи) пользователя"""
+    """Получить все подписки (ключи) пользователя с синхронизацией трафика из Remnawave"""
     conn = database.get_db_connection()
     cursor = conn.cursor()
     
     try:
+        # Получаем telegram_id пользователя для запроса к Remnawave
+        cursor.execute("SELECT telegram_id FROM users WHERE id = ?", (user_id,))
+        user_row = cursor.fetchone()
+        telegram_id = user_row['telegram_id'] if user_row else None
+        
         cursor.execute("""
             SELECT vk.id, vk.key_uuid, vk.status, vk.expiry_date, 
                    vk.traffic_used, vk.traffic_limit, vk.created_at,
@@ -1444,6 +1623,23 @@ def get_user_subscriptions(user_id: int):
         """, (user_id,))
         
         rows = cursor.fetchall()
+        
+        # Получаем трафик из Remnawave
+        remnawave_traffic = {}
+        if telegram_id:
+            try:
+                rw_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
+                for rw_user in rw_users:
+                    if hasattr(rw_user, 'uuid'):
+                        traffic_used = 0
+                        if hasattr(rw_user, 'user_traffic') and rw_user.user_traffic:
+                            traffic_used = rw_user.user_traffic.used_traffic_bytes
+                        elif hasattr(rw_user, 'used_traffic_bytes'):
+                            traffic_used = rw_user.used_traffic_bytes
+                        remnawave_traffic[rw_user.uuid] = traffic_used
+            except Exception as e:
+                logger.warning(f"Failed to sync traffic from Remnawave: {e}")
+        
         subscriptions = []
         
         for row in rows:
@@ -1475,6 +1671,18 @@ def get_user_subscriptions(user_id: int):
                 except:
                     is_expired = True
             
+            # Получаем актуальный трафик из Remnawave
+            traffic_used = float(row['traffic_used'] or 0)
+            key_uuid = row['key_uuid']
+            if key_uuid and key_uuid in remnawave_traffic:
+                traffic_used = float(remnawave_traffic[key_uuid])
+                # Обновляем в БД
+                try:
+                    cursor.execute("UPDATE vpn_keys SET traffic_used = ? WHERE key_uuid = ?", 
+                                 (traffic_used, key_uuid))
+                except:
+                    pass
+            
             subscriptions.append({
                 'id': row['id'],
                 'key_uuid': row['key_uuid'],
@@ -1482,10 +1690,16 @@ def get_user_subscriptions(user_id: int):
                 'status': row['status'],
                 'expiry_date': row['expiry_date'],
                 'days_left': days_left if days_left is not None else 0,
-                'traffic_used': float(row['traffic_used'] or 0),
+                'traffic_used': traffic_used,
                 'traffic_limit': float(row['traffic_limit'] or 0),
                 'type': row['type']
             })
+        
+        # Commit обновлений трафика
+        try:
+            conn.commit()
+        except:
+            pass
         
         return jsonify(subscriptions)
     finally:
@@ -1537,7 +1751,7 @@ def unban_user(user_id: int):
 @app.route('/api/panel/keys', methods=['GET'])
 @require_auth
 def get_keys():
-    """Получить список ключей VPN"""
+    """Получить список ключей VPN с синхронизацией трафика из Remnawave"""
     limit = request.args.get('limit', 100, type=int)
     offset = request.args.get('offset', 0, type=int)
     
@@ -1550,6 +1764,7 @@ def get_keys():
                 vk.id,
                 vk.user_id,
                 u.username,
+                u.telegram_id,
                 vk.key_uuid,
                 vk.key_config,
                 vk.status,
@@ -1567,6 +1782,29 @@ def get_keys():
         
         rows = cursor.fetchall()
         keys = []
+        
+        # Собираем все telegram_id для batch запроса к Remnawave
+        telegram_ids = set()
+        for row in rows:
+            if row['telegram_id']:
+                telegram_ids.add(row['telegram_id'])
+        
+        # Получаем трафик из Remnawave для всех ключей
+        remnawave_traffic = {}
+        try:
+            for telegram_id in telegram_ids:
+                rw_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
+                for rw_user in rw_users:
+                    if hasattr(rw_user, 'uuid'):
+                        traffic_used = 0
+                        if hasattr(rw_user, 'user_traffic') and rw_user.user_traffic:
+                            traffic_used = rw_user.user_traffic.used_traffic_bytes
+                        elif hasattr(rw_user, 'used_traffic_bytes'):
+                            traffic_used = rw_user.used_traffic_bytes
+                        remnawave_traffic[rw_user.uuid] = traffic_used
+        except Exception as e:
+            logger.warning(f"Failed to sync traffic from Remnawave for panel keys: {e}")
+        
         for row in rows:
             username = row['username'] or f"user_{row['user_id']}"
             key_display = row['key_config'] or row['key_uuid'] or f"key_{row['id']}"
@@ -1591,6 +1829,18 @@ def get_keys():
                 except:
                     expiry_days = 0
             
+            # Получаем актуальный трафик из Remnawave если доступен
+            traffic_used = float(row['traffic_used'] or 0)
+            key_uuid = row['key_uuid']
+            if key_uuid and key_uuid in remnawave_traffic:
+                traffic_used = float(remnawave_traffic[key_uuid])
+                # Обновляем в БД для консистентности
+                try:
+                    cursor.execute("UPDATE vpn_keys SET traffic_used = ? WHERE key_uuid = ?", 
+                                 (traffic_used, key_uuid))
+                except:
+                    pass
+            
             keys.append({
                 'id': row['id'],
                 'key_config': row['key_config'],
@@ -1601,12 +1851,18 @@ def get_keys():
                 'status': row['status'] or 'Active',
                 'expiry_date': row['expiry_date'],
                 'expiry': expiry_days,
-                'traffic_used': float(row['traffic_used'] or 0),
+                'traffic_used': traffic_used,
                 'traffic_limit': float(row['traffic_limit'] or 0),
                 'devices_used': 0,  # TODO: подсчитать из devices
                 'devices_limit': row['devices_limit'] or 1,
                 'server_location': row['server_location'] or 'Unknown'
             })
+        
+        # Commit любых обновлений трафика
+        try:
+            conn.commit()
+        except:
+            pass
         
         return jsonify(keys)
     finally:
@@ -2532,8 +2788,8 @@ def get_full_statistics():
         cursor.execute("""
             SELECT COUNT(DISTINCT u.id) AS cnt 
             FROM users u
-            JOIN devices d ON d.user_id = u.id
-            WHERE u.trial_used = 1 AND d.status = 'Active' AND d.expiry_date > datetime('now')
+            JOIN vpn_keys vk ON vk.user_id = u.id
+            WHERE u.trial_used = 1 AND vk.status = 'Active' AND vk.expiry_date > datetime('now')
         """)
         converted = cursor.fetchone()['cnt'] or 0
         conversion_rate = (converted / used_trial * 100) if used_trial > 0 else 0
