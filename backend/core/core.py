@@ -314,10 +314,9 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         # Сохраняем ключ в БД
         conn = database.get_db_connection()
         cursor = conn.cursor()
-        expiry_date = (datetime.now() + timedelta(days=days)).isoformat()
         
         # Проверяем существует ли уже ключ для этого пользователя
-        cursor.execute("SELECT id FROM vpn_keys WHERE user_id = ? AND key_uuid = ?", (user_id, user_uuid))
+        cursor.execute("SELECT id, expiry_date FROM vpn_keys WHERE user_id = ? AND key_uuid = ?", (user_id, user_uuid))
         existing_key = cursor.fetchone()
         
         # Определяем squad_uuid для сохранения (первый из списка)
@@ -327,6 +326,28 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         if existing_key:
             # Обновляем существующий ключ
             key_id = existing_key['id']
+            current_expiry = existing_key['expiry_date']
+            
+            # Рассчитываем новую дату истечения корректно
+            if current_expiry:
+                try:
+                    if isinstance(current_expiry, str):
+                        expiry_dt = datetime.fromisoformat(current_expiry.replace('Z', '+00:00').replace('+00:00', ''))
+                    else:
+                        expiry_dt = current_expiry
+                    
+                    # Если ключ истёк - от текущей даты, иначе добавляем к существующей
+                    if expiry_dt < datetime.now():
+                        new_expiry_dt = datetime.now() + timedelta(days=days)
+                    else:
+                        new_expiry_dt = expiry_dt + timedelta(days=days)
+                except:
+                    new_expiry_dt = datetime.now() + timedelta(days=days)
+            else:
+                new_expiry_dt = datetime.now() + timedelta(days=days)
+            
+            expiry_date = new_expiry_dt.isoformat()
+            
             cursor.execute("""
                 UPDATE vpn_keys SET status = 'Active', expiry_date = ?, traffic_limit = ?, 
                        key_config = ?, squad_uuid = ?, plan_type = ?
@@ -334,6 +355,7 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
             """, (expiry_date, traffic_limit, subscription_url, assigned_squad_uuid, plan_type, key_id))
         else:
             # Создаем новый ключ
+            expiry_date = (datetime.now() + timedelta(days=days)).isoformat()
             cursor.execute("""
                 INSERT INTO vpn_keys (user_id, key_uuid, key_config, status, expiry_date, 
                                      devices_limit, traffic_limit, squad_uuid, plan_type)
