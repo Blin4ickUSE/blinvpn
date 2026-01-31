@@ -15,7 +15,7 @@ BLACKLIST_URL = "https://raw.githubusercontent.com/Blin4ickUSE/ban-vpn/refs/head
 UPDATE_INTERVAL = 3600  # 60 минут
 
 def update_blacklist():
-    """Обновить черный список из GitHub"""
+    """Обновить черный список из GitHub и заблокировать VPN ключи забаненных пользователей"""
     try:
         response = requests.get(BLACKLIST_URL, timeout=10)
         response.raise_for_status()
@@ -40,10 +40,33 @@ def update_blacklist():
             except Exception as e:
                 logger.warning(f"Failed to add {telegram_id} to blacklist: {e}")
         
+        # Блокируем VPN ключи для пользователей из blacklist
+        blocked_keys = 0
+        for telegram_id in telegram_ids:
+            try:
+                # Получаем user_id по telegram_id
+                cursor.execute("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,))
+                user_row = cursor.fetchone()
+                if user_row:
+                    user_id = user_row['id']
+                    # Блокируем все активные ключи пользователя
+                    cursor.execute("""
+                        UPDATE vpn_keys SET status = 'Banned' 
+                        WHERE user_id = ? AND status = 'Active'
+                    """, (user_id,))
+                    blocked_keys += cursor.rowcount
+                    # Помечаем пользователя как забаненного
+                    cursor.execute("""
+                        UPDATE users SET is_banned = 1, ban_reason = 'В черном списке' 
+                        WHERE id = ?
+                    """, (user_id,))
+            except Exception as e:
+                logger.warning(f"Failed to block keys for {telegram_id}: {e}")
+        
         conn.commit()
         conn.close()
         
-        logger.info(f"Blacklist updated: {len(telegram_ids)} entries")
+        logger.info(f"Blacklist updated: {len(telegram_ids)} entries, blocked {blocked_keys} keys")
         return len(telegram_ids)
     except Exception as e:
         logger.error(f"Failed to update blacklist: {e}")
