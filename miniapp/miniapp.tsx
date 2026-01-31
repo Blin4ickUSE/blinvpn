@@ -257,22 +257,23 @@ const PRIVACY_POLICY_TEXT = `
 `;
 
 // VPN планы загружаются из API, но оставляем дефолтные для fallback
+// Объединённые подписки VPN + Whitelist
 const VPN_PLANS_DEFAULT: Plan[] = [
-  { id: 'trial', duration: 'Пробный тариф', price: 0, highlight: true, days: 1, isTrial: true }, // 24 часа = 1 день
-  { id: '1m', duration: '1 месяц', price: 99, highlight: false, days: 30 },
-  { id: '3m', duration: '3 месяца', price: 249, highlight: false, days: 90 },
-  { id: '6m', duration: '6 месяцев', price: 449, highlight: false, days: 180 },
-  { id: '1y', duration: '1 ГОД', price: 799, highlight: true, days: 365 },
-  { id: '2y', duration: '2 ГОДА', price: 1199, highlight: false, days: 730 },
+  { id: 'trial', duration: 'Пробный тариф', price: 0, highlight: false, days: 1, isTrial: true }, // 24 часа = 1 день
+  { id: '1m', duration: '1 месяц', price: 199, highlight: false, days: 30 },
+  { id: '3m', duration: '3 месяца', price: 499, highlight: false, days: 90 },  // -15%, вместо 597₽
+  { id: '6m', duration: '6 месяцев', price: 899, highlight: true, days: 180 }, // -25%, вместо 1194₽ 👑
+  { id: '1y', duration: '1 год', price: 1499, highlight: false, days: 365 },   // -35%, вместо 2388₽
 ];
 
 const PRESET_AMOUNTS = [100, 250, 500, 1000, 2000, 5000]; // Минимум 50₽, максимум 100,000₽
 
 /**
- * Whitelist bypass - фиксированная цена 299₽/месяц, 100ГБ трафика
+ * Whitelist bypass - теперь объединён с VPN подпиской
+ * Цены: 1 мес - 199₽, 3 мес - 499₽, 6 мес - 899₽, 1 год - 1499₽
  */
-const WHITELIST_PRICE = 299;
-const WHITELIST_GB = 100;
+const WHITELIST_PRICE = 199;  // Базовая цена за 1 месяц (объединённая подписка)
+const WHITELIST_GB = 0;       // Безлимитный трафик в объединённой подписке
 
 function calculateWhitelistPrice(): number {
   return WHITELIST_PRICE;
@@ -1096,11 +1097,26 @@ export default function App() {
     setEditModalOpen(true);
   };
 
-  const saveDeviceName = () => {
-    if (newName && newName.trim() !== '' && currentDevice) {
-      setDevices(prev => prev.map(d => d.id === currentDevice.id ? { ...d, name: newName } : d));
-      setEditModalOpen(false);
-      setCurrentDevice(null);
+  const saveDeviceName = async () => {
+    if (!newName || newName.trim() === '' || !currentDevice || !telegramId) return;
+    
+    try {
+      const result = await miniApiFetch(`/user/devices/${currentDevice.id}/name?telegram_id=${telegramId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ name: newName.trim() })
+      });
+      
+      if (result && result.success) {
+        // Обновляем локально
+        setDevices(prev => prev.map(d => d.id === currentDevice.id ? { ...d, name: result.name || newName.trim() } : d));
+        setEditModalOpen(false);
+        setCurrentDevice(null);
+      } else {
+        alert(result?.error || 'Не удалось изменить имя');
+      }
+    } catch (e) {
+      console.error('Failed to save device name', e);
+      alert('Ошибка при сохранении имени');
     }
   };
 
@@ -1458,7 +1474,7 @@ export default function App() {
               <CreditCard size={14} /> Баланс счёта
             </span>
             {balance <= 0 && (
-              <span className="px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 text-xs font-bold border border-red-500/20 animate-pulse">
+              <span className="px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 text-xs font-bold border border-red-500/20">
                 Низкий баланс
               </span>
             )}
@@ -1584,7 +1600,7 @@ export default function App() {
       {wizardStep === 2 && (
         <div className="flex-1 flex flex-col animate-fade-in">
             {/* Подсказка о новом тарифе */}
-            <div className="bg-gradient-to-r from-orange-500/20 to-pink-500/20 border border-orange-500/30 rounded-2xl p-4 mb-5 animate-slide-down">
+            <div className="bg-gradient-to-r from-orange-500/20 to-pink-500/20 border border-orange-500/30 rounded-2xl p-4 mb-5">
                 <div className="flex items-start gap-3">
                     <div className="w-10 h-10 rounded-xl bg-orange-500 flex items-center justify-center shrink-0">
                         <Zap size={20} className="text-white" />
@@ -1607,7 +1623,7 @@ export default function App() {
                 >
                 VPN
                 <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                    WiFi
+                  WiFi
                 </span>
                 </button>
                 <button 
@@ -1630,11 +1646,10 @@ export default function App() {
                         <div 
                             key={plan.id}
                             onClick={() => { setWizardPlan(plan); setWizardStep(3); }}
-                            className={`relative p-4 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-center card-hover animate-slide-up ${
+                            className={`relative p-4 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-center card-hover ${
                                 plan.isTrial ? 'border-purple-500 bg-purple-900/20' : 
                                 (plan.highlight ? 'border-amber-500/50 bg-gradient-to-r from-amber-900/20 to-transparent' : 'border-slate-800 bg-slate-800/50 hover:border-slate-600')
                             }`}
-                            style={{ animationDelay: `${idx * 0.05}s` }}
                         >
                             <div>
                                 <div className={`font-bold text-lg ${plan.highlight ? 'text-amber-400 flex items-center gap-2' : 'text-white'}`}>
@@ -1657,7 +1672,7 @@ export default function App() {
                     {/* Карточка тарифа */}
                     <div 
                         onClick={() => setWizardStep(3)}
-                        className="relative p-6 rounded-2xl border-2 border-blue-500 bg-blue-900/20 mb-6 cursor-pointer hover:bg-blue-900/30 transition-all card-hover animate-scale-in"
+                        className="relative p-6 rounded-2xl border-2 border-blue-500 bg-blue-900/20 mb-6 cursor-pointer hover:bg-blue-900/30 transition-all card-hover"
                     >
                         <div className="absolute -top-3 left-4 bg-blue-600 text-white text-xs font-bold px-3 py-1 rounded-full">
                             РЕКОМЕНДУЕМ
@@ -1675,7 +1690,7 @@ export default function App() {
                     </div>
 
                     {/* Что включено */}
-                    <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4 space-y-3 animate-slide-up" style={{ animationDelay: '0.1s' }}>
+                    <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4 space-y-3">
                         <div className="flex items-center gap-3">
                             <CheckCircle className="text-green-400 shrink-0" size={18} />
                             <span className="text-slate-300 text-sm">{WHITELIST_GB} ГБ высокоскоростного трафика</span>
@@ -1723,7 +1738,7 @@ export default function App() {
                 </div>
             </div>
 
-            <div className="mt-auto animate-slide-up" style={{ animationDelay: '0.15s' }}>
+            <div className="mt-auto">
                 <div className="flex justify-between items-center mb-4 text-sm">
                     <span className="text-slate-400">Ваш баланс:</span>
                     <span className={`${balance < (wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
@@ -1754,11 +1769,11 @@ export default function App() {
       {wizardStep === 4 && (
         <div className="flex-1 flex flex-col h-full animate-fade-in">
             <div className="text-center mb-6">
-                <div className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center text-green-500 mx-auto mb-4 animate-scale-in">
+                <div className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center text-green-500 mx-auto mb-4">
                     <CheckCircle size={32} />
                 </div>
                 <h2 className="text-2xl font-bold text-white animate-slide-up">Успешно!</h2>
-                <p className="text-slate-400 animate-slide-up" style={{ animationDelay: '0.1s' }}>Подписка активирована. Настройте ваше устройство:</p>
+                <p className="text-slate-400">Подписка активирована. Настройте ваше устройство:</p>
             </div>
 
             <div className="flex-1 overflow-y-auto bg-slate-800/50 rounded-2xl p-4 border border-slate-700">
@@ -1833,7 +1848,7 @@ export default function App() {
           const isLowTime = !isExpired && !isForever && (device.days_left !== undefined && device.days_left <= 3);
           
           return (
-          <div key={device.id} className={`rounded-xl p-4 border card-hover animate-slide-up ${isExpired ? 'bg-red-900/20 border-red-500/50' : 'bg-slate-800 border-slate-700'}`} style={{ animationDelay: `${devices.indexOf(device) * 0.05}s` }}>
+          <div key={device.id} className={`rounded-xl p-4 border card-hover ${isExpired ? 'bg-red-900/20 border-red-500/50' : 'bg-slate-800 border-slate-700'}`}>
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-4">
                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isExpired ? 'bg-red-900/30 text-red-400' : 'bg-slate-700 text-slate-300'}`}>
@@ -3121,4 +3136,3 @@ export default function App() {
     </div>
   );
 }
-
