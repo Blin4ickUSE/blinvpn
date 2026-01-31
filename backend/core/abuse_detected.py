@@ -1,5 +1,7 @@
 """
 Алгоритм определения злоупотреблений трафиком
+Контроль только по трафику: более 80 ГБ за сутки = бан ключа
+HWID и IP лимиты отключены
 """
 import logging
 import os
@@ -10,11 +12,9 @@ from backend.database import database
 logger = logging.getLogger(__name__)
 
 # Константы
-MAX_SIMULTANEOUS_DEVICES = 1
-MAX_SIMULTANEOUS_IPS = 1
-MAX_DAILY_TRAFFIC_GB = 80
-MAX_BANNED_KEYS_FOR_BAN = 3
-IP_CHECK_WINDOW_SECONDS = 300  # 5 минут
+# HWID и IP лимиты отключены - контроль только по трафику
+MAX_DAILY_TRAFFIC_GB = 80  # Лимит трафика за сутки
+MAX_BANNED_KEYS_FOR_BAN = 3  # Авто-бан пользователя после 3 забаненных ключей
 
 
 def notify_admin_about_abuse(user_id: int, telegram_id: int, username: str, 
@@ -41,74 +41,11 @@ def notify_admin_about_abuse(user_id: int, telegram_id: int, username: str,
 def check_device_limit(user_id: int, hwid: str, ip_address: str = None) -> Dict[str, Any]:
     """
     Проверка ограничения на одновременное использование устройств
-    Максимум 1 устройство одновременно (по HWID и IP)
+    ОТКЛЮЧЕНО: теперь контроль только по трафику (>80 ГБ/сутки)
+    Всегда возвращает allowed=True
     """
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        hwid_hash = database.hash_hwid(hwid) if hwid else None
-        
-        # Получаем активные ключи пользователя
-        cursor.execute("""
-            SELECT vk.id, vk.hwid_hash, vk.last_used, vk.last_ip, u.telegram_id, u.username
-            FROM vpn_keys vk
-            JOIN users u ON vk.user_id = u.id
-            WHERE vk.user_id = ? AND vk.status = 'Active'
-        """, (user_id,))
-        
-        active_keys = cursor.fetchall()
-        
-        # Проверяем, используется ли уже другое устройство
-        for key in active_keys:
-            key_hwid = key['hwid_hash']
-            last_used = key['last_used']
-            last_ip = key['last_ip'] if 'last_ip' in key.keys() else None
-            telegram_id = key['telegram_id']
-            username = key['username'] or f"user_{user_id}"
-            
-            # Проверяем временное окно
-            if last_used:
-                try:
-                    if isinstance(last_used, str):
-                        last_used_dt = datetime.fromisoformat(last_used.replace('Z', '+00:00'))
-                    else:
-                        last_used_dt = last_used
-                    
-                    time_since_last = (datetime.now() - last_used_dt.replace(tzinfo=None)).total_seconds()
-                    
-                    if time_since_last < IP_CHECK_WINDOW_SECONDS:
-                        # Проверка по HWID
-                        if key_hwid and hwid_hash and key_hwid != hwid_hash:
-                            notify_admin_about_abuse(
-                                user_id, telegram_id, username,
-                                "Множественные HWID",
-                                f"Попытка подключения с другого устройства. "
-                                f"Текущий HWID: {hwid_hash[:8]}..., Предыдущий: {key_hwid[:8]}..."
-                            )
-                            return {
-                                'allowed': False,
-                                'reason': 'Одновременное использование нескольких устройств запрещено. Одна подписка = одно устройство.'
-                            }
-                        
-                        # Проверка по IP
-                        if ip_address and last_ip and ip_address != last_ip:
-                            notify_admin_about_abuse(
-                                user_id, telegram_id, username,
-                                "Множественные IP",
-                                f"Одновременное подключение с разных IP. "
-                                f"Текущий IP: {ip_address}, Предыдущий: {last_ip}"
-                            )
-                            return {
-                                'allowed': False,
-                                'reason': 'Одновременное подключение с разных IP-адресов запрещено.'
-                            }
-                except (ValueError, TypeError) as e:
-                    logger.warning(f"Error parsing last_used timestamp: {e}")
-        
-        return {'allowed': True}
-    finally:
-        conn.close()
+    # HWID и IP лимиты отключены - контроль только по трафику
+    return {'allowed': True}
 
 def check_traffic_abuse(user_id: int, vpn_key_id: int, traffic_bytes: float) -> Dict[str, Any]:
     """
@@ -302,81 +239,9 @@ def update_key_hwid(vpn_key_id: int, hwid: str, ip_address: str = None):
 def check_ip_abuse(user_id: int, vpn_key_id: int, ip_address: str) -> Dict[str, Any]:
     """
     Проверка на одновременное использование с разных IP-адресов
-    Если более 1 IP одновременно - блокировка
+    ОТКЛЮЧЕНО: теперь контроль только по трафику (>80 ГБ/сутки)
+    Всегда возвращает allowed=True
     """
-    if not ip_address:
-        return {'allowed': True}
-    
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        # Получаем информацию о ключе
-        cursor.execute("""
-            SELECT vk.last_ip, vk.last_used, u.telegram_id, u.username
-            FROM vpn_keys vk
-            JOIN users u ON vk.user_id = u.id
-            WHERE vk.id = ?
-        """, (vpn_key_id,))
-        
-        row = cursor.fetchone()
-        if not row:
-            return {'allowed': True}
-        
-        last_ip = row['last_ip']
-        last_used = row['last_used']
-        telegram_id = row['telegram_id']
-        username = row['username'] or f"user_{user_id}"
-        
-        # Если нет предыдущего IP - всё OK
-        if not last_ip:
-            return {'allowed': True}
-        
-        # Если IP совпадает - всё OK
-        if last_ip == ip_address:
-            return {'allowed': True}
-        
-        # Проверяем временное окно
-        if last_used:
-            try:
-                if isinstance(last_used, str):
-                    last_used_dt = datetime.fromisoformat(last_used.replace('Z', '+00:00'))
-                else:
-                    last_used_dt = last_used
-                
-                time_since_last = (datetime.now() - last_used_dt.replace(tzinfo=None)).total_seconds()
-                
-                # Если прошло больше 5 минут - считаем что пользователь переподключился
-                if time_since_last > IP_CHECK_WINDOW_SECONDS:
-                    return {'allowed': True}
-                
-                # Иначе - это одновременное использование с разных IP
-                notify_admin_about_abuse(
-                    user_id, telegram_id, username,
-                    "Одновременные IP",
-                    f"Подключение с IP {ip_address} в то время как активно подключение с {last_ip}"
-                )
-                
-                # Блокируем ключ
-                cursor.execute("""
-                    UPDATE vpn_keys SET status = 'Banned' WHERE id = ?
-                """, (vpn_key_id,))
-                
-                cursor.execute("""
-                    UPDATE users SET banned_keys_count = banned_keys_count + 1 WHERE id = ?
-                """, (user_id,))
-                
-                conn.commit()
-                
-                return {
-                    'allowed': False,
-                    'reason': 'Обнаружено одновременное использование с разных IP-адресов. Ключ заблокирован.'
-                }
-                
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Error parsing last_used timestamp: {e}")
-        
-        return {'allowed': True}
-    finally:
-        conn.close()
+    # IP лимиты отключены - контроль только по трафику
+    return {'allowed': True}
 
