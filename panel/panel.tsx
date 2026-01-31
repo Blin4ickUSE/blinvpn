@@ -975,7 +975,7 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
                                  <div className="flex justify-between items-start mb-2">
                                    <div>
                                      <div className="font-mono text-xs text-blue-400">#{sub.short_uuid || sub.key_uuid?.slice(0,8)}</div>
-                                     <div className="text-xs text-gray-500 mt-0.5">{sub.type === 'whitelist' ? 'Обход списков' : 'VPN'}</div>
+                                     <div className="text-xs text-gray-500 mt-0.5">Подписка</div>
                                    </div>
                                    <span className={`text-xs px-2 py-0.5 rounded ${
                                      sub.status === 'Active' ? 'bg-green-500/20 text-green-400' : 
@@ -1511,12 +1511,13 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           }
         }
 
-        // Тарифы (локальные, так как это конфигурация, а не данные из БД)
+        // Тарифы (единая подписка VPN + обход блокировок)
         if (!cancelled) {
           setPlans([
-            { id: 1, name: '1 Месяц', price: 199, oldPrice: 250, duration: 30, isHit: false, description: 'Базовый доступ ко всем серверам' },
-            { id: 2, name: '3 Месяца', price: 499, oldPrice: 750, duration: 90, isHit: true, description: 'Выгоднее на 15%' },
-            { id: 3, name: '1 Год', price: 1500, oldPrice: 2400, duration: 365, isHit: false, description: 'Максимальная выгода' },
+            { id: 1, name: '1 месяц', price: 199, oldPrice: 250, duration: 30, isHit: false, description: 'Базовая подписка' },
+            { id: 2, name: '3 месяца', price: 499, oldPrice: 597, duration: 90, isHit: false, description: '-15% экономия' },
+            { id: 3, name: '6 месяцев', price: 899, oldPrice: 1194, duration: 180, isHit: true, description: '-25% экономия' },
+            { id: 4, name: '1 год', price: 1499, oldPrice: 2388, duration: 365, isHit: false, description: '-35% экономия' },
           ]);
         }
         
@@ -2543,10 +2544,9 @@ interface PublicPagesProps {
     onToast: (title: string, msg: string, type: ToastType) => void;
 }
 
-// Компонент для страницы тарифных планов
+// Компонент для страницы тарифных планов (единая подписка)
 const TariffsPlansPage: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
     const [plans, setPlans] = useState<any[]>([]);
-    const [whitelistSettings, setWhitelistSettings] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [editingPlan, setEditingPlan] = useState<any | null>(null);
 
@@ -2557,12 +2557,8 @@ const TariffsPlansPage: React.FC<{ onToast: (title: string, msg: string, type: T
     const loadData = async () => {
         setLoading(true);
         try {
-            const [plansRes, whitelistRes] = await Promise.all([
-                apiFetch('/panel/tariffs'),
-                apiFetch('/panel/whitelist/settings')
-            ]);
+            const plansRes = await apiFetch('/panel/tariffs');
             if (Array.isArray(plansRes)) setPlans(plansRes);
-            if (whitelistRes) setWhitelistSettings(whitelistRes);
         } catch (e) {
             console.error('Failed to load tariffs', e);
         }
@@ -2601,30 +2597,21 @@ const TariffsPlansPage: React.FC<{ onToast: (title: string, msg: string, type: T
         }
     };
 
-    const handleSaveWhitelist = async () => {
-        try {
-            await apiFetch('/panel/whitelist/settings', {
-                method: 'PUT',
-                body: JSON.stringify(whitelistSettings)
-            });
-            onToast('Успех', 'Настройки whitelist сохранены', 'success');
-        } catch (e) {
-            onToast('Ошибка', 'Не удалось сохранить настройки', 'error');
-        }
-    };
-
     if (loading) {
         return <div className="flex justify-center py-10"><Loader className="animate-spin text-blue-500" size={32} /></div>;
     }
 
     return (
         <div className="space-y-6">
-            {/* VPN тарифы */}
+            {/* Единые тарифы подписки */}
             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
                 <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-lg font-bold text-white flex items-center">
-                        <Zap size={20} className="mr-2 text-blue-500" /> VPN Тарифы
-                    </h3>
+                    <div>
+                        <h3 className="text-lg font-bold text-white flex items-center">
+                            <Zap size={20} className="mr-2 text-blue-500" /> Тарифы подписки
+                        </h3>
+                        <p className="text-sm text-gray-400 mt-1">VPN + обход блокировок операторов</p>
+                    </div>
                     <button 
                         onClick={() => setEditingPlan({ plan_type: 'vpn', name: '', price: 0, duration_days: 30 })}
                         className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium flex items-center"
@@ -2633,7 +2620,7 @@ const TariffsPlansPage: React.FC<{ onToast: (title: string, msg: string, type: T
                     </button>
                 </div>
                 <div className="grid gap-4">
-                    {plans.filter(p => p.plan_type === 'vpn').map(plan => (
+                    {plans.map(plan => (
                         <div key={plan.id} className="bg-gray-800 border border-gray-700 rounded-xl p-4 flex justify-between items-center">
                             <div>
                                 <div className="font-bold text-white">{plan.name}</div>
@@ -2648,61 +2635,10 @@ const TariffsPlansPage: React.FC<{ onToast: (title: string, msg: string, type: T
                             </div>
                         </div>
                     ))}
-                    {plans.filter(p => p.plan_type === 'vpn').length === 0 && (
-                        <div className="text-center text-gray-500 py-8">Нет VPN тарифов</div>
+                    {plans.length === 0 && (
+                        <div className="text-center text-gray-500 py-8">Нет тарифов</div>
                     )}
                 </div>
-            </div>
-
-            {/* Whitelist настройки */}
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <h3 className="text-lg font-bold text-white flex items-center mb-6">
-                    <Shield size={20} className="mr-2 text-purple-500" /> Whitelist Bypass
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div>
-                        <label className="text-sm text-gray-400 block mb-2">Абонентская плата (₽)</label>
-                        <input
-                            type="number"
-                            value={whitelistSettings.subscription_fee || 100}
-                            onChange={e => setWhitelistSettings({ ...whitelistSettings, subscription_fee: Number(e.target.value) })}
-                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
-                        />
-                    </div>
-                    <div>
-                        <label className="text-sm text-gray-400 block mb-2">Цена за ГБ (₽)</label>
-                        <input
-                            type="number"
-                            value={whitelistSettings.price_per_gb || 15}
-                            onChange={e => setWhitelistSettings({ ...whitelistSettings, price_per_gb: Number(e.target.value) })}
-                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
-                        />
-                    </div>
-                    <div>
-                        <label className="text-sm text-gray-400 block mb-2">Мин. ГБ</label>
-                        <input
-                            type="number"
-                            value={whitelistSettings.min_gb || 5}
-                            onChange={e => setWhitelistSettings({ ...whitelistSettings, min_gb: Number(e.target.value) })}
-                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
-                        />
-                    </div>
-                    <div>
-                        <label className="text-sm text-gray-400 block mb-2">Макс. ГБ</label>
-                        <input
-                            type="number"
-                            value={whitelistSettings.max_gb || 500}
-                            onChange={e => setWhitelistSettings({ ...whitelistSettings, max_gb: Number(e.target.value) })}
-                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
-                        />
-                    </div>
-                </div>
-                <button 
-                    onClick={handleSaveWhitelist}
-                    className="mt-4 px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-medium"
-                >
-                    Сохранить настройки Whitelist
-                </button>
             </div>
 
             {/* Модальное окно редактирования */}
@@ -3096,7 +3032,6 @@ const PublicPages: React.FC<PublicPagesProps> = ({ onToast }) => {
 const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
     const [squads, setSquads] = useState<any[]>([]);
     const [vpnSquads, setVpnSquads] = useState<string[]>([]);
-    const [whitelistSquads, setWhitelistSquads] = useState<string[]>([]);
     const [trialEnabled, setTrialEnabled] = useState(true);
     const [trialHours, setTrialHours] = useState('24');
     const [loading, setLoading] = useState(true);
@@ -3122,9 +3057,6 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
                 if (Array.isArray(defaultSquadsData.vpn_squads)) {
                     setVpnSquads(defaultSquadsData.vpn_squads);
                 }
-                if (Array.isArray(defaultSquadsData.whitelist_squads)) {
-                    setWhitelistSquads(defaultSquadsData.whitelist_squads);
-                }
             }
         } catch (e) {
             console.error('Failed to load squads:', e);
@@ -3133,16 +3065,10 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
         setLoading(false);
     };
 
-    const toggleSquad = (uuid: string, type: 'vpn' | 'whitelist') => {
-        if (type === 'vpn') {
-            setVpnSquads(prev => 
-                prev.includes(uuid) ? prev.filter(s => s !== uuid) : [...prev, uuid]
-            );
-        } else {
-            setWhitelistSquads(prev => 
-                prev.includes(uuid) ? prev.filter(s => s !== uuid) : [...prev, uuid]
-            );
-        }
+    const toggleSquad = (uuid: string) => {
+        setVpnSquads(prev => 
+            prev.includes(uuid) ? prev.filter(s => s !== uuid) : [...prev, uuid]
+        );
     };
 
     const saveSquads = async () => {
@@ -3151,11 +3077,10 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
             await apiFetch('/panel/default-squads', {
                 method: 'PUT',
                 body: JSON.stringify({ 
-                    vpn_squads: vpnSquads,
-                    whitelist_squads: whitelistSquads
+                    vpn_squads: vpnSquads
                 })
             });
-            onToast('Успешно', 'Сквады по умолчанию сохранены', 'success');
+            onToast('Успешно', 'Сквады сохранены', 'success');
         } catch (e) {
             console.error('Failed to save default squads:', e);
             onToast('Ошибка', 'Не удалось сохранить сквады', 'error');
@@ -3179,8 +3104,8 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
         setSyncing(false);
     };
 
-    const SquadSelector = ({ title, description, selectedSquads, type, color }: { 
-        title: string, description: string, selectedSquads: string[], type: 'vpn' | 'whitelist', color: string 
+    const SquadSelector = ({ title, description, selectedSquads, color }: { 
+        title: string, description: string, selectedSquads: string[], color: string 
     }) => (
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
             <h3 className="text-lg font-bold text-white mb-2">{title}</h3>
@@ -3201,14 +3126,14 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
                             key={sq.uuid} 
                             className={`flex items-center space-x-3 px-3 py-2 rounded-xl border cursor-pointer transition-all ${
                                 selectedSquads.includes(sq.uuid) 
-                                    ? `bg-${color}-600/20 border-${color}-500 shadow-lg shadow-${color}-900/20` 
+                                    ? 'bg-blue-600/20 border-blue-500 shadow-lg shadow-blue-900/20' 
                                     : 'bg-gray-950 border-gray-700 hover:border-gray-600'
                             }`}
                             style={selectedSquads.includes(sq.uuid) ? {
-                                backgroundColor: color === 'blue' ? 'rgba(37, 99, 235, 0.2)' : 'rgba(34, 197, 94, 0.2)',
-                                borderColor: color === 'blue' ? '#3b82f6' : '#22c55e'
+                                backgroundColor: 'rgba(37, 99, 235, 0.2)',
+                                borderColor: '#3b82f6'
                             } : {}}
-                            onClick={() => toggleSquad(sq.uuid, type)}
+                            onClick={() => toggleSquad(sq.uuid)}
                         >
                             <input 
                                 type="checkbox" 
@@ -3277,19 +3202,10 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
             </div>
             
             <SquadSelector 
-                title="🔒 VPN подписка" 
-                description="Выберите сквады для VPN (балансировщик выберет оптимальный)"
+                title="🔒 Сквады для подписок" 
+                description="Выберите сквады для единой подписки (VPN + обход блокировок)"
                 selectedSquads={vpnSquads}
-                type="vpn"
                 color="blue"
-            />
-            
-            <SquadSelector 
-                title="🌐 Обход белых списков" 
-                description="Выберите сквады для обхода белых списков (балансировщик выберет оптимальный)"
-                selectedSquads={whitelistSquads}
-                type="whitelist"
-                color="green"
             />
             
             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
@@ -3441,7 +3357,7 @@ interface SquadConfig {
 
 const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
     const [squads, setSquads] = useState<SquadConfig[]>([]);
-    const [mapping, setMapping] = useState<{vpn: string[], whitelist: string[], trial: string[]}>({vpn: [], whitelist: [], trial: []});
+    const [mapping, setMapping] = useState<{vpn: string[], trial: string[]}>({vpn: [], trial: []});
     const [loading, setLoading] = useState(true);
     const [syncing, setSyncing] = useState(false);
     const [editingSquad, setEditingSquad] = useState<SquadConfig | null>(null);
@@ -3451,7 +3367,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
             const data = await apiFetch('/panel/squads');
             if (data) {
                 setSquads(data.squads || []);
-                setMapping(data.mapping || {vpn: [], whitelist: [], trial: []});
+                setMapping({vpn: data.mapping?.vpn || [], trial: data.mapping?.trial || []});
             }
         } catch (e) {
             onToast('Ошибка', 'Не удалось загрузить сквады', 'error');
@@ -3515,7 +3431,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
         }
     };
 
-    const toggleSquadMapping = (type: 'vpn' | 'whitelist' | 'trial', uuid: string) => {
+    const toggleSquadMapping = (type: 'vpn' | 'trial', uuid: string) => {
         setMapping(prev => {
             const current = prev[type] || [];
             if (current.includes(uuid)) {
@@ -3529,7 +3445,6 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
     const getSquadTypeColor = (type: string) => {
         switch(type) {
             case 'vpn': return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-            case 'whitelist': return 'bg-green-500/20 text-green-400 border-green-500/30';
             case 'trial': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
             default: return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
         }
@@ -3624,14 +3539,13 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                     </p>
                     
                     <div className="space-y-6">
-                        {(['vpn', 'whitelist', 'trial'] as const).map(type => (
+                        {(['vpn', 'trial'] as const).map(type => (
                             <div key={type}>
                                 <h3 className="font-medium text-white mb-3 flex items-center">
                                     <span className={`w-3 h-3 rounded-full mr-2 ${
-                                        type === 'vpn' ? 'bg-blue-500' : 
-                                        type === 'whitelist' ? 'bg-green-500' : 'bg-yellow-500'
+                                        type === 'vpn' ? 'bg-blue-500' : 'bg-yellow-500'
                                     }`} />
-                                    {type === 'vpn' ? 'Обычный VPN' : type === 'whitelist' ? 'Обход белых списков' : 'Пробный период'}
+                                    {type === 'vpn' ? 'Подписка (VPN + обход блокировок)' : 'Пробный период'}
                                 </h3>
                                 <div className="flex flex-wrap gap-2">
                                     {squads.filter(s => s.is_active).map(squad => (
@@ -3684,8 +3598,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                                     onChange={e => setEditingSquad({...editingSquad, squad_type: e.target.value})}
                                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
                                 >
-                                    <option value="vpn">VPN (обычный)</option>
-                                    <option value="whitelist">Whitelist (LTE)</option>
+                                    <option value="vpn">Подписка (VPN + обход)</option>
                                     <option value="trial">Trial (пробный)</option>
                                 </select>
                             </div>
