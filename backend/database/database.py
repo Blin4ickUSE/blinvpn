@@ -77,10 +77,17 @@ def init_database():
                 last_ip TEXT,
                 squad_uuid TEXT,
                 plan_type TEXT DEFAULT 'vpn',
+                custom_name TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
         """)
+        
+        # Миграция: добавляем custom_name если колонка не существует
+        try:
+            cursor.execute("ALTER TABLE vpn_keys ADD COLUMN custom_name TEXT")
+        except:
+            pass  # Колонка уже существует
         
         # Транзакции
         cursor.execute("""
@@ -353,15 +360,14 @@ def init_database():
         
         conn.commit()
         
-        # Дефолтные тарифы
+        # Дефолтные тарифы (объединённые VPN + Whitelist)
         cursor.execute("SELECT COUNT(*) FROM tariff_plans WHERE plan_type = 'vpn'")
         if cursor.fetchone()[0] == 0:
             default_plans = [
-                ('vpn', '1 месяц', 99, 30, 1),
-                ('vpn', '3 месяца', 249, 90, 2),
-                ('vpn', '6 месяцев', 449, 180, 3),
-                ('vpn', '1 год', 799, 365, 4),
-                ('vpn', '2 года', 1199, 730, 5),
+                ('vpn', '1 месяц', 199, 30, 1),
+                ('vpn', '3 месяца', 499, 90, 2),    # -15%, вместо 597₽
+                ('vpn', '6 месяцев', 899, 180, 3),  # -25%, вместо 1194₽
+                ('vpn', '1 год', 1499, 365, 4),     # -35%, вместо 2388₽
             ]
             cursor.executemany("""
                 INSERT INTO tariff_plans (plan_type, name, price, duration_days, sort_order)
