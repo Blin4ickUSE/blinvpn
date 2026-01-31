@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
 from backend.database import database
 from backend.core import core, abuse_detected
 from backend.core.whitelist_billing import calculate_whitelist_price
+from backend.core.blacklist_updater import start_blacklist_updater, update_blacklist
 from backend.api import remnawave, yookassa, heleket, platega
 
 app = Flask(__name__)
@@ -34,7 +35,26 @@ def format_datetime_msk(dt: datetime = None) -> str:
     """Форматировать datetime в ISO формат без миллисекунд (для МСК)"""
     if dt is None:
         dt = datetime.now()
+    # Убираем timezone info если есть, чтобы хранить как локальное МСК время
+    if dt.tzinfo is not None:
+        dt = dt.replace(tzinfo=None)
     return dt.strftime('%Y-%m-%dT%H:%M:%S')
+
+
+def format_expiry_for_notification(expiry_date_str: str) -> str:
+    """Форматировать дату истечения для уведомлений в читаемом формате МСК"""
+    try:
+        if isinstance(expiry_date_str, str):
+            dt = datetime.fromisoformat(expiry_date_str.replace('Z', '+00:00').replace('+00:00', ''))
+        else:
+            dt = expiry_date_str
+        
+        # Форматируем в читаемый вид
+        months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 
+                  'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря']
+        return f"{dt.day} {months[dt.month-1]} {dt.year} в {dt.strftime('%H:%M')}"
+    except:
+        return expiry_date_str
 
 # Секретный ключ для аутентификации панели (legacy)
 PANEL_SECRET = os.getenv('PANEL_SECRET', 'change_this_secret')
@@ -446,6 +466,14 @@ def create_payment():
     if not user:
         return jsonify({'error': 'User not found'}), 404
     
+    # Проверка на бан и blacklist
+    ban_status = abuse_detected.check_user_ban_status(user_id, user.get('telegram_id'))
+    if ban_status.get('banned'):
+        return jsonify({
+            'error': ban_status.get('reason', 'Ваш аккаунт заблокирован'),
+            'banned': True
+        }), 403
+    
     return_url = f"{os.getenv('MINIAPP_URL', '')}/success"
     
     try:
@@ -588,7 +616,7 @@ def get_user_devices():
     try:
         cursor.execute("""
             SELECT id, key_config, key_uuid, status as key_status, expiry_date,
-                   traffic_used, traffic_limit, plan_type, created_at
+                   traffic_used, traffic_limit, plan_type, created_at, custom_name
             FROM vpn_keys
             WHERE user_id = ? AND key_uuid IS NOT NULL AND status != 'Deleted'
             ORDER BY created_at DESC
@@ -654,7 +682,11 @@ def get_user_devices():
             
             # Определяем тип устройства по plan_type
             plan_type = row['plan_type'] or 'vpn'
-            device_name = 'Обход блокировок' if plan_type == 'whitelist' else 'VPN подписка'
+            default_name = 'Обход блокировок' if plan_type == 'whitelist' else 'VPN подписка'
+            
+            # Используем custom_name если есть, иначе default
+            custom_name = row['custom_name'] if 'custom_name' in row.keys() else None
+            device_name = custom_name if custom_name else default_name
             
             devices.append({
                 'id': row['id'],
@@ -862,6 +894,55 @@ def delete_user_device(device_id: int):
     finally:
         conn.close()
 
+
+@app.route('/api/user/devices/<int:device_id>/name', methods=['PUT'])
+def update_device_name(device_id: int):
+    """Обновить имя устройства/ключа"""
+    telegram_id = request.args.get('telegram_id', type=int)
+    if not telegram_id:
+        return jsonify({'error': 'telegram_id required'}), 400
+    
+    data = request.json or {}
+    new_name = data.get('name', '').strip()
+    
+    if not new_name:
+        return jsonify({'error': 'Name is required'}), 400
+    
+    # Ограничиваем длину имени
+    if len(new_name) > 50:
+        new_name = new_name[:50]
+    
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Проверяем, что устройство принадлежит пользователю
+        cursor.execute("""
+            SELECT id FROM vpn_keys
+            WHERE id = ? AND user_id = ?
+        """, (device_id, user['id']))
+        device = cursor.fetchone()
+        
+        if not device:
+            return jsonify({'error': 'Device not found'}), 404
+        
+        # Обновляем имя
+        cursor.execute("UPDATE vpn_keys SET custom_name = ? WHERE id = ?", (new_name, device_id))
+        conn.commit()
+        
+        logger.info(f"Device {device_id} renamed to '{new_name}' for user {telegram_id}")
+        return jsonify({'success': True, 'name': new_name})
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error renaming device {device_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
 @app.route('/api/subscription/extend', methods=['POST'])
 def extend_subscription():
     """Продлить существующую подписку (не создавать новый ключ)"""
@@ -877,6 +958,14 @@ def extend_subscription():
     user = database.get_user_by_id(user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
+    
+    # Проверка на бан и blacklist
+    ban_status = abuse_detected.check_user_ban_status(user_id, user.get('telegram_id'))
+    if ban_status.get('banned'):
+        return jsonify({
+            'error': ban_status.get('reason', 'Ваш аккаунт заблокирован'),
+            'banned': True
+        }), 403
     
     # Получаем существующий ключ
     conn = database.get_db_connection()
@@ -1008,6 +1097,14 @@ def create_subscription():
     user = database.get_user_by_id(user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
+    
+    # Проверка на бан и blacklist
+    ban_status = abuse_detected.check_user_ban_status(user_id, user.get('telegram_id'))
+    if ban_status.get('banned'):
+        return jsonify({
+            'error': ban_status.get('reason', 'Ваш аккаунт заблокирован'),
+            'banned': True
+        }), 403
     
     # Проверка пробного периода
     if is_trial:
@@ -4456,6 +4553,9 @@ def start_backup_scheduler():
 
 
 if __name__ == '__main__':
+    # Запускаем обновление черного списка
+    start_blacklist_updater()
+    
     # Запускаем планировщик бэкапов
     start_backup_scheduler()
     app.run(host='0.0.0.0', port=int(os.getenv('API_PORT', 8000)))
