@@ -360,19 +360,39 @@ def init_database():
         
         conn.commit()
         
-        # Дефолтные тарифы (объединённые VPN + Whitelist)
+        # Дефолтные тарифы (единая подписка: 199/499/899/1499₽)
         cursor.execute("SELECT COUNT(*) FROM tariff_plans WHERE plan_type = 'vpn'")
         if cursor.fetchone()[0] == 0:
             default_plans = [
                 ('vpn', '1 месяц', 199, 30, 1),
-                ('vpn', '3 месяца', 499, 90, 2),    # -15%, вместо 597₽
-                ('vpn', '6 месяцев', 899, 180, 3),  # -25%, вместо 1194₽
-                ('vpn', '1 год', 1499, 365, 4),     # -35%, вместо 2388₽
+                ('vpn', '3 месяца', 499, 90, 2),
+                ('vpn', '6 месяцев', 899, 180, 3),
+                ('vpn', '1 год', 1499, 365, 4),
             ]
             cursor.executemany("""
                 INSERT INTO tariff_plans (plan_type, name, price, duration_days, sort_order)
                 VALUES (?, ?, ?, ?, ?)
             """, default_plans)
+        else:
+            # Миграция: обновить цены существующих VPN-тарифов на единые (199/499/899/1499₽)
+            price_map = {
+                30: (199, '1 месяц'),
+                90: (499, '3 месяца'),
+                180: (899, '6 месяцев'),
+                365: (1499, '1 год'),
+            }
+            for days, (price, name) in price_map.items():
+                cursor.execute("""
+                    UPDATE tariff_plans SET price = ?, name = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE plan_type = 'vpn' AND duration_days = ?
+                """, (price, name, days))
+            # Добавить план "6 месяцев", если его нет
+            cursor.execute("SELECT COUNT(*) FROM tariff_plans WHERE plan_type = 'vpn' AND duration_days = 180")
+            if cursor.fetchone()[0] == 0:
+                cursor.execute("""
+                    INSERT INTO tariff_plans (plan_type, name, price, duration_days, sort_order)
+                    VALUES ('vpn', '6 месяцев', 899, 180, 3)
+                """)
         
         # Настройки whitelist
         cursor.execute("SELECT COUNT(*) FROM whitelist_settings")
