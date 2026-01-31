@@ -256,28 +256,17 @@ const PRIVACY_POLICY_TEXT = `
 **5.1.** Пользователь осознает, что использование сети Интернет связано с рисками. Сервис не несет ответственности за перехват данных, произошедший на устройстве Пользователя или на узлах сети, не контролируемых Сервисом.
 `;
 
-// VPN планы загружаются из API, но оставляем дефолтные для fallback
-// Объединённые подписки VPN + Whitelist
+// Единые тарифы подписки (VPN + Обход блокировок в одном)
+// Загружаются из API, fallback на дефолтные
 const VPN_PLANS_DEFAULT: Plan[] = [
-  { id: 'trial', duration: 'Пробный тариф', price: 0, highlight: false, days: 1, isTrial: true }, // 24 часа = 1 день
+  { id: 'trial', duration: 'Пробный период', price: 0, highlight: false, days: 1, isTrial: true },
   { id: '1m', duration: '1 месяц', price: 199, highlight: false, days: 30 },
-  { id: '3m', duration: '3 месяца', price: 499, highlight: false, days: 90 },  // -15%, вместо 597₽
-  { id: '6m', duration: '6 месяцев', price: 899, highlight: true, days: 180 }, // -25%, вместо 1194₽ 👑
-  { id: '1y', duration: '1 год', price: 1499, highlight: false, days: 365 },   // -35%, вместо 2388₽
+  { id: '3m', duration: '3 месяца', price: 499, highlight: false, days: 90 },   // -15%, вместо 597₽
+  { id: '6m', duration: '6 месяцев', price: 899, highlight: true, days: 180 },  // -25%, вместо 1194₽ 👑
+  { id: '1y', duration: '1 год', price: 1499, highlight: false, days: 365 },    // -35%, вместо 2388₽
 ];
 
-const PRESET_AMOUNTS = [100, 250, 500, 1000, 2000, 5000]; // Минимум 50₽, максимум 100,000₽
-
-/**
- * Whitelist bypass - теперь объединён с VPN подпиской
- * Цены: 1 мес - 199₽, 3 мес - 499₽, 6 мес - 899₽, 1 год - 1499₽
- */
-const WHITELIST_PRICE = 199;  // Базовая цена за 1 месяц (объединённая подписка)
-const WHITELIST_GB = 0;       // Безлимитный трафик в объединённой подписке
-
-function calculateWhitelistPrice(): number {
-  return WHITELIST_PRICE;
-}
+const PRESET_AMOUNTS = [100, 250, 500, 1000, 2000, 5000];
 
 // Платежные методы загружаются из API с комиссиями, но оставляем дефолтные
 // ВРЕМЕННО: только СБП через YooKassa
@@ -295,7 +284,7 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
     icon: '⚡', 
     feePercent: 0, 
     variants: [
-      { id: 'platega_sbp', name: 'Platega', feePercent: 0 },
+      { id: 'platega_sbp', name: '⭐ | Platega', feePercent: 0 },
       { id: 'yookassa_sbp', name: 'YooKassa', feePercent: 0 }
     ]
   },
@@ -660,13 +649,12 @@ export default function App() {
   const [wizardStep, setWizardStep] = useState(1); // 1: Platform, 2: Plan (VPN/Whitelist), 3: Payment/Confirm, 4: Instructions
   const [wizardPlatform, setWizardPlatform] = useState<PlatformId>('android');
   const [wizardPlan, setWizardPlan] = useState<Plan | null>(null);
-  const [wizardType, setWizardType] = useState<'vpn' | 'whitelist'>('vpn'); 
+  const [wizardType] = useState<'vpn'>('vpn'); // Единая подписка
   const [useAutoPay, setUseAutoPay] = useState(false);
   const [savedPaymentMethods, setSavedPaymentMethods] = useState<any[]>([]);
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<string | null>(null);
 
-  // Buy Device State (Legacy for whitelist tab)
-  const [buyTab, setBuyTab] = useState<'vpn' | 'whitelist'>('vpn');
+  // Buy Device State (legacy, kept for compatibility)
   
   // Extend subscription state - для продления существующего ключа
   const [extendingDevice, setExtendingDevice] = useState<Device | null>(null);
@@ -1238,55 +1226,6 @@ export default function App() {
     }
   };
 
-  const buyWhitelist = async () => {
-    const price = WHITELIST_PRICE;
-    const name = `Whitelist (${WHITELIST_GB} ГБ)`;
-    
-    if (balance < price) {
-      if(window.confirm(`Недостаточно средств. Стоимость: ${price} ₽. Ваш баланс: ${balance} ₽. Пополнить баланс?`)) {
-        setPendingAction({
-            type: 'legacy_whitelist',
-            payload: { whitelistGB: WHITELIST_GB, useAutoPay, selectedPaymentMethodId, price, name } 
-        });
-        setTopupAmount(price - balance);
-        setTopupStep(2); // Сразу к способу оплаты
-        setView('topup');
-      }
-      return;
-    }
-    
-    // Получаем userId если еще не загружен
-    const currentUserId = await ensureUserId();
-    if (!currentUserId) {
-      alert('Не удалось загрузить данные пользователя. Попробуйте перезагрузить приложение.');
-      return;
-    }
-    
-    try {
-      const res = await miniApiFetch('/subscription/create', {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: currentUserId,
-          days: 30,
-          type: 'whitelist',
-          whitelist_gb: WHITELIST_GB,
-          price: price,
-        }),
-      });
-      
-      if (res && res.success) {
-        addHistoryItem('buy_dev', name, -price);
-        await refreshAll();
-        setView('instruction_view');
-      } else {
-        alert(res?.error || 'Ошибка создания подписки');
-      }
-    } catch (e) {
-      console.error('Failed to create subscription', e);
-      alert('Ошибка создания подписки');
-    }
-  }
-
   // Функция продления существующей подписки
   const extendSubscription = async (device: Device, plan: Plan) => {
     const price = plan.price;
@@ -1339,8 +1278,7 @@ export default function App() {
   };
 
   const wizardActivate = async () => {
-    let price = 0;
-    let name = '';
+    if (!wizardPlan) return;
 
     // Получаем userId если еще не загружен
     const currentUserId = await ensureUserId();
@@ -1349,65 +1287,58 @@ export default function App() {
       return;
     }
 
-    if (wizardType === 'vpn') {
-        if (!wizardPlan) return;
-        if (wizardPlan.isTrial) {
-            // Активируем триал через API
-            try {
-              const res = await miniApiFetch('/subscription/create', {
-                method: 'POST',
-                body: JSON.stringify({
-                  user_id: currentUserId,
-                  days: wizardPlan.days || 1,
-                  type: 'vpn',
-                  is_trial: true,
-                  price: 0,
-                }),
-              });
-              
-              if (res && res.success) {
-                setIsTrialUsed(true);
-                addHistoryItem('trial', 'Активация пробного периода', 0);
-                await refreshAll();
-                setWizardStep(4);
-              } else {
-                alert(res?.error || 'Ошибка активации пробного периода');
-              }
-            } catch (e) {
-              console.error('Failed to activate trial', e);
-              alert('Ошибка активации пробного периода');
-            }
-            return;
+    // Активируем триал
+    if (wizardPlan.isTrial) {
+      try {
+        const res = await miniApiFetch('/subscription/create', {
+          method: 'POST',
+          body: JSON.stringify({
+            user_id: currentUserId,
+            days: wizardPlan.days || 1,
+            type: 'vpn',
+            is_trial: true,
+            price: 0,
+          }),
+        });
+        
+        if (res && res.success) {
+          setIsTrialUsed(true);
+          addHistoryItem('trial', 'Активация пробного периода', 0);
+          await refreshAll();
+          setWizardStep(4);
+        } else {
+          alert(res?.error || 'Ошибка активации пробного периода');
         }
-        price = wizardPlan.price;
-        name = `VPN (${wizardPlan.duration})`;
-    } else {
-        price = WHITELIST_PRICE;
-        name = `Whitelist (${WHITELIST_GB} ГБ)`;
+      } catch (e) {
+        console.error('Failed to activate trial', e);
+        alert('Ошибка активации пробного периода');
+      }
+      return;
     }
+
+    const price = wizardPlan.price;
+    const name = `Подписка (${wizardPlan.duration})`;
 
     if (balance < price) {
       if(window.confirm(`Недостаточно средств. Пополнить баланс на ${price - balance} ₽?`)) {
         setPendingAction({
             type: 'wizard',
-            payload: { wizardType, wizardPlan, whitelistGB: WHITELIST_GB, useAutoPay, selectedPaymentMethodId, price, name }
+            payload: { wizardType: 'vpn', wizardPlan, price, name }
         });
         setTopupAmount(price - balance);
-        setTopupStep(2); // Сразу к способу оплаты
+        setTopupStep(2);
         setView('topup');
       }
       return;
     }
-
     
     try {
       const res = await miniApiFetch('/subscription/create', {
         method: 'POST',
         body: JSON.stringify({
           user_id: currentUserId,
-          days: wizardType === 'vpn' ? wizardPlan?.days : 30,
-          type: wizardType,
-          whitelist_gb: wizardType === 'whitelist' ? WHITELIST_GB : undefined,
+          days: wizardPlan.days,
+          type: 'vpn',
           price: price,
         }),
       });
@@ -1598,168 +1529,116 @@ export default function App() {
       )}
 
       {wizardStep === 2 && (
-        <div className="flex-1 flex flex-col animate-fade-in">
-            {/* Подсказка о новом тарифе */}
-            <div className="bg-gradient-to-r from-orange-500/20 to-pink-500/20 border border-orange-500/30 rounded-2xl p-4 mb-5">
+        <div className="flex-1 flex flex-col">
+            {/* Информация о единой подписке */}
+            <div className="bg-gradient-to-r from-blue-500/20 to-purple-500/20 border border-blue-500/30 rounded-2xl p-4 mb-5">
                 <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-orange-500 flex items-center justify-center shrink-0">
-                        <Zap size={20} className="text-white" />
+                    <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center shrink-0">
+                        <Shield size={20} className="text-white" />
                     </div>
                     <div className="flex-1">
-                        <div className="font-bold text-white text-sm mb-1">Новинка: Обход белых списков</div>
-                        <div className="text-orange-200/80 text-xs leading-relaxed">
-                            Работает даже при «Беспилотной опасности» и других блокировках. Для мобильных операторов.
+                        <div className="font-bold text-white text-sm mb-1">Единая подписка</div>
+                        <div className="text-blue-200/80 text-xs leading-relaxed">
+                            VPN + Обход блокировок операторов в одном тарифе. Работает везде!
                         </div>
                     </div>
                 </div>
             </div>
 
-            <div className="bg-slate-800 p-1 rounded-xl flex gap-1 mb-6">
-                <button 
-                onClick={() => setWizardType('vpn')} 
-                className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${
-                    wizardType === 'vpn' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-                }`}
-                >
-                VPN
-                <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                  WiFi
-                </span>
-                </button>
-                <button 
-                onClick={() => setWizardType('whitelist')} 
-                className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all relative ${
-                    wizardType === 'whitelist' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-400 hover:text-white'
-                }`}
-                >
-                Обход белых списков
-                <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                    Мобильный
-                </span>
-                </button>
-            </div>
-
-            {wizardType === 'vpn' ? (
-                <div className="space-y-3">
-                    <p className="text-slate-400 text-sm mb-2">Выберите период защиты для <b>{PLATFORMS.find(p => p.id === wizardPlatform)?.name}</b>:</p>
-                    {(vpnPlans || VPN_PLANS_DEFAULT).filter(plan => !plan.isTrial || !isTrialUsed).map((plan, idx) => (
-                        <div 
-                            key={plan.id}
-                            onClick={() => { setWizardPlan(plan); setWizardStep(3); }}
-                            className={`relative p-4 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-center card-hover ${
-                                plan.isTrial ? 'border-purple-500 bg-purple-900/20' : 
-                                (plan.highlight ? 'border-amber-500/50 bg-gradient-to-r from-amber-900/20 to-transparent' : 'border-slate-800 bg-slate-800/50 hover:border-slate-600')
-                            }`}
-                        >
-                            <div>
-                                <div className={`font-bold text-lg ${plan.highlight ? 'text-amber-400 flex items-center gap-2' : 'text-white'}`}>
-                                    {plan.duration}
-                                    {plan.highlight && <Crown size={18} fill="currentColor" />}
-                                </div>
-                                {plan.isTrial && <div className="text-xs text-purple-300">Попробуйте бесплатно</div>}
-                            </div>
-                            <div className="text-right">
-                                <div className={`font-bold text-xl ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>{plan.price} ₽</div>
-                                <ChevronRight size={20} className="text-slate-500 ml-auto mt-1" />
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            ) : (
-                <div className="flex-1 flex flex-col animate-fade-in">
-                    <p className="text-slate-400 text-sm mb-4">Работает при «Беспилотной опасности» и блокировках:</p>
-                    
-                    {/* Карточка тарифа */}
+            <p className="text-slate-400 text-sm mb-4">Выберите период подписки:</p>
+            
+            <div className="space-y-3">
+                {(vpnPlans || VPN_PLANS_DEFAULT).filter(plan => !plan.isTrial || !isTrialUsed).map((plan) => (
                     <div 
-                        onClick={() => setWizardStep(3)}
-                        className="relative p-6 rounded-2xl border-2 border-blue-500 bg-blue-900/20 mb-6 cursor-pointer hover:bg-blue-900/30 transition-all card-hover"
+                        key={plan.id}
+                        onClick={() => { setWizardPlan(plan); setWizardStep(3); }}
+                        className={`relative p-4 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-center card-hover ${
+                            plan.isTrial ? 'border-purple-500 bg-purple-900/20' : 
+                            (plan.highlight ? 'border-amber-500/50 bg-gradient-to-r from-amber-900/20 to-transparent' : 'border-slate-800 bg-slate-800/50 hover:border-slate-600')
+                        }`}
                     >
-                        <div className="absolute -top-3 left-4 bg-blue-600 text-white text-xs font-bold px-3 py-1 rounded-full">
-                            РЕКОМЕНДУЕМ
+                        <div>
+                            <div className={`font-bold text-lg ${plan.highlight ? 'text-amber-400 flex items-center gap-2' : 'text-white'}`}>
+                                {plan.duration}
+                                {plan.highlight && <Crown size={18} fill="currentColor" />}
+                            </div>
+                            {plan.isTrial && <div className="text-xs text-purple-300">Попробуйте бесплатно</div>}
+                            {plan.id === '3m' && <div className="text-xs text-green-400">-15% экономия</div>}
+                            {plan.id === '6m' && <div className="text-xs text-amber-400">-25% экономия</div>}
+                            {plan.id === '1y' && <div className="text-xs text-green-400">-35% экономия</div>}
                         </div>
-                        <div className="flex justify-between items-center">
-                            <div>
-                                <div className="text-xl font-bold text-white mb-1">1 месяц</div>
-                                <div className="text-slate-400 text-sm">{WHITELIST_GB} ГБ трафика</div>
-                            </div>
-                            <div className="text-right">
-                                <div className="text-3xl font-bold text-white">{WHITELIST_PRICE} ₽</div>
-                                <div className="text-slate-500 text-xs">≈ {Math.round(WHITELIST_PRICE / WHITELIST_GB * 10) / 10} ₽/ГБ</div>
-                            </div>
+                        <div className="text-right">
+                            <div className={`font-bold text-xl ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>{plan.price} ₽</div>
+                            <ChevronRight size={20} className="text-slate-500 ml-auto mt-1" />
                         </div>
                     </div>
-
-                    {/* Что включено */}
-                    <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4 space-y-3">
-                        <div className="flex items-center gap-3">
-                            <CheckCircle className="text-green-400 shrink-0" size={18} />
-                            <span className="text-slate-300 text-sm">{WHITELIST_GB} ГБ высокоскоростного трафика</span>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <CheckCircle className="text-green-400 shrink-0" size={18} />
-                            <span className="text-slate-300 text-sm">Работает при «Беспилотной опасности»</span>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <CheckCircle className="text-green-400 shrink-0" size={18} />
-                            <span className="text-slate-300 text-sm">Работает с безлимитными тарифами</span>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <Zap className="text-blue-400 shrink-0" size={18} />
-                            <span className="text-slate-300 text-sm">Автоматическое продление</span>
-                        </div>
-                    </div>
-
-                    <Button onClick={() => setWizardStep(3)}>Подключить за {WHITELIST_PRICE} ₽</Button>
+                ))}
+            </div>
+            
+            {/* Что включено */}
+            <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mt-6 space-y-2">
+                <div className="text-white font-semibold text-sm mb-2">Что включено:</div>
+                <div className="flex items-center gap-2">
+                    <CheckCircle className="text-green-400 shrink-0" size={16} />
+                    <span className="text-slate-300 text-xs">Безлимитный трафик</span>
                 </div>
-            )}
+                <div className="flex items-center gap-2">
+                    <CheckCircle className="text-green-400 shrink-0" size={16} />
+                    <span className="text-slate-300 text-xs">Обход блокировок операторов</span>
+                </div>
+                <div className="flex items-center gap-2">
+                    <CheckCircle className="text-green-400 shrink-0" size={16} />
+                    <span className="text-slate-300 text-xs">Работает при «Беспилотной опасности»</span>
+                </div>
+            </div>
         </div>
       )}
 
       {wizardStep === 3 && (
-        <div className="flex-1 flex flex-col animate-fade-in">
-            <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 mb-6 text-center animate-scale-in">
+        <div className="flex-1 flex flex-col">
+            <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 mb-6 text-center">
                 <div className="text-slate-400 mb-2">Вы подключаете</div>
                 <div className="text-2xl font-bold text-white mb-6">
-                    {wizardType === 'vpn' ? wizardPlan?.duration : `Обход белых списков (${WHITELIST_GB} ГБ)`}
+                    Подписка на {wizardPlan?.duration}
                 </div>
                 
                 <div className="border-t border-slate-700 pt-4 flex justify-between items-center">
                     <span className="text-slate-400">Стоимость:</span>
                     <span className="text-xl font-bold text-white">
-                        {wizardType === 'vpn' ? wizardPlan?.price : WHITELIST_PRICE} ₽
+                        {wizardPlan?.price} ₽
                     </span>
                 </div>
             </div>
 
-            <div className="bg-yellow-500/10 border border-yellow-500/20 p-4 rounded-xl mb-6 flex gap-3 items-start animate-slide-up" style={{ animationDelay: '0.1s' }}>
+            <div className="bg-yellow-500/10 border border-yellow-500/20 p-4 rounded-xl mb-6 flex gap-3 items-start">
                 <AlertTriangle className="text-yellow-500 shrink-0 mt-0.5" size={18} />
                 <div className="text-yellow-400 text-xs leading-relaxed">
-                    <strong>Важно:</strong> 1 подписка может использоваться только на 1 устройстве. При попытке использовать на нескольких устройствах одновременно подписка будет заблокирована.
+                    <strong>Важно:</strong> 1 подписка = 1 устройство. При использовании на нескольких устройствах одновременно подписка будет заблокирована.
                 </div>
             </div>
 
             <div className="mt-auto">
                 <div className="flex justify-between items-center mb-4 text-sm">
                     <span className="text-slate-400">Ваш баланс:</span>
-                    <span className={`${balance < (wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
+                    <span className={`${balance < (wizardPlan?.price || 0) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
                 </div>
 
-                {balance >= (wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE) ? (
-                    <Button onClick={wizardActivate} variant={wizardType === 'vpn' && wizardPlan?.isTrial ? 'trial' : 'primary'}>
-                        {wizardType === 'vpn' && wizardPlan?.isTrial ? 'Активировать бесплатно' : 'Оплатить и подключить'}
+                {balance >= (wizardPlan?.price || 0) ? (
+                    <Button onClick={wizardActivate} variant={wizardPlan?.isTrial ? 'trial' : 'primary'}>
+                        {wizardPlan?.isTrial ? 'Активировать бесплатно' : 'Оплатить и подключить'}
                     </Button>
                 ) : (
                     <Button onClick={() => {
-                        const price = wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE;
+                        const price = wizardPlan?.price || 0;
                         setPendingAction({
                             type: 'wizard',
-                            payload: { wizardType, wizardPlan, whitelistGB: WHITELIST_GB, useAutoPay, selectedPaymentMethodId, price, name: wizardType === 'vpn' ? `VPN (${wizardPlan?.duration})` : `Whitelist (${WHITELIST_GB} ГБ)` }
+                            payload: { wizardType: 'vpn', wizardPlan, price, name: `Подписка (${wizardPlan?.duration})` }
                         });
                         setTopupAmount(price - balance);
                         setTopupStep(2);
                         setView('topup');
                     }}>
-                        Пополнить на {(wizardType === 'vpn' ? (wizardPlan?.price || 0) : WHITELIST_PRICE) - balance} ₽
+                        Пополнить на {(wizardPlan?.price || 0) - balance} ₽
                     </Button>
                 )}
             </div>
@@ -1856,8 +1735,7 @@ export default function App() {
                 </div>
                 <div>
                   <div className="font-bold text-white">
-                    {device.is_trial ? 'Пробная подписка' : 
-                     device.plan_type === 'whitelist' ? 'Подписка LTE' : 'Подписка VPN'} | #{device.id}
+                    {device.is_trial ? 'Пробная подписка' : 'Подписка'} | #{device.id}
                   </div>
                   {timeLeftText ? (
                     <div className={`text-xs font-medium ${isExpired ? 'text-red-400' : isLowTime ? 'text-orange-400' : isForever ? 'text-yellow-400' : 'text-slate-400'}`}>
@@ -1909,7 +1787,7 @@ export default function App() {
         )}
       </div>
       <div className="mt-6 mb-4">
-        <Button onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardType('vpn'); setView('wizard'); }}>
+        <Button onClick={() => { setWizardStep(1); setWizardPlan(null); setView('wizard'); }}>
           <Plus size={20} /> Добавить устройство
         </Button>
       </div>
@@ -1935,8 +1813,7 @@ export default function App() {
           <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4">
             <div className="text-slate-400 text-sm mb-1">Продление ключа</div>
             <div className="text-white font-medium">
-              {extendingDevice.plan_type === 'whitelist' ? 'Подписка LTE' : 
-               extendingDevice.is_trial ? 'Пробная подписка' : 'Подписка VPN'} | #{extendingDevice.id}
+{extendingDevice.is_trial ? 'Пробная подписка' : 'Подписка'} | #{extendingDevice.id}
             </div>
           </div>
         )}
@@ -2184,107 +2061,21 @@ export default function App() {
   );
 
   const BuyDeviceView = () => (
-    <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
+    <div className="min-h-full flex flex-col">
       <Header title="Новое подключение" onBack={() => setView('devices')} />
       
-      <div className="bg-slate-800 p-1 rounded-xl flex gap-1 mb-6">
-        <button 
-          onClick={() => setBuyTab('vpn')} 
-          className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${
-            buyTab === 'vpn' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          VPN
-        </button>
-        <button 
-          onClick={() => setBuyTab('whitelist')} 
-          className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all relative ${
-            buyTab === 'whitelist' ? 'bg-orange-500 text-white shadow-md' : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          Обход
-          <span className="absolute -top-2 -right-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-            NEW
-          </span>
-        </button>
+      <div className="flex-1 flex flex-col items-center justify-center text-center py-10">
+        <div className="w-20 h-20 bg-blue-600/20 rounded-full flex items-center justify-center mb-6">
+          <Shield size={40} className="text-blue-500" />
+        </div>
+        <h2 className="text-xl font-bold text-white mb-2">Подключите защиту</h2>
+        <p className="text-slate-400 mb-6 max-w-xs">
+          Единая подписка включает VPN и обход блокировок операторов
+        </p>
+        <Button onClick={() => { setWizardStep(1); setWizardPlan(null); setView('wizard'); }}>
+          Открыть мастер подключения
+        </Button>
       </div>
-
-      {buyTab === 'vpn' ? (
-        <div className="flex-1 flex flex-col">
-           <div className="text-center py-10 opacity-70">
-                <p className="mb-4">Для подключения VPN мы рекомендуем использовать мастер настройки.</p>
-                <Button onClick={() => { setWizardStep(1); setWizardPlan(null); setView('wizard'); }}>
-                    Открыть мастер подключения
-                </Button>
-           </div>
-        </div>
-      ) : (
-        <div className="flex-1 flex flex-col">
-          {/* Карточка тарифа */}
-          <div className="bg-gradient-to-r from-orange-500/10 to-pink-500/10 p-6 rounded-2xl border-2 border-orange-500/50 mb-6">
-            <div className="flex justify-between items-center mb-4">
-              <div>
-                <div className="text-xl font-bold text-white">Обход белых списков</div>
-                <div className="text-orange-300 text-sm">1 месяц подписки</div>
-              </div>
-              <div className="text-right">
-                <div className="text-3xl font-bold text-white">{WHITELIST_PRICE} ₽</div>
-              </div>
-            </div>
-            
-            <div className="space-y-2 mb-4">
-              <div className="flex items-center gap-2 text-slate-300 text-sm">
-                <CheckCircle className="text-green-400 shrink-0" size={16} />
-                <span>{WHITELIST_GB} ГБ трафика включено</span>
-              </div>
-              <div className="flex items-center gap-2 text-slate-300 text-sm">
-                <CheckCircle className="text-green-400 shrink-0" size={16} />
-                <span>Работает при «Беспилотной опасности»</span>
-              </div>
-              <div className="flex items-center gap-2 text-slate-300 text-sm">
-                <Zap className="text-orange-400 shrink-0" size={16} />
-                <span>Для мобильных операторов</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Новинка - работает при глушилках */}
-          <div className="bg-gradient-to-r from-pink-500/10 to-orange-500/10 border border-pink-500/30 p-3 rounded-xl mb-4 flex gap-3 items-start">
-              <Zap className="text-pink-400 shrink-0 mt-0.5" size={18} />
-              <div className="text-pink-300 text-xs leading-relaxed">
-                  <b className="text-pink-400">НОВИНКА!</b> Теперь работает даже при глушилках интернета. Оставайтесь на связи в любой ситуации!
-              </div>
-          </div>
-
-          <div className="bg-yellow-500/10 border border-yellow-500/20 p-3 rounded-xl mb-6 flex gap-3 items-start">
-              <AlertTriangle className="text-yellow-500 shrink-0 mt-0.5" size={18} />
-              <div className="text-yellow-400 text-xs leading-relaxed">
-                  <b>Внимание:</b> Функция экспериментальная и может быть нестабильной в некоторых регионах.
-              </div>
-          </div>
-
-          <div className="mt-auto pb-4 pt-4 border-t border-slate-800">
-             <div className="flex justify-between items-center mb-4 text-sm">
-               <span className="text-slate-400">Ваш баланс:</span>
-               <span className={`${balance < WHITELIST_PRICE ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
-             </div>
-             <Button 
-                onClick={buyWhitelist}
-                variant={balance < WHITELIST_PRICE ? "secondary" : "primary"}
-             >
-                {balance < WHITELIST_PRICE
-                    ? "Недостаточно средств" 
-                    : `Подключить за ${WHITELIST_PRICE} ₽`
-                }
-             </Button>
-             {balance < WHITELIST_PRICE && (
-               <button onClick={() => { setTopupAmount(WHITELIST_PRICE - balance); setTopupStep(1); setView('topup'); }} className="w-full mt-3 text-blue-500 text-sm font-medium hover:underline">
-                 Пополнить баланс
-               </button>
-             )}
-          </div>
-        </div>
-      )}
     </div>
   );
   
@@ -2346,9 +2137,8 @@ export default function App() {
                       method: 'POST',
                       body: JSON.stringify({
                         user_id: currentUserId,
-                        days: action.type === 'wizard' && payload.wizardType === 'vpn' ? payload.wizardPlan?.days : 30,
-                        type: action.type === 'wizard' ? payload.wizardType : 'whitelist',
-                        whitelist_gb: (action.type === 'legacy_whitelist' || payload.wizardType === 'whitelist') ? payload.whitelistGB : undefined,
+                        days: payload.wizardPlan?.days || 30,
+                        type: 'vpn',
                         price: payload.price,
                       }),
                     });
