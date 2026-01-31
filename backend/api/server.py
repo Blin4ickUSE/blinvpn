@@ -682,7 +682,7 @@ def get_user_devices():
             
             # Определяем тип устройства по plan_type
             plan_type = row['plan_type'] or 'vpn'
-            default_name = 'Обход блокировок' if plan_type == 'whitelist' else 'VPN подписка'
+            default_name = 'Подписка'
             
             # Используем custom_name если есть, иначе default
             custom_name = row['custom_name'] if 'custom_name' in row.keys() else None
@@ -1081,14 +1081,10 @@ def extend_subscription():
 
 @app.route('/api/subscription/create', methods=['POST'])
 def create_subscription():
-    """Создать подписку"""
+    """Создать единую подписку (VPN + обход блокировок)"""
     data = request.json
     user_id = data.get('user_id')
     days = data.get('days')
-    plan_type = data.get('type')  # 'vpn' or 'whitelist'
-    whitelist_gb = data.get('whitelist_gb', 0)  # Для whitelist подписки
-    use_auto_pay = data.get('use_auto_pay', False)  # Использовать автоплатеж
-    payment_method_id = data.get('payment_method_id')  # ID сохраненного способа оплаты
     is_trial = data.get('is_trial', False)  # Пробный период
     
     if not user_id or not days:
@@ -1110,41 +1106,11 @@ def create_subscription():
     if is_trial:
         if user.get('trial_used', 0) == 1:
             return jsonify({'error': 'Пробный период уже использован'}), 400
-        # Триальные настройки
         days = 1
         price = 0
-    elif plan_type == 'whitelist':
-        # Рассчитываем цену для whitelist
-        if whitelist_gb < 5 or whitelist_gb > 500:
-            return jsonify({'error': 'Whitelist GB must be between 5 and 500'}), 400
-        from backend.core.whitelist_billing import calculate_whitelist_price
-        price = calculate_whitelist_price(whitelist_gb)
     else:
-        # VPN подписка - используем фиксированные цены из планов
+        # Единая подписка - цены по дням
         price = data.get('price', days * 3.3)
-    
-    # Если используется автоплатеж, создаем платеж через YooKassa
-    if use_auto_pay and payment_method_id and plan_type == 'whitelist':
-        # Автоплатеж для whitelist подписки
-        payment = yookassa.yookassa_api.create_payment(
-            price, f"Автоплатеж: Whitelist подписка ({days} дней, {whitelist_gb} ГБ)", 
-            f"{os.getenv('MINIAPP_URL')}/success", user_id,
-            metadata={'user_id': str(user_id), 'subscription_type': 'whitelist', 'days': days, 'whitelist_gb': whitelist_gb},
-            payment_method_id=payment_method_id
-        )
-        if payment and payment.get('status') == 'succeeded':
-            # Платеж успешен, создаем подписку
-            traffic_limit_bytes = int(whitelist_gb * (1024 ** 3))
-            result = core.create_user_and_subscription(
-                user['telegram_id'], user.get('username', ''), days,
-                traffic_limit=traffic_limit_bytes,
-                plan_type='whitelist'
-            )
-            if result:
-                return jsonify({'success': True, 'subscription': result})
-            return jsonify({'error': 'Failed to create subscription'}), 500
-        else:
-            return jsonify({'error': 'Auto payment failed'}), 400
     
     # Для пробного периода не списываем баланс
     if not is_trial:
@@ -1152,30 +1118,19 @@ def create_subscription():
         if not deducted:
             return jsonify({'error': 'Insufficient balance'}), 400
     
-    # Создаем подписку
+    # Создаем подписку (единая - безлимитный трафик)
     if is_trial:
         # Пробный период - 10 ГБ трафика
         traffic_limit_bytes = int(10 * (1024 ** 3))
-        result = core.create_user_and_subscription(
-            user['telegram_id'], user.get('username', ''), days,
-            traffic_limit=traffic_limit_bytes,
-            plan_type='vpn'
-        )
-    elif plan_type == 'whitelist':
-        # Для whitelist - лимит трафика по выбору пользователя
-        traffic_limit_bytes = int(whitelist_gb * (1024 ** 3))
-        result = core.create_user_and_subscription(
-            user['telegram_id'], user.get('username', ''), days,
-            traffic_limit=traffic_limit_bytes,
-            plan_type='whitelist'
-        )
     else:
-        # Обычный VPN - безлимитный трафик (0 = unlimited)
-        result = core.create_user_and_subscription(
-            user['telegram_id'], user.get('username', ''), days,
-            traffic_limit=0,
-            plan_type='vpn'
-        )
+        # Единая подписка - безлимитный трафик
+        traffic_limit_bytes = 0
+    
+    result = core.create_user_and_subscription(
+        user['telegram_id'], user.get('username', ''), days,
+        traffic_limit=traffic_limit_bytes,
+        plan_type='vpn'
+    )
     
     if result:
         conn = database.get_db_connection()
@@ -1187,9 +1142,7 @@ def create_subscription():
             description = "Активация пробного периода (1 день)"
             trans_type = 'trial'
         else:
-            description = f"{'Whitelist' if plan_type == 'whitelist' else 'VPN'} подписка ({days} дней)"
-            if plan_type == 'whitelist':
-                description += f" - {whitelist_gb} ГБ"
+            description = f"Подписка ({days} дней)"
             trans_type = 'subscription'
         
         # Создаем транзакцию
