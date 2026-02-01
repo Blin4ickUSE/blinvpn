@@ -1443,7 +1443,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
               wasPaid: false,
               isPartner: !!u.is_partner,
               partnerBalance: u.partner_balance ?? 0,
-              partnerRate: u.partner_rate ?? 20,
+              partnerRate: u.partner_rate ?? 25,
               referrals: 0,
               totalEarned: u.total_earned ?? 0,
               inBlacklist: !!u.in_blacklist,
@@ -2610,7 +2610,7 @@ const TariffsPlansPage: React.FC<{ onToast: (title: string, msg: string, type: T
                         <h3 className="text-lg font-bold text-white flex items-center">
                             <Zap size={20} className="mr-2 text-blue-500" /> Тарифы подписки
                         </h3>
-                        <p className="text-sm text-gray-400 mt-1">VPN + обход блокировок операторов</p>
+                        <p className="text-sm text-gray-400 mt-1">VPN + обход блокировок операторов. Чем больше срок — тем выгоднее: 3 мес -15%, 6 мес -25%, год -35%</p>
                     </div>
                     <button 
                         onClick={() => setEditingPlan({ plan_type: 'vpn', name: '', price: 0, duration_days: 30 })}
@@ -2620,11 +2620,14 @@ const TariffsPlansPage: React.FC<{ onToast: (title: string, msg: string, type: T
                     </button>
                 </div>
                 <div className="grid gap-4">
-                    {plans.map(plan => (
+                    {plans.map(plan => {
+                        const d = plan.duration_days;
+                        const discountLabel = d === 90 ? '-15% выгода' : d === 180 ? '-25% выгода' : d === 365 ? '-35% выгода' : null;
+                        return (
                         <div key={plan.id} className="bg-gray-800 border border-gray-700 rounded-xl p-4 flex justify-between items-center">
                             <div>
                                 <div className="font-bold text-white">{plan.name}</div>
-                                <div className="text-sm text-gray-400">{plan.duration_days} дней</div>
+                                <div className="text-sm text-gray-400">{plan.duration_days} дней {discountLabel && <span className="text-green-400 font-medium"> · {discountLabel}</span>}</div>
                             </div>
                             <div className="flex items-center gap-4">
                                 <div className="text-xl font-bold text-blue-400">{plan.price} ₽</div>
@@ -2634,7 +2637,7 @@ const TariffsPlansPage: React.FC<{ onToast: (title: string, msg: string, type: T
                                 </div>
                             </div>
                         </div>
-                    ))}
+                    );})}
                     {plans.length === 0 && (
                         <div className="text-center text-gray-500 py-8">Нет тарифов</div>
                     )}
