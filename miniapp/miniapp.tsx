@@ -261,15 +261,14 @@ const PRIVACY_POLICY_TEXT = `
 const VPN_PLANS_DEFAULT: Plan[] = [
   { id: 'trial', duration: 'Пробный период', price: 0, highlight: false, days: 1, isTrial: true },
   { id: '1m', duration: '1 месяц', price: 199, highlight: false, days: 30 },
-  { id: '3m', duration: '3 месяца', price: 499, highlight: false, days: 90 },   // -15%, вместо 597₽
-  { id: '6m', duration: '6 месяцев', price: 899, highlight: true, days: 180 },  // -25%, вместо 1194₽ 👑
-  { id: '1y', duration: '1 год', price: 1499, highlight: false, days: 365 },    // -35%, вместо 2388₽
+  { id: '3m', duration: '3 месяца', price: 499, highlight: false, days: 90 },   // -15%, вместо 599₽
+  { id: '6m', duration: '6 месяцев', price: 899, highlight: true, days: 180 },  // -25%, вместо 1199₽ 👑
+  { id: '1y', duration: '1 год', price: 1499, highlight: false, days: 365 },    // -35%, вместо 2399₽
 ];
 
 const PRESET_AMOUNTS = [100, 250, 500, 1000, 2000, 5000];
 
 // Платежные методы загружаются из API с комиссиями, но оставляем дефолтные
-// ВРЕМЕННО: только СБП через YooKassa
 const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
   // КАРТА ВРЕМЕННО ОТКЛЮЧЕНА
   // { 
@@ -287,30 +286,23 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
       { id: 'platega_sbp', name: '⭐ | Platega', feePercent: 0 },
       { id: 'yookassa_sbp', name: 'YooKassa', feePercent: 0 }
     ]
-  },
-  { 
-    id: 'card', 
-    name: 'Банковская карта', 
-    icon: '💳', 
-    feePercent: 0, 
-    variants: [
-      { id: 'platega_card', name: 'Platega', feePercent: 0 }
-    ]
-  },
-  // КРИПТОВАЛЮТА ОТКЛЮЧЕНА
+  }
+  // КАРТА ВРЕМЕННО ОТКЛЮЧЕНА
   // { 
-  //   id: 'crypto', 
-  //   name: 'Криптовалюта', 
-  //   icon: '🪙', 
-  //   feePercent: 0 
-  // },
+  //   id: 'card', 
+  //   name: 'Банковская карта', 
+  //   icon: '💳', 
+  //   feePercent: 0, 
+  //   variants: [
+  //     { id: 'platega_card', name: 'Platega', feePercent: 0 }
+  //   ]
+  // }
 ];
 
 const WITHDRAW_METHODS = [
   { id: 'balance', name: 'На баланс', icon: <Wallet size={20} />, min: 1 },
-  { id: 'card', name: 'На карту', icon: <CreditCard size={20} />, min: 200 },
-  // КРИПТОВАЛЮТА ОТКЛЮЧЕНА
-  // { id: 'crypto', name: 'Криптокошелек', icon: <img src="https://cryptologos.cc/logos/tether-usdt-logo.svg?v=026" className="w-5 h-5 invert" alt="USDT" />, min: 200 },
+  { id: 'card', name: 'На карту', icon: <CreditCard size={20} />, min: 500 },
+  { id: 'crypto', name: 'Криптокошелек', icon: <img src="https://cryptologos.cc/logos/tether-usdt-logo.svg?v=026" className="w-5 h-5 invert" alt="USDT" />, min: 500 },
 ];
 
 const PLATFORMS: { id: PlatformId; name: string; icon: React.ReactNode }[] = [
@@ -1165,7 +1157,7 @@ export default function App() {
     } else if (step === 2) {
       if (!method) return alert("Выберите метод");
       if (method === 'card' || method === 'crypto') {
-        if (numAmount < 200) return alert("Минимальная сумма вывода на карту/крипто - 200₽");
+        if (numAmount < 500) return alert("Минимальная сумма вывода на карту/крипто - 500₽");
         
         // Проверка 30-дневного лимита для карты
         if (method === 'card' && lastCardWithdrawal) {
@@ -1545,10 +1537,14 @@ export default function App() {
                 </div>
             </div>
 
-            <p className="text-slate-400 text-sm mb-4">Выберите период подписки:</p>
+            <p className="text-slate-400 text-sm mb-2">Выберите период подписки:</p>
+            <p className="text-amber-400/90 text-xs font-medium mb-4">Чем больше срок — тем выгоднее: скидка до -35%</p>
             
             <div className="space-y-3">
-                {(vpnPlans || VPN_PLANS_DEFAULT).filter(plan => !plan.isTrial || !isTrialUsed).map((plan) => (
+                {(vpnPlans || VPN_PLANS_DEFAULT).filter(plan => !plan.isTrial || !isTrialUsed).map((plan) => {
+                    const days = plan.days ?? (plan as any).duration_days;
+                    const discountText = days === 90 ? '-15% выгода' : days === 180 ? '-25% выгода' : days === 365 ? '-35% выгода' : (plan.id === '3m' ? '-15% выгода' : plan.id === '6m' ? '-25% выгода' : plan.id === '1y' ? '-35% выгода' : null);
+                    return (
                     <div 
                         key={plan.id}
                         onClick={() => { setWizardPlan(plan); setWizardStep(3); }}
@@ -1563,16 +1559,14 @@ export default function App() {
                                 {plan.highlight && <Crown size={18} fill="currentColor" />}
                             </div>
                             {plan.isTrial && <div className="text-xs text-purple-300">Попробуйте бесплатно</div>}
-                            {plan.id === '3m' && <div className="text-xs text-green-400">-15% экономия</div>}
-                            {plan.id === '6m' && <div className="text-xs text-amber-400">-25% экономия</div>}
-                            {plan.id === '1y' && <div className="text-xs text-green-400">-35% экономия</div>}
+                            {discountText && <div className={`text-xs font-medium ${days === 180 ? 'text-amber-400' : 'text-green-400'}`}>{discountText}</div>}
                         </div>
                         <div className="text-right">
                             <div className={`font-bold text-xl ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>{plan.price} ₽</div>
                             <ChevronRight size={20} className="text-slate-500 ml-auto mt-1" />
                         </div>
                     </div>
-                ))}
+                );})}
             </div>
             
             {/* Что включено */}
@@ -2432,7 +2426,7 @@ export default function App() {
             <div className="text-xs text-slate-500">Приглашено</div>
           </div>
           <div>
-            <div className="text-xl font-bold text-white">20%</div>
+            <div className="text-xl font-bold text-white">25%</div>
             <div className="text-xs text-slate-500">Ваш доход</div>
           </div>
         </div>
@@ -2697,9 +2691,9 @@ export default function App() {
         {withdrawState.step === 1 && (
           <div className="space-y-4">
             <div className="text-sm text-slate-400">Доступно: <span className="text-green-500 font-bold">{referrals.partnerBalance.toFixed(2)} ₽</span></div>
-            {referrals.partnerBalance < 200 && (
+            {referrals.partnerBalance < 500 && (
               <div className="p-3 bg-yellow-900/20 border border-yellow-500/30 rounded-xl text-yellow-400 text-sm">
-                Минимальная сумма для вывода на карту или крипто — 200₽. На баланс можно вывести любую сумму.
+                Минимальная сумма для вывода на карту или криптовалюту — 500₽. На баланс можно вывести любую сумму.
               </div>
             )}
             <input
