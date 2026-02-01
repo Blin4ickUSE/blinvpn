@@ -382,16 +382,15 @@ const INSTRUCTIONS: Record<string, PlatformData> = {
         ]
       },
       {
-        title: '2. Добавление подписки или ключа',
-        desc: 'Нажмите «Добавить подписку» для автоматической настройки или скопируйте ключ и вставьте вручную.',
+        title: '2. Добавление подписки',
+        desc: 'Нажмите кнопку ниже — подписка добавится в приложение автоматически.',
         actions: [
-          { label: 'Добавить подписку', type: 'trigger_add', primary: true },
-          { label: 'Скопировать ключ', type: 'copy_key', primary: false }
+          { label: 'Добавить подписку', type: 'trigger_add', primary: true }
         ]
       },
       {
         title: '3. Настройка',
-        desc: 'Вставьте скопированный ключ в приложение (или подписка подставится сама) и подключитесь.'
+        desc: 'В приложении обновите подписку и подключитесь.'
       }
     ]
   },
@@ -408,11 +407,10 @@ const INSTRUCTIONS: Record<string, PlatformData> = {
         ]
       },
       {
-        title: '2. Добавление подписки или ключа',
-        desc: 'Нажмите «Добавить подписку» для автоматической настройки или скопируйте ключ и вставьте вручную.',
+        title: '2. Добавление подписки',
+        desc: 'Нажмите кнопку ниже — подписка добавится в приложение автоматически.',
         actions: [
-          { label: 'Добавить подписку', type: 'trigger_add', primary: true },
-          { label: 'Скопировать ключ', type: 'copy_key', primary: false }
+          { label: 'Добавить подписку', type: 'trigger_add', primary: true }
         ]
       }
     ]
@@ -430,11 +428,10 @@ const INSTRUCTIONS: Record<string, PlatformData> = {
         ]
       },
       {
-        title: '2. Добавление подписки или ключа',
-        desc: 'Нажмите «Добавить подписку» для автоматической настройки или скопируйте ключ и вставьте вручную.',
+        title: '2. Добавление подписки',
+        desc: 'Нажмите кнопку ниже — подписка добавится в приложение автоматически.',
         actions: [
-          { label: 'Добавить подписку', type: 'trigger_add', primary: true },
-          { label: 'Скопировать ключ', type: 'copy_key', primary: false }
+          { label: 'Добавить подписку', type: 'trigger_add', primary: true }
         ]
       }
     ]
@@ -1662,16 +1659,7 @@ export default function App() {
                                 <button
                                 key={aIdx}
                                 onClick={async () => {
-                                    if (action.type === 'copy_key') {
-                                        // Получаем ключ первого активного устройства или показываем сообщение
-                                        const activeDevice = devices.find(d => d.id);
-                                        if (activeDevice && deviceKeys.has(activeDevice.id)) {
-                                            handleCopy('', activeDevice.id);
-                                        } else {
-                                            alert('У вас нет активных устройств с ключами. Сначала создайте подписку.');
-                                        }
-                                    } else if (action.type === 'trigger_add') {
-                                        // Открываем Happ с зашифрованной ссылкой
+                                    if (action.type === 'trigger_add') {
                                         await openHappWithSubscription();
                                     } else if (action.url) {
                                         window.open(action.url, '_blank');
@@ -2302,15 +2290,7 @@ export default function App() {
                     <button
                       key={aIdx}
                       onClick={async () => {
-                        if (action.type === 'copy_key') {
-                          // Подписка работает на любой платформе — берём любое устройство с ключом
-                          const deviceWithKey = devices.find(d => deviceKeys.has(d.id));
-                          if (deviceWithKey) {
-                            handleCopy('', deviceWithKey.id);
-                          } else {
-                            alert('У вас нет активных устройств с ключами. Сначала создайте подписку.');
-                          }
-                        } else if (action.type === 'trigger_add') {
+                        if (action.type === 'trigger_add') {
                           await openHappWithSubscription();
                         } else if (action.type === 'nav_android') {
                           setActivePlatform('android');
