@@ -381,7 +381,7 @@ def get_user_info():
                 msg = (
                     f"🎉 <b>Новый реферал!</b>\n\n"
                     f"Пользователь <b>{new_user_name}</b> присоединился по вашей ссылке.\n"
-                    f"Вы будете получать {referrer.get('partner_rate', 20)}% с его покупок!"
+                    f"Вы будете получать {referrer.get('partner_rate', 25)}% с его покупок!"
                 )
                 core.send_notification_to_user(referrer['telegram_id'], msg)
                 logger.info(f"Notified referrer {ref} about new referral {telegram_id}")
@@ -445,7 +445,7 @@ def get_user_info():
         'partner_balance': stats.get('partner_balance', 0),  # Доступно для вывода
         'referrals_count': stats.get('referrals_count', 0),
         'referral_earned': stats.get('total_earned', 0),  # Всего заработано
-        'referral_rate': stats.get('rate', 20),
+        'referral_rate': stats.get('rate', 25),
         'is_new_user': is_new_user,
         'trial_used': user.get('trial_used', 0),  # Был ли использован пробный период
         'last_card_withdrawal': last_card_withdrawal,  # Дата последнего вывода на карту
@@ -2309,7 +2309,7 @@ def get_user_referrals():
         referrals_rows = cursor.fetchall()
 
         # Загружаем ставки
-        rate = user.get("partner_rate", 20) / 100
+        rate = user.get("partner_rate", 25) / 100
 
         referrals = []
         for r in referrals_rows:
@@ -2894,7 +2894,7 @@ def get_full_statistics():
         top_referrers = []
         for idx, row in enumerate(top_referrers_raw, 1):
             username = row['username'] or f"id{row['id']}"
-            rate = row['partner_rate'] or 20
+            rate = row['partner_rate'] or 25
             total_spent = float(row['total_spent'] or 0)
             earned = total_spent * (rate / 100)
             top_referrers.append({
@@ -3842,7 +3842,7 @@ def mass_user_action():
                 affected += 1
                 
             elif action_type == 'MASS_SET_PARTNER':
-                rate = int(value) if value else 20
+                rate = int(value) if value else 25
                 cursor.execute("UPDATE users SET is_partner = 1, partner_rate = ? WHERE id = ?", (rate, user_id))
                 if notify:
                     notifications.append((telegram_id, f"🤝 Вы стали партнером! Ваша комиссия: {rate}%"))
