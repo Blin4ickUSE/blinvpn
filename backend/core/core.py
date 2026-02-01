@@ -532,7 +532,7 @@ def get_referral_stats(user_id: int) -> Dict[str, Any]:
             'referrals_count': referrals_count,
             'partner_balance': partner_balance,  # Доступно для вывода
             'total_earned': total_earned,  # Всего заработано за всё время
-            'rate': user.get('partner_rate', 20)
+            'rate': user.get('partner_rate', 25)
         }
     finally:
         conn.close()
