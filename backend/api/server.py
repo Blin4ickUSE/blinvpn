@@ -586,7 +586,8 @@ def get_user_devices():
     if not user:
         return jsonify({'error': 'User not found'}), 404
     
-    # Синхронизируем traffic_used из Remnawave
+    # Синхронизируем traffic_used и expiry_date из Remnawave (источник истины для даты окончания)
+    remnawave_expiry = {}  # key_uuid -> expire_at (datetime)
     try:
         rw_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
         if rw_users:
@@ -594,21 +595,30 @@ def get_user_devices():
             cursor_sync = conn_sync.cursor()
             for rw_user in rw_users:
                 rw_uuid = rw_user.uuid if hasattr(rw_user, 'uuid') else rw_user.get('uuid')
-                # Получаем used_traffic_bytes из user_traffic
+                # Трафик
                 traffic_used = 0
                 if hasattr(rw_user, 'user_traffic') and rw_user.user_traffic:
                     traffic_used = rw_user.user_traffic.used_traffic_bytes
                 elif hasattr(rw_user, 'used_traffic_bytes'):
                     traffic_used = rw_user.used_traffic_bytes
-                
                 if rw_uuid and traffic_used > 0:
                     cursor_sync.execute("""
                         UPDATE vpn_keys SET traffic_used = ? WHERE key_uuid = ?
                     """, (traffic_used, rw_uuid))
+                # Дата окончания из Remnawave — главный источник
+                expire_at = getattr(rw_user, 'expire_at', None) or (rw_user.get('expireAt') if isinstance(rw_user, dict) else None)
+                if rw_uuid and expire_at:
+                    if isinstance(expire_at, str):
+                        from datetime import datetime
+                        expire_at = datetime.fromisoformat(expire_at.replace('Z', '+00:00').replace('+00:00', ''))
+                    remnawave_expiry[rw_uuid] = expire_at
+                    cursor_sync.execute("""
+                        UPDATE vpn_keys SET expiry_date = ? WHERE key_uuid = ?
+                    """, (expire_at.isoformat() if hasattr(expire_at, 'isoformat') else expire_at, rw_uuid))
             conn_sync.commit()
             conn_sync.close()
     except Exception as e:
-        logger.warning(f"Failed to sync traffic from Remnawave: {e}")
+        logger.warning(f"Failed to sync traffic/expiry from Remnawave: {e}")
     
     conn = database.get_db_connection()
     cursor = conn.cursor()
@@ -639,20 +649,30 @@ def get_user_devices():
             else:
                 added_formatted = datetime.now().strftime('%d.%m.%Y')
             
-            # Рассчитываем оставшееся время с точностью до минуты
+            # Дата окончания: приоритет у Remnawave (источник истины), иначе из БД
+            expiry_dt_src = remnawave_expiry.get(row['key_uuid']) if row['key_uuid'] else None
+            if expiry_dt_src is None and row['expiry_date']:
+                try:
+                    if isinstance(row['expiry_date'], str):
+                        expiry_dt_src = datetime.fromisoformat(row['expiry_date'].replace('Z', '+00:00'))
+                    else:
+                        expiry_dt_src = row['expiry_date']
+                except Exception:
+                    expiry_dt_src = None
+            if isinstance(expiry_dt_src, str):
+                try:
+                    expiry_dt_src = datetime.fromisoformat(expiry_dt_src.replace('Z', '+00:00'))
+                except Exception:
+                    expiry_dt_src = None
+
             days_left = None
             hours_left = None
             is_expired = False
             expiry_date_str = None
-            if row['expiry_date']:
+            if expiry_dt_src:
                 try:
-                    if isinstance(row['expiry_date'], str):
-                        expiry_dt = datetime.fromisoformat(row['expiry_date'].replace('Z', '+00:00'))
-                    else:
-                        expiry_dt = row['expiry_date']
-                    
-                    # Убираем timezone info для корректного сравнения
-                    if expiry_dt.tzinfo:
+                    expiry_dt = expiry_dt_src
+                    if hasattr(expiry_dt, 'tzinfo') and expiry_dt.tzinfo:
                         expiry_dt = expiry_dt.replace(tzinfo=None)
                     
                     now = datetime.now()
