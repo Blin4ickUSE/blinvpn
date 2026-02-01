@@ -46,7 +46,7 @@ def init_database():
                 referral_code TEXT UNIQUE,
                 referred_by INTEGER,
                 is_partner INTEGER DEFAULT 0,
-                partner_rate INTEGER DEFAULT 20,
+                partner_rate INTEGER DEFAULT 25,
                 partner_balance REAL DEFAULT 0,
                 total_earned REAL DEFAULT 0,
                 trial_used INTEGER DEFAULT 0,
@@ -393,6 +393,9 @@ def init_database():
                     INSERT INTO tariff_plans (plan_type, name, price, duration_days, sort_order)
                     VALUES ('vpn', '6 месяцев', 899, 180, 3)
                 """)
+        
+        # Реферальная ставка 25%: обновить существующих партнёров с 20% на 25%
+        cursor.execute("UPDATE users SET partner_rate = 25 WHERE partner_rate = 20")
         
         # Настройки whitelist
         cursor.execute("SELECT COUNT(*) FROM whitelist_settings")
@@ -764,7 +767,7 @@ def credit_referral_income(user_id: int, purchase_amount: float, description: st
             return None
         
         referrer_id = row['referrer_id']
-        partner_rate = row['partner_rate'] or 20
+        partner_rate = row['partner_rate'] or 25
         income = purchase_amount * (partner_rate / 100)
         if income <= 0:
             return None
