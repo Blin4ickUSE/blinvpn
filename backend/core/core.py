@@ -6,7 +6,7 @@ import logging
 import asyncio
 import requests
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from backend.database import database
 from backend.api import remnawave, yookassa, heleket, platega
 from backend.core import abuse_detected
@@ -430,6 +430,73 @@ def check_blacklist(telegram_id: int) -> bool:
         return cursor.fetchone() is not None
     finally:
         conn.close()
+
+
+# МСК = UTC+3 для единообразного отображения времени окончания
+MSK_UTC_OFFSET_HOURS = 3
+
+
+def _utc_to_msk(dt: datetime) -> datetime:
+    """Преобразовать datetime (UTC или naive как UTC) в наивное МСК для отображения."""
+    if getattr(dt, 'tzinfo', None):
+        off = dt.utcoffset()
+        dt = dt.replace(tzinfo=None) - (timedelta(seconds=off.total_seconds()) if off else timedelta(0))
+    return dt + timedelta(hours=MSK_UTC_OFFSET_HOURS)
+
+
+def format_expiry_for_notification(expiry_date_str: str) -> str:
+    """Форматировать дату истечения для уведомлений в читаемом формате МСК."""
+    try:
+        if isinstance(expiry_date_str, str):
+            dt = datetime.fromisoformat(expiry_date_str.replace('Z', '+00:00').replace('+00:00', ''))
+        else:
+            dt = expiry_date_str
+        if getattr(dt, 'tzinfo', None):
+            off = dt.utcoffset()
+            dt = dt.replace(tzinfo=None) - (timedelta(seconds=off.total_seconds()) if off else timedelta(0))
+        dt_msk = _utc_to_msk(dt)
+        months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+                  'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря']
+        return f"{dt_msk.day} {months[dt_msk.month-1]} {dt_msk.year} в {dt_msk.strftime('%H:%M')}"
+    except Exception:
+        return str(expiry_date_str) if expiry_date_str else ''
+
+
+def sync_expiry_from_remnawave() -> None:
+    """
+    Синхронизировать expiry_date из Remnawave для всех активных ключей.
+    Единый источник истины для даты окончания подписки (уведомления, панель, miniapp).
+    """
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT DISTINCT u.telegram_id FROM vpn_keys vk
+            JOIN users u ON vk.user_id = u.id
+            WHERE vk.status = 'Active' AND vk.key_uuid IS NOT NULL AND u.telegram_id IS NOT NULL
+        """)
+        telegram_ids = [row['telegram_id'] for row in cursor.fetchall()]
+        for telegram_id in telegram_ids:
+            try:
+                rw_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
+                for rw_user in rw_users or []:
+                    rw_uuid = rw_user.uuid if hasattr(rw_user, 'uuid') else rw_user.get('uuid')
+                    expire_at = getattr(rw_user, 'expire_at', None) or (rw_user.get('expireAt') if isinstance(rw_user, dict) else None)
+                    if not rw_uuid or not expire_at:
+                        continue
+                    if isinstance(expire_at, str):
+                        expire_at = datetime.fromisoformat(expire_at.replace('Z', '+00:00').replace('+00:00', ''))
+                    if hasattr(expire_at, 'tzinfo') and expire_at.tzinfo:
+                        expire_at = expire_at.replace(tzinfo=None) - timedelta(seconds=expire_at.utcoffset().total_seconds() if expire_at.utcoffset() else 0)
+                    cursor.execute("""
+                        UPDATE vpn_keys SET expiry_date = ? WHERE key_uuid = ?
+                    """, (expire_at.isoformat(), rw_uuid))
+            except Exception as e:
+                logger.warning(f"sync_expiry_from_remnawave for telegram_id {telegram_id}: {e}")
+        conn.commit()
+    finally:
+        conn.close()
+
 
 def apply_promocode(user_id: int, code: str) -> Dict[str, Any]:
     """Применить промокод"""
