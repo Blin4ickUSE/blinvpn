@@ -5,7 +5,7 @@ import os
 import logging
 import hmac
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, unquote
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -31,30 +31,40 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# МСК = UTC+3 (единый источник для отображения времени окончания)
+MSK_UTC_OFFSET_HOURS = 3
+
+
+def _utc_to_msk(dt: datetime) -> datetime:
+    """Преобразовать datetime (UTC или naive как UTC) в наивное МСК время для отображения."""
+    if dt.tzinfo:
+        dt = dt.replace(tzinfo=None) - timedelta(seconds=dt.utcoffset().total_seconds() if dt.utcoffset() else 0)
+    return dt + timedelta(hours=MSK_UTC_OFFSET_HOURS)
+
+
 def format_datetime_msk(dt: datetime = None) -> str:
-    """Форматировать datetime в ISO формат без миллисекунд (для МСК)"""
+    """Форматировать datetime в ISO формат для отображения в МСК (храним в UTC, показываем МСК)."""
     if dt is None:
-        dt = datetime.now()
-    # Убираем timezone info если есть, чтобы хранить как локальное МСК время
-    if dt.tzinfo is not None:
-        dt = dt.replace(tzinfo=None)
-    return dt.strftime('%Y-%m-%dT%H:%M:%S')
+        dt = datetime.now(timezone.utc).replace(tzinfo=None)
+    dt_msk = _utc_to_msk(dt)
+    return dt_msk.strftime('%Y-%m-%dT%H:%M:%S')
 
 
 def format_expiry_for_notification(expiry_date_str: str) -> str:
-    """Форматировать дату истечения для уведомлений в читаемом формате МСК"""
+    """Форматировать дату истечения для уведомлений в читаемом формате МСК (источник истины — UTC в БД)."""
     try:
         if isinstance(expiry_date_str, str):
             dt = datetime.fromisoformat(expiry_date_str.replace('Z', '+00:00').replace('+00:00', ''))
         else:
             dt = expiry_date_str
-        
-        # Форматируем в читаемый вид
-        months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 
+        if hasattr(dt, 'tzinfo') and dt.tzinfo:
+            dt = dt.replace(tzinfo=None) - timedelta(seconds=dt.utcoffset().total_seconds() if dt.utcoffset() else 0)
+        dt_msk = _utc_to_msk(dt)
+        months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
                   'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря']
-        return f"{dt.day} {months[dt.month-1]} {dt.year} в {dt.strftime('%H:%M')}"
-    except:
-        return expiry_date_str
+        return f"{dt_msk.day} {months[dt_msk.month-1]} {dt_msk.year} в {dt_msk.strftime('%H:%M')}"
+    except Exception:
+        return str(expiry_date_str) if expiry_date_str else ''
 
 # Секретный ключ для аутентификации панели (legacy)
 PANEL_SECRET = os.getenv('PANEL_SECRET', 'change_this_secret')
@@ -475,6 +485,9 @@ def create_payment():
         }), 403
     
     return_url = f"{os.getenv('MINIAPP_URL', '')}/success"
+    failed_url = f"{os.getenv('MINIAPP_URL', '')}/failed"
+    if not failed_url.strip('/'):
+        failed_url = return_url  # fallback
     
     try:
         if method == 'yookassa' or method == 'yookassa_card':
@@ -535,8 +548,10 @@ def create_payment():
                 })
         
         elif method == 'platega_card':
-            # Банковская карта через Platega
-            payment = platega.platega_api.create_card_payment(amount, user_id)
+            # Банковская карта через Platega (return_url/failed_url обязательны для редиректа после оплаты)
+            payment = platega.platega_api.create_card_payment(
+                amount, user_id, return_url=return_url, failed_url=failed_url
+            )
             if payment:
                 return jsonify({
                     'payment_id': payment.get('id'),
@@ -546,7 +561,9 @@ def create_payment():
         
         elif method == 'platega_sbp':
             # СБП через Platega
-            payment = platega.platega_api.create_sbp_payment(amount, user_id)
+            payment = platega.platega_api.create_sbp_payment(
+                amount, user_id, return_url=return_url, failed_url=failed_url
+            )
             if payment:
                 return jsonify({
                     'payment_id': payment.get('id'),
@@ -673,10 +690,10 @@ def get_user_devices():
                 try:
                     expiry_dt = expiry_dt_src
                     if hasattr(expiry_dt, 'tzinfo') and expiry_dt.tzinfo:
-                        expiry_dt = expiry_dt.replace(tzinfo=None)
-                    
-                    now = datetime.now()
-                    diff = expiry_dt - now
+                        expiry_dt = expiry_dt.replace(tzinfo=None) - timedelta(seconds=expiry_dt.utcoffset().total_seconds() if expiry_dt.utcoffset() else 0)
+                    # Сравнение в UTC (expiry в БД/Remnawave хранится как UTC)
+                    now_utc = datetime.utcnow()
+                    diff = expiry_dt - now_utc
                     total_seconds = diff.total_seconds()
                     
                     if total_seconds <= 0:
@@ -1705,21 +1722,33 @@ def get_user_subscriptions(user_id: int):
         
         rows = cursor.fetchall()
         
-        # Получаем трафик из Remnawave
+        # Трафик и дата окончания из Remnawave (единый источник истины)
         remnawave_traffic = {}
+        remnawave_expiry = {}
         if telegram_id:
             try:
                 rw_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
-                for rw_user in rw_users:
-                    if hasattr(rw_user, 'uuid'):
-                        traffic_used = 0
-                        if hasattr(rw_user, 'user_traffic') and rw_user.user_traffic:
-                            traffic_used = rw_user.user_traffic.used_traffic_bytes
-                        elif hasattr(rw_user, 'used_traffic_bytes'):
-                            traffic_used = rw_user.used_traffic_bytes
-                        remnawave_traffic[rw_user.uuid] = traffic_used
+                for rw_user in rw_users or []:
+                    rw_uuid = rw_user.uuid if hasattr(rw_user, 'uuid') else rw_user.get('uuid')
+                    if not rw_uuid:
+                        continue
+                    traffic_used = 0
+                    if hasattr(rw_user, 'user_traffic') and rw_user.user_traffic:
+                        traffic_used = rw_user.user_traffic.used_traffic_bytes
+                    elif hasattr(rw_user, 'used_traffic_bytes'):
+                        traffic_used = rw_user.used_traffic_bytes
+                    remnawave_traffic[rw_uuid] = traffic_used
+                    expire_at = getattr(rw_user, 'expire_at', None) or (rw_user.get('expireAt') if isinstance(rw_user, dict) else None)
+                    if expire_at:
+                        if isinstance(expire_at, str):
+                            expire_at = datetime.fromisoformat(expire_at.replace('Z', '+00:00').replace('+00:00', ''))
+                        if getattr(expire_at, 'tzinfo', None):
+                            expire_at = expire_at.replace(tzinfo=None) - timedelta(seconds=expire_at.utcoffset().total_seconds() if expire_at.utcoffset() else 0)
+                        remnawave_expiry[rw_uuid] = expire_at
+                        cursor.execute("UPDATE vpn_keys SET expiry_date = ? WHERE key_uuid = ?", (expire_at.isoformat(), rw_uuid))
+                conn.commit()
             except Exception as e:
-                logger.warning(f"Failed to sync traffic from Remnawave: {e}")
+                logger.warning(f"Failed to sync traffic/expiry from Remnawave: {e}")
         
         subscriptions = []
         
@@ -1727,19 +1756,23 @@ def get_user_subscriptions(user_id: int):
             days_left = 0
             hours_left = 0
             is_expired = False
-            if row['expiry_date']:
+            expiry_date_value = row['expiry_date']
+            expiry_dt_src = remnawave_expiry.get(row['key_uuid']) if row['key_uuid'] else None
+            if expiry_dt_src is None and row['expiry_date']:
                 try:
                     if isinstance(row['expiry_date'], str):
-                        expiry_dt = datetime.fromisoformat(row['expiry_date'].replace('Z', '+00:00'))
+                        expiry_dt_src = datetime.fromisoformat(row['expiry_date'].replace('Z', '+00:00'))
                     else:
-                        expiry_dt = row['expiry_date']
-                    
-                    if expiry_dt.tzinfo:
-                        expiry_dt = expiry_dt.replace(tzinfo=None)
-                    
-                    diff = expiry_dt - datetime.now()
+                        expiry_dt_src = row['expiry_date']
+                except Exception:
+                    expiry_dt_src = None
+            if expiry_dt_src:
+                try:
+                    if getattr(expiry_dt_src, 'tzinfo', None):
+                        expiry_dt_src = expiry_dt_src.replace(tzinfo=None) - timedelta(seconds=expiry_dt_src.utcoffset().total_seconds() if expiry_dt_src.utcoffset() else 0)
+                    diff = expiry_dt_src - datetime.utcnow().replace(tzinfo=None)
                     total_seconds = diff.total_seconds()
-                    
+                    expiry_date_value = expiry_dt_src.isoformat()
                     if total_seconds <= 0:
                         is_expired = True
                         days_left = 0
@@ -1749,7 +1782,7 @@ def get_user_subscriptions(user_id: int):
                         total_hours = total_seconds / 3600
                         days_left = int(total_hours / 24)
                         hours_left = int(math.ceil(total_hours % 24))
-                except:
+                except Exception:
                     is_expired = True
             
             # Получаем актуальный трафик из Remnawave
@@ -1757,11 +1790,10 @@ def get_user_subscriptions(user_id: int):
             key_uuid = row['key_uuid']
             if key_uuid and key_uuid in remnawave_traffic:
                 traffic_used = float(remnawave_traffic[key_uuid])
-                # Обновляем в БД
                 try:
                     cursor.execute("UPDATE vpn_keys SET traffic_used = ? WHERE key_uuid = ?", 
                                  (traffic_used, key_uuid))
-                except:
+                except Exception:
                     pass
             
             subscriptions.append({
@@ -1769,7 +1801,7 @@ def get_user_subscriptions(user_id: int):
                 'key_uuid': row['key_uuid'],
                 'short_uuid': row['key_uuid'][:8] if row['key_uuid'] else None,
                 'status': row['status'],
-                'expiry_date': row['expiry_date'],
+                'expiry_date': expiry_date_value,
                 'days_left': days_left if days_left is not None else 0,
                 'traffic_used': traffic_used,
                 'traffic_limit': float(row['traffic_limit'] or 0),
@@ -1846,7 +1878,7 @@ def unban_user(user_id: int):
 @app.route('/api/panel/keys', methods=['GET'])
 @require_auth
 def get_keys():
-    """Получить список ключей VPN с синхронизацией трафика из Remnawave"""
+    """Получить список ключей VPN с синхронизацией трафика и даты окончания из Remnawave"""
     limit = request.args.get('limit', 100, type=int)
     offset = request.args.get('offset', 0, type=int)
     
@@ -1884,21 +1916,37 @@ def get_keys():
             if row['telegram_id']:
                 telegram_ids.add(row['telegram_id'])
         
-        # Получаем трафик из Remnawave для всех ключей
+        # Трафик и дата окончания из Remnawave (единый источник истины)
         remnawave_traffic = {}
+        remnawave_expiry = {}
         try:
             for telegram_id in telegram_ids:
                 rw_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
-                for rw_user in rw_users:
-                    if hasattr(rw_user, 'uuid'):
-                        traffic_used = 0
-                        if hasattr(rw_user, 'user_traffic') and rw_user.user_traffic:
-                            traffic_used = rw_user.user_traffic.used_traffic_bytes
-                        elif hasattr(rw_user, 'used_traffic_bytes'):
-                            traffic_used = rw_user.used_traffic_bytes
-                        remnawave_traffic[rw_user.uuid] = traffic_used
+                for rw_user in rw_users or []:
+                    rw_uuid = rw_user.uuid if hasattr(rw_user, 'uuid') else rw_user.get('uuid')
+                    if not rw_uuid:
+                        continue
+                    traffic_used = 0
+                    if hasattr(rw_user, 'user_traffic') and rw_user.user_traffic:
+                        traffic_used = rw_user.user_traffic.used_traffic_bytes
+                    elif hasattr(rw_user, 'used_traffic_bytes'):
+                        traffic_used = rw_user.used_traffic_bytes
+                    remnawave_traffic[rw_uuid] = traffic_used
+                    expire_at = getattr(rw_user, 'expire_at', None) or (rw_user.get('expireAt') if isinstance(rw_user, dict) else None)
+                    if expire_at:
+                        if isinstance(expire_at, str):
+                            expire_at = datetime.fromisoformat(expire_at.replace('Z', '+00:00').replace('+00:00', ''))
+                        if getattr(expire_at, 'tzinfo', None):
+                            expire_at = expire_at.replace(tzinfo=None) - timedelta(seconds=expire_at.utcoffset().total_seconds() if expire_at.utcoffset() else 0)
+                        remnawave_expiry[rw_uuid] = expire_at
+                        cursor.execute("UPDATE vpn_keys SET expiry_date = ? WHERE key_uuid = ?", (expire_at.isoformat(), rw_uuid))
         except Exception as e:
-            logger.warning(f"Failed to sync traffic from Remnawave for panel keys: {e}")
+            logger.warning(f"Failed to sync traffic/expiry from Remnawave for panel keys: {e}")
+        
+        try:
+            conn.commit()
+        except Exception:
+            pass
         
         for row in rows:
             username = row['username'] or f"user_{row['user_id']}"
@@ -1906,27 +1954,32 @@ def get_keys():
             if len(key_display) > 50:
                 key_display = key_display[:47] + '...'
             
-            # Вычисляем оставшиеся дни
-            expiry_days = 0
-            if row['expiry_date']:
+            # Дата окончания: приоритет у Remnawave (как в miniapp)
+            key_uuid = row['key_uuid']
+            expiry_dt_src = remnawave_expiry.get(key_uuid) if key_uuid else None
+            if expiry_dt_src is None and row['expiry_date']:
                 try:
-                    from datetime import datetime
                     if isinstance(row['expiry_date'], str):
-                        expiry = datetime.fromisoformat(row['expiry_date'].replace('Z', '+00:00'))
+                        expiry_dt_src = datetime.fromisoformat(row['expiry_date'].replace('Z', '+00:00'))
                     else:
-                        expiry = row['expiry_date']
-                    now = datetime.now()
-                    if expiry.tzinfo:
-                        from datetime import timezone
-                        now = datetime.now(timezone.utc)
-                    diff = expiry - now
+                        expiry_dt_src = row['expiry_date']
+                except Exception:
+                    expiry_dt_src = None
+            expiry_days = 0
+            expiry_date_value = row['expiry_date']
+            if expiry_dt_src:
+                try:
+                    if getattr(expiry_dt_src, 'tzinfo', None):
+                        expiry_dt_src = expiry_dt_src.replace(tzinfo=None) - timedelta(seconds=expiry_dt_src.utcoffset().total_seconds() if expiry_dt_src.utcoffset() else 0)
+                    now_utc = datetime.utcnow()
+                    diff = expiry_dt_src - now_utc
                     expiry_days = max(0, int(diff.total_seconds() / 86400))
-                except:
-                    expiry_days = 0
+                    expiry_date_value = expiry_dt_src.isoformat()
+                except Exception:
+                    pass
             
             # Получаем актуальный трафик из Remnawave если доступен
             traffic_used = float(row['traffic_used'] or 0)
-            key_uuid = row['key_uuid']
             if key_uuid and key_uuid in remnawave_traffic:
                 traffic_used = float(remnawave_traffic[key_uuid])
                 # Обновляем в БД для консистентности
@@ -1944,7 +1997,7 @@ def get_keys():
                 'user_id': row['user_id'],
                 'username': f"@{username}" if username and not username.startswith('@') else username,
                 'status': row['status'] or 'Active',
-                'expiry_date': row['expiry_date'],
+                'expiry_date': expiry_date_value,
                 'expiry': expiry_days,
                 'traffic_used': traffic_used,
                 'traffic_limit': float(row['traffic_limit'] or 0),
