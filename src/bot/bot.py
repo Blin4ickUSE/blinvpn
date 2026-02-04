@@ -323,16 +323,19 @@ async def handle_withdraw_cancel(callback: CallbackQuery):
 
 
 async def subscription_notifications_task():
-    """Фоновая задача для уведомлений о подписках (умная корзина)"""
+    """Фоновая задача для уведомлений о подписках. Время окончания — из Remnawave (UTC), отображение — МСК."""
     while True:
         try:
             await asyncio.sleep(3600)  # Проверка каждый час
+            
+            # Единый источник истины: синхронизируем expiry из Remnawave перед проверками
+            core.sync_expiry_from_remnawave()
             
             conn = database.get_db_connection()
             cursor = conn.cursor()
             
             from datetime import datetime, timedelta
-            now = datetime.now()
+            now_utc = datetime.utcnow()  # Сравниваем в UTC (expiry_date в БД хранится как UTC)
             
             # === 1. Уведомления за 3, 2, 1 день и 3 часа до конца ===
             notification_intervals = [
@@ -344,11 +347,11 @@ async def subscription_notifications_task():
             
             for value, unit, text in notification_intervals:
                 if unit == 'days':
-                    target_time = now + timedelta(days=value)
+                    target_time = now_utc + timedelta(days=value)
                     window_start = target_time - timedelta(hours=1)
                     window_end = target_time + timedelta(hours=1)
                 else:
-                    target_time = now + timedelta(hours=value)
+                    target_time = now_utc + timedelta(hours=value)
                     window_start = target_time - timedelta(minutes=30)
                     window_end = target_time + timedelta(minutes=30)
                 
@@ -365,11 +368,12 @@ async def subscription_notifications_task():
                     key_uuid = row['key_uuid']
                     telegram_id = row['telegram_id']
                     short_id = key_uuid[:8] if key_uuid else f"#{key_id}"
-                    
+                    expiry_str = core.format_expiry_for_notification(row['expiry_date']) if row.get('expiry_date') else ''
                     msg = (
                         f"⚠️ <b>Ваша подписка скоро закончится</b>\n\n"
-                        f"Через {text} ваш ключ {short_id} закончится. "
-                        f"Чтобы сохранить доступ в свободный интернет, оплатите подписку!"
+                        f"Через {text} ваш ключ {short_id} закончится."
+                        + (f" Окончание: {expiry_str} (МСК)." if expiry_str else "")
+                        + "\nЧтобы сохранить доступ в свободный интернет, оплатите подписку!"
                     )
                     core.send_notification_to_user(telegram_id, msg)
                     logger.info(f"Sent expiry reminder ({text}) to {telegram_id} for key {key_id}")
@@ -381,7 +385,7 @@ async def subscription_notifications_task():
                 JOIN users u ON vk.user_id = u.id
                 WHERE vk.status = 'Active'
                   AND datetime(vk.expiry_date) < ?
-            """, (now.isoformat(),))
+            """, (now_utc.isoformat(),))
             
             for row in cursor.fetchall():
                 key_id = row['id']
@@ -399,7 +403,7 @@ async def subscription_notifications_task():
                 logger.info(f"Subscription expired for key {key_id}, notified user {telegram_id}")
             
             # === 3. Уведомление за сутки перед удалением (9-й день) ===
-            nine_days_ago = now - timedelta(days=9)
+            nine_days_ago = now_utc - timedelta(days=9)
             cursor.execute("""
                 SELECT vk.id, vk.key_uuid, vk.expiry_date, u.telegram_id
                 FROM vpn_keys vk
@@ -420,7 +424,7 @@ async def subscription_notifications_task():
                 core.send_notification_to_user(telegram_id, msg)
             
             # === 4. Удаление через 10 дней после истечения ===
-            ten_days_ago = now - timedelta(days=10)
+            ten_days_ago = now_utc - timedelta(days=10)
             cursor.execute("""
                 SELECT vk.id, vk.key_uuid, vk.user_id, u.telegram_id
                 FROM vpn_keys vk
@@ -457,20 +461,22 @@ async def subscription_notifications_task():
 
 
 async def auto_renewal_task():
-    """Фоновая задача для автоматического продления подписок за 60 минут до истечения"""
+    """Фоновая задача для автоматического продления подписок за 60 минут до истечения. Сравнение в UTC."""
     while True:
         try:
             await asyncio.sleep(300)  # Проверка каждые 5 минут
+            
+            core.sync_expiry_from_remnawave()
             
             conn = database.get_db_connection()
             cursor = conn.cursor()
             
             from datetime import datetime, timedelta
-            now = datetime.now()
+            now_utc = datetime.utcnow()
             
             # Находим подписки, истекающие через 55-65 минут (окно 10 минут)
-            check_window_start = now + timedelta(minutes=55)
-            check_window_end = now + timedelta(minutes=65)
+            check_window_start = now_utc + timedelta(minutes=55)
+            check_window_end = now_utc + timedelta(minutes=65)
             
             cursor.execute("""
                 SELECT vk.id, vk.key_uuid, vk.expiry_date, vk.plan_type, vk.traffic_limit,
