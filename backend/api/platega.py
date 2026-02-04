@@ -19,8 +19,8 @@ PLATEGA_FAILED_URL = os.getenv('PLATEGA_FAILED_URL', '')
 
 # Методы оплаты Platega
 PLATEGA_METHOD_SBP_QR = 2       # СБП QR
-PLATEGA_METHOD_CARD_RUB = 10   # Карты (RUB)
-PLATEGA_METHOD_CARD = 11       # Карточный эквайринг
+PLATEGA_METHOD_CARD = 10   # Карты (RUB)
+PLATEGA_METHOD_CARD_RUB = 11       # Карточный эквайринг
 PLATEGA_METHOD_INTL = 12       # Международный эквайринг
 PLATEGA_METHOD_CRYPTO = 13     # Криптовалюта
 
@@ -83,7 +83,8 @@ class PlategaAPI:
             return None
     
     def create_payment(self, amount: float, user_id: int, description: str = None,
-                      payment_method: int = PLATEGA_METHOD_SBP_QR) -> Optional[Dict]:
+                      payment_method: int = PLATEGA_METHOD_SBP_QR,
+                      return_url: str = None, failed_url: str = None) -> Optional[Dict]:
         """
         Создать платеж через Platega
         
@@ -92,9 +93,19 @@ class PlategaAPI:
             user_id: ID пользователя
             description: Описание платежа
             payment_method: Метод оплаты (2=СБП QR, 10=Карты RUB, 11=Карточный, 12=Международный, 13=Крипто)
+            return_url: URL успешной оплаты (обязателен для карт; fallback из env)
+            failed_url: URL неуспешной оплаты (обязателен для карт; fallback из env)
         """
         if not self.is_configured:
             return None
+        
+        # Для карточных платежей return/failedUrl обязательны — подставляем из env если не переданы
+        return_url = return_url or self.return_url
+        failed_url = failed_url or self.failed_url
+        if not return_url and payment_method in (PLATEGA_METHOD_CARD, PLATEGA_METHOD_CARD_RUB, PLATEGA_METHOD_INTL):
+            logger.warning("Platega: return_url не задан — карточный платёж может не работать. Укажите PLATEGA_RETURN_URL или MINIAPP_URL.")
+        if not failed_url and payment_method in (PLATEGA_METHOD_CARD, PLATEGA_METHOD_CARD_RUB, PLATEGA_METHOD_INTL):
+            logger.warning("Platega: failed_url не задан. Укажите PLATEGA_FAILED_URL или MINIAPP_URL.")
         
         # Уникальный payload для идентификации платежа
         correlation_id = f"platega_{user_id}_{uuid.uuid4().hex[:8]}"
@@ -107,8 +118,8 @@ class PlategaAPI:
                 'currency': 'RUB'
             },
             'description': description or f'Пополнение баланса',
-            'return': self.return_url,
-            'failedUrl': self.failed_url,
+            'return': return_url,
+            'failedUrl': failed_url,
             'payload': correlation_id,
         }
         
@@ -135,13 +146,22 @@ class PlategaAPI:
         
         return None
     
-    def create_sbp_payment(self, amount: float, user_id: int, description: str = None) -> Optional[Dict]:
+    def create_sbp_payment(self, amount: float, user_id: int, description: str = None,
+                           return_url: str = None, failed_url: str = None) -> Optional[Dict]:
         """Создать СБП QR платеж"""
-        return self.create_payment(amount, user_id, description, PLATEGA_METHOD_SBP_QR)
+        return self.create_payment(amount, user_id, description, PLATEGA_METHOD_SBP_QR,
+                                  return_url=return_url, failed_url=failed_url)
     
-    def create_card_payment(self, amount: float, user_id: int, description: str = None) -> Optional[Dict]:
-        """Создать платеж картой (RUB)"""
-        return self.create_payment(amount, user_id, description, PLATEGA_METHOD_CARD_RUB)
+    def create_card_payment(self, amount: float, user_id: int, description: str = None,
+                            return_url: str = None, failed_url: str = None) -> Optional[Dict]:
+        """Создать платеж картой (RUB). Сначала метод 11 (карточный эквайринг), при ошибке — 10 (карты RUB)."""
+        result = self.create_payment(amount, user_id, description, PLATEGA_METHOD_CARD_RUB,
+                                    return_url=return_url, failed_url=failed_url)
+        if result is None and (return_url or self.return_url) and (failed_url or self.failed_url):
+            logger.info("Platega: повтор с paymentMethod=10 (Карты RUB)")
+            result = self.create_payment(amount, user_id, description, PLATEGA_METHOD_CARD,
+                                         return_url=return_url, failed_url=failed_url)
+        return result
     
     def verify_webhook(self, headers: Dict, payload: Dict) -> bool:
         """
