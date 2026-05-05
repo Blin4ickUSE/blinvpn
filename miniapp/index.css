@@ -8,17 +8,17 @@
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
-  background: rgba(30, 41, 59, 0.5);
+  background: rgba(24, 24, 27, 0.6);
   border-radius: 3px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(100, 116, 139, 0.5);
+  background: rgba(59, 130, 246, 0.35);
   border-radius: 3px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.8);
+  background: rgba(59, 130, 246, 0.55);
 }
 
 /* Hide scrollbar but keep functionality */
@@ -33,16 +33,30 @@
 
 /* Telegram WebApp styles */
 body {
-  background-color: #0f172a;
-  color: #f8fafc;
+  background-color: #000000;
+  color: #f4f4f5;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   margin: 0;
   padding: 0;
   min-height: 100vh;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+  touch-action: pan-y;
 }
 
 #root {
   min-height: 100vh;
+  overflow-x: clip;
+  width: 100%;
+}
+
+html {
+  overflow-x: hidden;
+}
+
+.tg-safe-padding {
+  padding-top: max(env(safe-area-inset-top), 8px);
+  padding-bottom: max(env(safe-area-inset-bottom), 10px);
 }
 
 /* Простые анимации */
@@ -105,7 +119,7 @@ body {
 
 /* Skeleton loading */
 .skeleton {
-  background: linear-gradient(90deg, rgba(51, 65, 85, 0.5) 0%, rgba(71, 85, 105, 0.5) 50%, rgba(51, 65, 85, 0.5) 100%);
+  background: linear-gradient(90deg, rgba(39, 39, 42, 0.6) 0%, rgba(63, 63, 70, 0.5) 50%, rgba(39, 39, 42, 0.6) 100%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
   border-radius: 8px;

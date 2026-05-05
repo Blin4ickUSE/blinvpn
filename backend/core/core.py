@@ -17,7 +17,28 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 SUPPORT_BOT_TOKEN = os.getenv('SUPPORT_BOT_TOKEN', '')
 TELEGRAM_ADMIN_ID = os.getenv('TELEGRAM_ADMIN_ID', '')
+TELEGRAM_ADMIN_IDS = os.getenv('TELEGRAM_ADMIN_IDS', '')
 TELEGRAM_SUPPORT_GROUP_ID = os.getenv('TELEGRAM_SUPPORT_GROUP_ID', '')
+
+
+def get_admin_telegram_ids() -> List[int]:
+    ids: List[int] = []
+    raw_values = []
+    if TELEGRAM_ADMIN_IDS:
+        raw_values.extend([v.strip() for v in TELEGRAM_ADMIN_IDS.split(',') if v.strip()])
+    if TELEGRAM_ADMIN_ID:
+        raw_values.append(str(TELEGRAM_ADMIN_ID).strip())
+    for value in raw_values:
+        try:
+            ids.append(int(value))
+        except Exception:
+            continue
+    # Убираем дубликаты, сохраняя порядок
+    unique: List[int] = []
+    for admin_id in ids:
+        if admin_id not in unique:
+            unique.append(admin_id)
+    return unique
 
 def send_notification_via_support_bot(telegram_id: int, message: str) -> bool:
     """Отправить сообщение через бот поддержки (приоритет для тикетов)"""
@@ -95,17 +116,21 @@ def send_key_created_notification(telegram_id: int, days: int, traffic_gb: int, 
 
 def send_notification_to_admin(message: str, reply_markup: dict = None) -> bool:
     """Отправить уведомление администратору"""
-    if not TELEGRAM_ADMIN_ID or not TELEGRAM_BOT_TOKEN:
+    admin_ids = get_admin_telegram_ids()
+    if not admin_ids or not TELEGRAM_BOT_TOKEN:
         return False
-    
-    return send_notification_to_user(int(TELEGRAM_ADMIN_ID), message, reply_markup)
+    sent_any = False
+    for admin_id in admin_ids:
+        sent_any = send_notification_to_user(int(admin_id), message, reply_markup) or sent_any
+    return sent_any
 
 
 def send_withdrawal_request_to_admin(transaction_id: int, user_id: int, telegram_id: int, 
                                      username: str, amount: float, method: str, 
                                      details: str) -> bool:
     """Отправить запрос на вывод админу с кнопками Принять/Отказать"""
-    if not TELEGRAM_ADMIN_ID or not TELEGRAM_BOT_TOKEN:
+    admin_ids = get_admin_telegram_ids()
+    if not admin_ids or not TELEGRAM_BOT_TOKEN:
         return False
     
     message = (
@@ -127,7 +152,10 @@ def send_withdrawal_request_to_admin(transaction_id: int, user_id: int, telegram
         ]
     }
     
-    return send_notification_to_admin(message, reply_markup)
+    sent_any = False
+    for admin_id in admin_ids:
+        sent_any = send_notification_to_user(int(admin_id), message, reply_markup) or sent_any
+    return sent_any
 
 def send_formatted_notification(telegram_id: int, message: str, parse_mode: str = 'HTML', 
                                  reply_markup: dict = None) -> bool:
@@ -223,7 +251,8 @@ def sanitize_username(username: str, telegram_id: int) -> str:
 
 def create_user_and_subscription(telegram_id: int, username: str, days: int, 
                                  referred_by: int = None, traffic_limit: int = None,
-                                 squad_uuids: list = None, plan_type: str = 'vpn') -> Optional[Dict]:
+                                 squad_uuids: list = None, plan_type: str = 'vpn',
+                                 devices_limit: int = 2) -> Optional[Dict]:
     """Создать пользователя и подписку"""
     try:
         # Создаем пользователя в БД
@@ -350,18 +379,18 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
             
             cursor.execute("""
                 UPDATE vpn_keys SET status = 'Active', expiry_date = ?, traffic_limit = ?, 
-                       key_config = ?, squad_uuid = ?, plan_type = ?
+                       key_config = ?, squad_uuid = ?, plan_type = ?, devices_limit = ?
                 WHERE id = ?
-            """, (expiry_date, traffic_limit, subscription_url, assigned_squad_uuid, plan_type, key_id))
+            """, (expiry_date, traffic_limit, subscription_url, assigned_squad_uuid, plan_type, devices_limit, key_id))
         else:
             # Создаем новый ключ
             expiry_date = (datetime.now() + timedelta(days=days)).isoformat()
             cursor.execute("""
                 INSERT INTO vpn_keys (user_id, key_uuid, key_config, status, expiry_date, 
                                      devices_limit, traffic_limit, squad_uuid, plan_type)
-                VALUES (?, ?, ?, 'Active', ?, 1, ?, ?, ?)
-            """, (user_id, user_uuid, subscription_url, expiry_date, traffic_limit, 
-                  assigned_squad_uuid, plan_type))
+                VALUES (?, ?, ?, 'Active', ?, ?, ?, ?, ?)
+            """, (user_id, user_uuid, subscription_url, expiry_date, devices_limit,
+                  traffic_limit, assigned_squad_uuid, plan_type))
             key_id = cursor.lastrowid
         
         conn.commit()
@@ -599,7 +628,7 @@ def get_referral_stats(user_id: int) -> Dict[str, Any]:
             'referrals_count': referrals_count,
             'partner_balance': partner_balance,  # Доступно для вывода
             'total_earned': total_earned,  # Всего заработано за всё время
-            'rate': user.get('partner_rate', 25)
+            'rate': 20
         }
     finally:
         conn.close()

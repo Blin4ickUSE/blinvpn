@@ -5,6 +5,10 @@ import os
 import logging
 import hmac
 import hashlib
+import json
+import secrets
+import random
+import requests
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, unquote
 from flask import Flask, request, jsonify
@@ -69,6 +73,152 @@ def format_expiry_for_notification(expiry_date_str: str) -> str:
 # Секретный ключ для аутентификации панели (legacy)
 PANEL_SECRET = os.getenv('PANEL_SECRET', 'change_this_secret')
 BOT_TOKEN = os.getenv('BOT_TOKEN', '')
+REQUIRED_CHANNEL_ID = int(os.getenv('REQUIRED_CHANNEL_ID', '-1003036752851'))
+REQUIRED_CHANNEL_LINK = os.getenv('REQUIRED_CHANNEL_LINK', 'https://t.me')
+
+
+def check_required_channel_subscription(telegram_id: int) -> bool:
+    token = os.getenv('TELEGRAM_BOT_TOKEN') or BOT_TOKEN
+    if not token:
+        return True
+    try:
+        resp = requests.get(
+            f"https://api.telegram.org/bot{token}/getChatMember",
+            params={"chat_id": REQUIRED_CHANNEL_ID, "user_id": telegram_id},
+            timeout=5,
+        )
+        data = resp.json() if resp.ok else {}
+        status = ((data.get("result") or {}).get("status") or "").lower()
+        return status in {"member", "administrator", "creator"}
+    except Exception as e:
+        logger.warning(f"Failed to check channel subscription for {telegram_id}: {e}")
+        return False
+
+
+def get_admin_ids() -> list[int]:
+    ids: list[int] = []
+    raw_admin_ids = os.getenv('TELEGRAM_ADMIN_IDS', '')
+    raw_admin_id = os.getenv('TELEGRAM_ADMIN_ID', '')
+    values = []
+    if raw_admin_ids:
+        values.extend([v.strip() for v in raw_admin_ids.split(',') if v.strip()])
+    if raw_admin_id:
+        values.append(raw_admin_id.strip())
+    for value in values:
+        try:
+            ids.append(int(value))
+        except Exception:
+            continue
+    unique: list[int] = []
+    for admin_id in ids:
+        if admin_id not in unique:
+            unique.append(admin_id)
+    return unique
+
+
+def get_client_ip() -> str:
+    forwarded = request.headers.get('X-Forwarded-For', '')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    real_ip = request.headers.get('X-Real-IP')
+    if real_ip:
+        return real_ip.strip()
+    return request.remote_addr or 'unknown'
+
+
+def parse_env_file() -> dict[str, str]:
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
+    result: dict[str, str] = {}
+    if not os.path.exists(env_path):
+        return result
+    with open(env_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            raw = line.strip()
+            if not raw or raw.startswith('#') or '=' not in raw:
+                continue
+            key, value = raw.split('=', 1)
+            key = key.strip()
+            value = value.strip()
+            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                value = value[1:-1]
+            result[key] = value
+    return result
+
+
+def update_env_values(updates: dict[str, str]) -> None:
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
+    lines: list[str] = []
+    if os.path.exists(env_path):
+        with open(env_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+    existing_keys = set()
+    output: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if '=' in stripped and not stripped.startswith('#'):
+            key = stripped.split('=', 1)[0].strip()
+            if key in updates:
+                output.append(f"{key}={updates[key]}\n")
+                existing_keys.add(key)
+                continue
+        output.append(line)
+    for key, value in updates.items():
+        if key not in existing_keys:
+            output.append(f"{key}={value}\n")
+    with open(env_path, 'w', encoding='utf-8') as f:
+        f.writelines(output)
+    for key, value in updates.items():
+        os.environ[key] = value
+
+
+def telegram_send_message(chat_id: int, text: str, parse_mode: str = 'HTML', reply_markup: dict | None = None) -> dict | None:
+    token = os.getenv('TELEGRAM_BOT_TOKEN', '')
+    if not token:
+        return None
+    import requests
+    payload = {'chat_id': chat_id, 'text': text, 'parse_mode': parse_mode}
+    if reply_markup:
+        payload['reply_markup'] = reply_markup
+    res = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=20)
+    data = res.json() if res.content else {}
+    if res.status_code == 200 and data.get('ok'):
+        return data.get('result')
+    return None
+
+
+def telegram_send_photo(chat_id: int, photo: str, caption: str = '', parse_mode: str = 'HTML', reply_markup: dict | None = None) -> dict | None:
+    token = os.getenv('TELEGRAM_BOT_TOKEN', '')
+    if not token:
+        return None
+    import requests
+    payload = {'chat_id': chat_id, 'photo': photo}
+    if caption:
+        payload['caption'] = caption
+        payload['parse_mode'] = parse_mode
+    if reply_markup:
+        payload['reply_markup'] = reply_markup
+    res = requests.post(f"https://api.telegram.org/bot{token}/sendPhoto", json=payload, timeout=25)
+    data = res.json() if res.content else {}
+    if res.status_code == 200 and data.get('ok'):
+        return data.get('result')
+    return None
+
+
+def telegram_delete_message(chat_id: int, message_id: int) -> bool:
+    token = os.getenv('TELEGRAM_BOT_TOKEN', '')
+    if not token:
+        return False
+    import requests
+    res = requests.post(
+        f"https://api.telegram.org/bot{token}/deleteMessage",
+        json={'chat_id': chat_id, 'message_id': message_id},
+        timeout=15,
+    )
+    try:
+        data = res.json()
+    except Exception:
+        return False
+    return bool(res.status_code == 200 and data.get('ok'))
 
 def verify_telegram_webapp_data(init_data: str) -> dict | None:
     """
@@ -423,6 +573,13 @@ def get_user_info():
             'banned': True,
             'reason': ban_status.get('reason', 'Аккаунт заблокирован'),
             'blacklisted': ban_status.get('blacklisted', False)
+        }), 403
+
+    if not check_required_channel_subscription(telegram_id):
+        return jsonify({
+            'required_subscription': True,
+            'channel_id': REQUIRED_CHANNEL_ID,
+            'channel_link': REQUIRED_CHANNEL_LINK
         }), 403
     
     stats = core.get_referral_stats(user['id'])
@@ -1123,6 +1280,7 @@ def create_subscription():
     user_id = data.get('user_id')
     days = data.get('days')
     is_trial = data.get('is_trial', False)  # Пробный период
+    requested_devices = int(data.get('devices', 2) or 2)
     
     if not user_id or not days:
         return jsonify({'error': 'Missing required fields'}), 400
@@ -1145,9 +1303,11 @@ def create_subscription():
             return jsonify({'error': 'Пробный период уже использован'}), 400
         days = 1
         price = 0
+        requested_devices = 2
     else:
         # Единая подписка - цены по дням
         price = data.get('price', days * 3.3)
+        requested_devices = max(2, min(20, requested_devices))
     
     # Для пробного периода не списываем баланс
     if not is_trial:
@@ -1166,7 +1326,8 @@ def create_subscription():
     result = core.create_user_and_subscription(
         user['telegram_id'], user.get('username', ''), days,
         traffic_limit=traffic_limit_bytes,
-        plan_type='vpn'
+        plan_type='vpn',
+        devices_limit=requested_devices
     )
     
     if result:
@@ -1433,37 +1594,46 @@ def send_mailing():
 
         sent = 0
         errors = 0
+        total_targeted = len(user_rows)
+
+        cursor.execute(
+            """
+            INSERT INTO mailings (title, message_text, target_users, sent_count, status, sent_at, button_type, button_value, image_url)
+            VALUES (?, ?, ?, ?, 'Completed', CURRENT_TIMESTAMP, ?, ?, ?)
+            """,
+            (data.get('title', ''), message, str(target_users), total_targeted, button_type, button_value, image_url),
+        )
+        mailing_id = cursor.lastrowid
+
         for row in user_rows:
             telegram_id = row['telegram_id']
             try:
+                message_result = None
                 if image_url:
-                    # Отправка с изображением
-                    success = core.send_photo_to_user(telegram_id, image_url, message, parse_mode, reply_markup)
+                    message_result = telegram_send_photo(telegram_id, image_url, message, parse_mode, reply_markup)
                 else:
-                    # Обычная рассылка
-                    success = core.send_formatted_notification(telegram_id, message, parse_mode, reply_markup)
-                
-                if success:
+                    message_result = telegram_send_message(telegram_id, message, parse_mode, reply_markup)
+
+                if message_result:
                     sent += 1
+                    cursor.execute(
+                        """
+                        INSERT INTO mailing_messages (mailing_id, telegram_id, telegram_message_id)
+                        VALUES (?, ?, ?)
+                        """,
+                        (mailing_id, int(telegram_id), int(message_result.get('message_id'))),
+                    )
                 else:
                     errors += 1
             except Exception as e:
                 logger.error(f"Error sending mailing to {telegram_id}: {e}")
                 errors += 1
 
-        # Сохраняем запись о рассылке
-        cursor.execute(
-            """
-            INSERT INTO mailings (title, message_text, target_users, sent_count, status, sent_at, button_type, button_value, image_url)
-            VALUES (?, ?, ?, ?, 'Completed', CURRENT_TIMESTAMP, ?, ?, ?)
-            """,
-            (data.get('title', ''), message, str(target_users), sent, button_type, button_value, image_url),
-        )
         conn.commit()
     finally:
         conn.close()
 
-    return jsonify({'success': True, 'sent': sent, 'errors': errors})
+    return jsonify({'success': True, 'sent': sent, 'errors': errors, 'total': total_targeted})
 
 @app.route('/api/panel/mailing/stats', methods=['GET'])
 @require_auth
@@ -1477,37 +1647,8 @@ def get_mailing_stats():
         cursor.execute("SELECT COALESCE(SUM(sent_count), 0) AS total FROM mailings WHERE status = 'Completed'")
         total_sent = cursor.fetchone()['total'] or 0
         
-        # Доставляемость - считаем по реальным данным
-        cursor.execute("""
-            SELECT COALESCE(SUM(sent_count), 0) as total_sent, 
-                   COALESCE(SUM(CASE WHEN status = 'Completed' THEN sent_count ELSE 0 END), 0) as delivered
-            FROM mailings
-        """)
-        delivery_row = cursor.fetchone()
-        total_sent_for_rate = delivery_row['total_sent'] or 0
-        delivered_count = delivery_row['delivered'] or 0
-        # Если все успешно отправлены - 100%
-        delivered_rate = (delivered_count / total_sent_for_rate * 100) if total_sent_for_rate > 0 else 100
-        
-        # Переходы (пока нет трекинга, возвращаем 0)
-        clicks = 0
-        
-        # Последняя кампания
-        cursor.execute("""
-            SELECT title, sent_at FROM mailings 
-            WHERE status = 'Completed' 
-            ORDER BY sent_at DESC LIMIT 1
-        """)
-        last_campaign_row = cursor.fetchone()
-        last_campaign = last_campaign_row['title'] if last_campaign_row else None
-        last_campaign_date = last_campaign_row['sent_at'] if last_campaign_row else None
-        
         return jsonify({
-            'totalSent': total_sent,
-            'delivered': delivered_rate,
-            'clicks': clicks,
-            'lastCampaign': last_campaign,
-            'lastCampaignDate': last_campaign_date
+            'totalSent': total_sent
         })
     finally:
         conn.close()
@@ -1546,12 +1687,46 @@ def get_mailing_history():
             history.append({
                 'id': row['id'],
                 'title': row['title'] or row['message_text'][:50] if row['message_text'] else 'Без названия',
+                'message_text': row['message_text'] or '',
                 'sent_count': row['sent_count'] or 0,
                 'status': row['status'],
                 'date': date_formatted
             })
         
         return jsonify(history)
+    finally:
+        conn.close()
+
+
+@app.route('/api/panel/mailing/<int:mailing_id>', methods=['DELETE'])
+@require_auth
+def delete_mailing(mailing_id: int):
+    """Удалить рассылку и попытаться удалить ранее отправленные сообщения у пользователей"""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id FROM mailings WHERE id = ?", (mailing_id,))
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({'error': 'Mailing not found'}), 404
+
+        cursor.execute(
+            "SELECT telegram_id, telegram_message_id FROM mailing_messages WHERE mailing_id = ?",
+            (mailing_id,),
+        )
+        records = cursor.fetchall()
+        deleted_count = 0
+        failed_count = 0
+        for rec in records:
+            if telegram_delete_message(int(rec['telegram_id']), int(rec['telegram_message_id'])):
+                deleted_count += 1
+            else:
+                failed_count += 1
+
+        cursor.execute("DELETE FROM mailing_messages WHERE mailing_id = ?", (mailing_id,))
+        cursor.execute("DELETE FROM mailings WHERE id = ?", (mailing_id,))
+        conn.commit()
+        return jsonify({'success': True, 'deleted_messages': deleted_count, 'failed_messages': failed_count})
     finally:
         conn.close()
 
@@ -2381,8 +2556,8 @@ def get_user_referrals():
         )
         referrals_rows = cursor.fetchall()
 
-        # Загружаем ставки
-        rate = user.get("partner_rate", 25) / 100
+        # 1-я линия: фикс 20%
+        rate = 0.20
 
         referrals = []
         for r in referrals_rows:
@@ -2533,11 +2708,10 @@ def request_withdrawal():
     data = request.json
     telegram_id = data.get('telegram_id')
     amount = data.get('amount', 0)
-    method = data.get('method')  # 'balance', 'card', 'crypto'
+    method = data.get('method')  # 'balance', 'card', 'cryptobot', 'crypto'
     
     # Дополнительные данные в зависимости от метода
-    phone = data.get('phone', '')
-    bank = data.get('bank', '')
+    card_number = str(data.get('card_number', '')).strip()
     crypto_net = data.get('crypto_net', '')
     crypto_addr = data.get('crypto_addr', '')
     
@@ -2557,9 +2731,16 @@ def request_withdrawal():
         logger.error(f"Amount must be positive: {amount}")
         return jsonify({'error': 'Invalid amount'}), 400
     
-    # Минимальный вывод для карты и крипто - 200₽
-    if method in ('card', 'crypto') and amount < 200:
-        return jsonify({'error': 'Минимальная сумма вывода - 200₽'}), 400
+    min_limits = {
+        'balance': 1,
+        'card': 1000,
+        'cryptobot': 10,
+        'crypto': 300
+    }
+    if method not in min_limits:
+        return jsonify({'error': f'Unknown withdrawal method: {method}'}), 400
+    if amount < min_limits[method]:
+        return jsonify({'error': f'Минимальная сумма для выбранного метода: {min_limits[method]}₽'}), 400
     
     user = database.get_user_by_telegram_id(telegram_id)
     if not user:
@@ -2621,7 +2802,7 @@ def request_withdrawal():
                 'message': f'Переведено {amount}₽ на основной баланс'
             })
         
-        elif method in ('card', 'crypto'):
+        elif method in ('card', 'cryptobot', 'crypto'):
             # Запрос на вывод - списываем с partner_balance и создаем заявку
             cursor.execute("""
                 UPDATE users SET partner_balance = partner_balance - ? WHERE id = ?
@@ -2629,23 +2810,32 @@ def request_withdrawal():
             
             # Создаем заявку на вывод
             if method == 'card':
-                description = f'Заявка на вывод {amount}₽ на карту. Банк: {bank}, Телефон: {phone}'
-                details = f"🏦 Банк: {bank}\n📱 Телефон: {phone}"
+                if not card_number:
+                    return jsonify({'error': 'Номер карты обязателен'}), 400
+                description = f'Заявка на вывод {amount}₽ на карту РФ. Номер: {card_number}'
+                details = f"💳 Карта: {card_number}"
+            elif method == 'cryptobot':
+                description = f'Заявка на вывод {amount}₽ в CryptoBot'
+                details = "🤖 CryptoBot"
             else:
+                if crypto_net not in ('TON', 'TRC-20'):
+                    return jsonify({'error': 'Выберите сеть TON или TRC-20'}), 400
+                if crypto_net == 'TRC-20' and not str(crypto_addr).startswith('T'):
+                    return jsonify({'error': 'Адрес TRC-20 должен начинаться с T'}), 400
                 description = f'Заявка на вывод {amount}₽ в криптовалюте. Сеть: {crypto_net}, Адрес: {crypto_addr}'
                 details = f"🌐 Сеть: {crypto_net}\n📝 Адрес: {crypto_addr}"
             
             cursor.execute("""
                 INSERT INTO transactions (user_id, type, amount, status, description, payment_method)
                 VALUES (?, 'withdrawal_request', ?, 'Pending', ?, ?)
-            """, (user['id'], -amount, description, 'Карта' if method == 'card' else 'Crypto'))
+            """, (user['id'], -amount, description, 'Карта' if method == 'card' else ('CryptoBot' if method == 'cryptobot' else 'Crypto')))
             
             transaction_id = cursor.lastrowid
             conn.commit()
             
             # Отправляем запрос ТОЛЬКО админу с кнопками Принять/Отказать
             username = user.get('username', 'N/A')
-            method_name = 'Банковская карта' if method == 'card' else 'Криптовалюта'
+            method_name = 'Банковская карта' if method == 'card' else ('CryptoBot' if method == 'cryptobot' else 'Криптовалюта')
             
             core.send_withdrawal_request_to_admin(
                 transaction_id=transaction_id,
@@ -2954,13 +3144,13 @@ def get_full_statistics():
         cursor.execute("""
             SELECT u.id, u.username, u.partner_rate,
                    COUNT(r.id) AS referrals_count,
-                   COALESCE(SUM(t.amount), 0) AS total_spent
+                   COALESCE(SUM(CASE WHEN t.status = 'Success' THEN t.amount ELSE 0 END), 0) AS total_spent
             FROM users u
             LEFT JOIN users r ON r.referred_by = u.id
             LEFT JOIN transactions t ON t.user_id = r.id AND t.type = 'deposit'
-            WHERE u.is_partner = 1
             GROUP BY u.id
-            ORDER BY total_spent DESC
+            HAVING referrals_count > 0
+            ORDER BY referrals_count DESC, total_spent DESC
             LIMIT 10
         """)
         top_referrers_raw = cursor.fetchall()
@@ -3451,41 +3641,24 @@ def get_public_page(page_type: str):
 @require_auth
 def get_settings():
     """Получить настройки системы"""
-    import os
     conn = database.get_db_connection()
     cursor = conn.cursor()
-    
-    def mask_token(token: str) -> str:
-        """Маскирует токен, показывая только первые и последние 4 символа"""
-        if not token or len(token) < 10:
-            return token
-        return token[:4] + '...' + token[-4:]
     
     try:
         # Настройки из БД
         cursor.execute("SELECT setting_key, setting_value FROM system_settings")
         db_settings = {row['setting_key']: row['setting_value'] for row in cursor.fetchall()}
         
-        # Добавляем сквады по умолчанию
-        db_settings['default_squads'] = database.get_default_squads()
-        
-        # Настройки из .env
+        # Настройки из .env (без маскирования)
+        env_raw = parse_env_file()
         env_settings = {
-            'MINIAPP_URL': os.getenv('MINIAPP_URL', ''),
-            'PANEL_URL': os.getenv('PANEL_URL', ''),
-            'API_URL': os.getenv('API_URL', ''),
-            'BOT_USERNAME': os.getenv('BOT_USERNAME', 'blnnnbot'),
-            'TRIAL_HOURS': os.getenv('TRIAL_HOURS', '24'),
-            'MIN_TOPUP_AMOUNT': os.getenv('MIN_TOPUP_AMOUNT', '50'),
-            'MAX_TOPUP_AMOUNT': os.getenv('MAX_TOPUP_AMOUNT', '100000'),
-            # Токены (частично замаскированные для безопасности)
-            'TELEGRAM_BOT_TOKEN': mask_token(os.getenv('TELEGRAM_BOT_TOKEN', '')),
-            'SUPPORT_BOT_TOKEN': mask_token(os.getenv('SUPPORT_BOT_TOKEN', '')),
-            'TELEGRAM_ADMIN_ID': os.getenv('TELEGRAM_ADMIN_ID', ''),
-            'TELEGRAM_SUPPORT_GROUP_ID': os.getenv('TELEGRAM_SUPPORT_GROUP_ID', ''),
-            # Remnawave
-            'REMWAVE_PANEL_URL': os.getenv('REMWAVE_PANEL_URL', os.getenv('REMWAVE_API_URL', '')),
-            'REMWAVE_API_KEY': mask_token(os.getenv('REMWAVE_API_KEY', '')),
+            'TELEGRAM_BOT_TOKEN': env_raw.get('TELEGRAM_BOT_TOKEN', os.getenv('TELEGRAM_BOT_TOKEN', '')),
+            'TELEGRAM_ADMIN_IDS': env_raw.get('TELEGRAM_ADMIN_IDS', os.getenv('TELEGRAM_ADMIN_IDS', os.getenv('TELEGRAM_ADMIN_ID', ''))),
+            'REMWAVE_PANEL_URL': env_raw.get('REMWAVE_PANEL_URL', os.getenv('REMWAVE_PANEL_URL', os.getenv('REMNAWAVE_URL', ''))),
+            'REMWAVE_API_KEY': env_raw.get('REMWAVE_API_KEY', os.getenv('REMWAVE_API_KEY', os.getenv('REMNAWAVE_API_KEY', ''))),
+            'PLATEGA_MERCHANT_ID': env_raw.get('PLATEGA_MERCHANT_ID', os.getenv('PLATEGA_MERCHANT_ID', '')),
+            'PLATEGA_SECRET_KEY': env_raw.get('PLATEGA_SECRET_KEY', os.getenv('PLATEGA_SECRET_KEY', '')),
+            'PANEL_PASSWORD_HINT': 'Смена пароля доступна отдельным действием',
         }
         
         return jsonify({**db_settings, **env_settings})
@@ -3497,7 +3670,6 @@ def get_settings():
 def update_settings():
     """Обновить настройки системы"""
     data = request.json
-    import os
     conn = database.get_db_connection()
     cursor = conn.cursor()
     
@@ -3510,24 +3682,18 @@ def update_settings():
                 VALUES (?, ?, CURRENT_TIMESTAMP)
             """, (key, str(value)))
             
-            # Обновляем переменные окружения для настроек "Мой Налог"
-            if key == 'NALOG_ENABLED':
-                os.environ['NALOG_ENABLED'] = str(value).lower()
-            elif key == 'NALOG_INN':
-                os.environ['NALOG_INN'] = str(value)
-            elif key == 'NALOG_PASSWORD':
-                os.environ['NALOG_PASSWORD'] = str(value)
-            elif key == 'NALOG_TOKEN_PATH':
-                os.environ['NALOG_TOKEN_PATH'] = str(value)
-            elif key == 'NALOG_SERVICE_NAME':
-                os.environ['NALOG_SERVICE_NAME'] = str(value)
-            # Обновляем переменные окружения для основных настроек
-            elif key == 'TRIAL_HOURS':
-                os.environ['TRIAL_HOURS'] = str(value)
-            elif key == 'MIN_TOPUP_AMOUNT':
-                os.environ['MIN_TOPUP_AMOUNT'] = str(value)
-            elif key == 'MAX_TOPUP_AMOUNT':
-                os.environ['MAX_TOPUP_AMOUNT'] = str(value)
+        env_map = {
+            'TELEGRAM_BOT_TOKEN': str(data.get('TELEGRAM_BOT_TOKEN', os.getenv('TELEGRAM_BOT_TOKEN', ''))),
+            'TELEGRAM_ADMIN_IDS': str(data.get('TELEGRAM_ADMIN_IDS', os.getenv('TELEGRAM_ADMIN_IDS', os.getenv('TELEGRAM_ADMIN_ID', '')))),
+            'REMWAVE_PANEL_URL': str(data.get('REMWAVE_PANEL_URL', os.getenv('REMWAVE_PANEL_URL', os.getenv('REMNAWAVE_URL', '')))),
+            'REMWAVE_API_KEY': str(data.get('REMWAVE_API_KEY', os.getenv('REMWAVE_API_KEY', os.getenv('REMNAWAVE_API_KEY', '')))),
+            'PLATEGA_MERCHANT_ID': str(data.get('PLATEGA_MERCHANT_ID', os.getenv('PLATEGA_MERCHANT_ID', ''))),
+            'PLATEGA_SECRET_KEY': str(data.get('PLATEGA_SECRET_KEY', os.getenv('PLATEGA_SECRET_KEY', ''))),
+        }
+        # Совместимость старых переменных
+        env_map['REMNAWAVE_URL'] = env_map['REMWAVE_PANEL_URL']
+        env_map['REMNAWAVE_API_KEY'] = env_map['REMWAVE_API_KEY']
+        update_env_values(env_map)
         
         conn.commit()
         return jsonify({'success': True})
@@ -3762,13 +3928,15 @@ def create_backup():
             zip_path = os.path.join(temp_dir, f'{backup_name}.zip')
             shutil.make_archive(backup_path, 'zip', temp_dir, backup_name)
             
-            # Отправляем файл администратору
-            admin_id = os.getenv('TELEGRAM_ADMIN_ID')
+            # Отправляем файл администраторам
+            admin_ids = get_admin_ids()
             bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
             
-            if admin_id and bot_token:
+            if admin_ids and bot_token:
                 import requests
                 with open(f'{backup_path}.zip', 'rb') as f:
+                    archive_payload = f.read()
+                for admin_id in admin_ids:
                     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
                     response = requests.post(
                         url,
@@ -3776,12 +3944,11 @@ def create_backup():
                             'chat_id': admin_id,
                             'caption': f'🗄️ Резервная копия БД\n📅 {datetime.now().strftime("%d.%m.%Y %H:%M")}'
                         },
-                        files={'document': (f'{backup_name}.zip', f, 'application/zip')},
+                        files={'document': (f'{backup_name}.zip', archive_payload, 'application/zip')},
                         timeout=30
                     )
                     if response.status_code != 200:
-                        logger.error(f"Failed to send backup: {response.text}")
-                        return jsonify({'error': 'Failed to send backup to admin'}), 500
+                        logger.error(f"Failed to send backup to {admin_id}: {response.text}")
         
         # Обновляем время последнего бекапа
         conn = database.get_db_connection()
@@ -3891,7 +4058,7 @@ def mass_user_action():
                 affected += 1
                 
             elif action_type == 'MASS_BAN':
-                cursor.execute("UPDATE users SET is_banned = 1 WHERE id = ?", (user_id,))
+                cursor.execute("UPDATE users SET is_banned = 1, ban_reason = ? WHERE id = ?", (value or 'Аккаунт заблокирован', user_id))
                 if notify:
                     notifications.append((telegram_id, f"⛔ Ваш аккаунт заблокирован. Причина: {value or 'Не указана'}"))
                 affected += 1
@@ -4023,7 +4190,7 @@ def single_user_action(user_id):
             notification_msg = f"📱 Ваш лимит устройств: {limit}"
             
         elif action_type == 'BAN':
-            cursor.execute("UPDATE users SET is_banned = 1 WHERE id = ?", (user_id,))
+            cursor.execute("UPDATE users SET is_banned = 1, ban_reason = ? WHERE id = ?", (value or 'Аккаунт заблокирован', user_id))
             notification_msg = f"⛔ Ваш аккаунт заблокирован. Причина: {value or 'Не указана'}"
             
         elif action_type == 'UNBAN':
@@ -4078,15 +4245,84 @@ def panel_login():
     if not admin:
         return jsonify({'error': 'Invalid credentials'}), 401
     
-    session_token = database.create_panel_session(admin['id'])
-    if not session_token:
-        return jsonify({'error': 'Failed to create session'}), 500
-    
+    code = f"{random.randint(100000, 999999)}"
+    temp_token = secrets.token_urlsafe(24)
+    ip_address = get_client_ip()
+    user_agent = request.headers.get('User-Agent', '')[:255]
+    expires_at = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE panel_login_challenges SET used = 1 WHERE admin_id = ? AND used = 0",
+            (admin['id'],),
+        )
+        cursor.execute(
+            """
+            INSERT INTO panel_login_challenges (admin_id, temp_token, code, ip_address, user_agent, expires_at, used)
+            VALUES (?, ?, ?, ?, ?, ?, 0)
+            """,
+            (admin['id'], temp_token, code, ip_address, user_agent, expires_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    for tg_admin_id in get_admin_ids():
+        core.send_notification_to_user(
+            tg_admin_id,
+            (
+                "🔐 <b>Подтверждение входа в панель</b>\n\n"
+                f"Код: <code>{code}</code>\n"
+                f"IP: <code>{ip_address}</code>\n"
+                f"Админ: <b>{admin['username']}</b>\n"
+                f"Время: {datetime.utcnow().strftime('%d.%m.%Y %H:%M:%S')} UTC"
+            ),
+        )
+
     return jsonify({
         'success': True,
-        'session_token': session_token,
-        'username': admin['username']
+        'requires_2fa': True,
+        'temp_token': temp_token,
+        'username': admin['username'],
     })
+
+
+@app.route('/api/panel/auth/verify-code', methods=['POST'])
+def panel_verify_login_code():
+    """Подтверждение входа по коду из Telegram"""
+    data = request.json or {}
+    temp_token = str(data.get('temp_token', ''))
+    code = str(data.get('code', '')).strip()
+    if not temp_token or not code:
+        return jsonify({'error': 'temp_token and code required'}), 400
+
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT * FROM panel_login_challenges
+            WHERE temp_token = ? AND used = 0 AND expires_at > CURRENT_TIMESTAMP
+            ORDER BY id DESC LIMIT 1
+            """,
+            (temp_token,),
+        )
+        challenge = cursor.fetchone()
+        if not challenge:
+            return jsonify({'error': 'Challenge expired or invalid'}), 401
+        if str(challenge['code']) != code:
+            return jsonify({'error': 'Invalid verification code'}), 401
+
+        cursor.execute("UPDATE panel_login_challenges SET used = 1 WHERE id = ?", (challenge['id'],))
+        conn.commit()
+        session_token = database.create_panel_session(challenge['admin_id'])
+    finally:
+        conn.close()
+
+    if not session_token:
+        return jsonify({'error': 'Failed to create session'}), 500
+    return jsonify({'success': True, 'session_token': session_token})
 
 
 @app.route('/api/panel/auth/logout', methods=['POST'])
@@ -4372,7 +4608,7 @@ def auto_backup():
         # Проверяем, включены ли бэкапы
         conn = database.get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT enabled FROM backup_settings ORDER BY id DESC LIMIT 1")
+        cursor.execute("SELECT enabled, interval_hours, last_backup FROM backup_settings ORDER BY id DESC LIMIT 1")
         row = cursor.fetchone()
         conn.close()
         
@@ -4380,10 +4616,21 @@ def auto_backup():
             logger.info("Auto backup skipped - disabled in settings")
             return
         
-        db_path = os.path.join(os.path.dirname(__file__), '..', 'database', 'blinvpn.db')
+        db_path = os.getenv('DB_PATH', 'data.db')
+        if not os.path.isabs(db_path):
+            db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), db_path)
         if not os.path.exists(db_path):
             logger.error("Database file not found for auto backup")
             return
+
+        if row and row['last_backup'] and row['interval_hours']:
+            try:
+                last_backup_dt = datetime.fromisoformat(str(row['last_backup']).replace('Z', '+00:00').replace('+00:00', ''))
+                if datetime.utcnow() - last_backup_dt < timedelta(hours=int(row['interval_hours'])):
+                    logger.info("Auto backup skipped - interval not reached")
+                    return
+            except Exception:
+                pass
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         backup_name = f'blinvpn_auto_backup_{timestamp}.db'
@@ -4395,13 +4642,15 @@ def auto_backup():
             # Создаем zip архив
             shutil.make_archive(backup_path, 'zip', temp_dir, backup_name)
             
-            # Отправляем администратору
-            admin_id = os.getenv('TELEGRAM_ADMIN_ID')
+            # Отправляем администраторам
+            admin_ids = get_admin_ids()
             bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
             
-            if admin_id and bot_token:
+            if admin_ids and bot_token:
                 import requests
                 with open(f'{backup_path}.zip', 'rb') as f:
+                    archive_payload = f.read()
+                for admin_id in admin_ids:
                     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
                     response = requests.post(
                         url,
@@ -4409,13 +4658,13 @@ def auto_backup():
                             'chat_id': admin_id,
                             'caption': f'🗄️ Автоматический бэкап БД\n📅 {datetime.now().strftime("%d.%m.%Y %H:%M")} МСК'
                         },
-                        files={'document': (f'{backup_name}.zip', f, 'application/zip')},
+                        files={'document': (f'{backup_name}.zip', archive_payload, 'application/zip')},
                         timeout=60
                     )
                     if response.status_code == 200:
-                        logger.info(f"Auto backup sent successfully")
+                        logger.info(f"Auto backup sent successfully to {admin_id}")
                     else:
-                        logger.error(f"Failed to send auto backup: {response.text}")
+                        logger.error(f"Failed to send auto backup to {admin_id}: {response.text}")
         
         # Обновляем время последнего бэкапа
         conn = database.get_db_connection()
@@ -4551,26 +4800,23 @@ def cleanup_expired_keys():
 
 # Запуск планировщика для автоматических бэкапов
 def start_backup_scheduler():
-    """Запустить планировщик для бэкапов в 02:00 МСК"""
+    """Запустить планировщик периодических бэкапов"""
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
-        from apscheduler.triggers.cron import CronTrigger
-        import pytz
-        
         scheduler = BackgroundScheduler()
-        moscow_tz = pytz.timezone('Europe/Moscow')
-        
-        # Бэкап каждый день в 02:00 МСК
+
+        # Проверка каждый час, auto_backup сам учитывает interval_hours
         scheduler.add_job(
             auto_backup,
-            CronTrigger(hour=2, minute=0, timezone=moscow_tz),
+            'interval',
+            hours=1,
             id='auto_backup',
-            name='Daily backup at 02:00 MSK',
+            name='Periodic backup checker',
             replace_existing=True
         )
         
         scheduler.start()
-        logger.info("Backup scheduler started - daily at 02:00 MSK")
+        logger.info("Backup scheduler started - checks every hour")
         
     except ImportError:
         logger.warning("APScheduler not installed, auto backups disabled. Install with: pip install apscheduler pytz")

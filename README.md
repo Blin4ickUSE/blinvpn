@@ -25,7 +25,7 @@
 ### Автоматическая установка (Ubuntu/Debian)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/Blin4ickUSE/blinvpn/main/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/your-repo/main/install.sh | sudo bash
 ```
 
 Скрипт автоматически:
@@ -74,7 +74,7 @@ sudo bash install.sh
 
 ### Основной бот
 - Регистрация пользователей
-- Реферальная система (20%)
+- Реферальная система (25%)
 - Проверка черного списка
 - Интеграция с мини-приложением
 
@@ -167,5 +167,4 @@ cp data.db data.db.backup
 ## Лицензия
 
 Proprietary - Все права защищены
-
 

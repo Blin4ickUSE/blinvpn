@@ -177,6 +177,18 @@ def init_database():
                 image_url TEXT
             )
         """)
+
+        # Сообщения рассылок (для чтения/удаления ранее отправленного)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS mailing_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mailing_id INTEGER NOT NULL,
+                telegram_id INTEGER NOT NULL,
+                telegram_message_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (mailing_id) REFERENCES mailings(id) ON DELETE CASCADE
+            )
+        """)
         
         # Тарифные планы
         cursor.execute("""
@@ -347,6 +359,22 @@ def init_database():
                 FOREIGN KEY (admin_id) REFERENCES panel_admins(id)
             )
         """)
+
+        # Одноразовые коды подтверждения входа в панель
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS panel_login_challenges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER NOT NULL,
+                temp_token TEXT UNIQUE NOT NULL,
+                code TEXT NOT NULL,
+                ip_address TEXT,
+                user_agent TEXT,
+                expires_at TIMESTAMP NOT NULL,
+                used INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (admin_id) REFERENCES panel_admins(id)
+            )
+        """)
         
         # Индексы
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)")
@@ -364,22 +392,22 @@ def init_database():
         cursor.execute("SELECT COUNT(*) FROM tariff_plans WHERE plan_type = 'vpn'")
         if cursor.fetchone()[0] == 0:
             default_plans = [
-                ('vpn', '1 месяц', 199, 30, 1),
-                ('vpn', '3 месяца', 499, 90, 2),
-                ('vpn', '6 месяцев', 899, 180, 3),
-                ('vpn', '1 год', 1499, 365, 4),
+                ('vpn', '1 месяц', 99, 30, 1),
+                ('vpn', '3 месяца', 249, 90, 2),
+                ('vpn', '6 месяцев', 449, 180, 3),
+                ('vpn', '1 год', 799, 365, 4),
             ]
             cursor.executemany("""
                 INSERT INTO tariff_plans (plan_type, name, price, duration_days, sort_order)
                 VALUES (?, ?, ?, ?, ?)
             """, default_plans)
         else:
-            # Миграция: обновить цены существующих VPN-тарифов на единые (199/499/899/1499₽)
+            # Миграция: обновить цены существующих VPN-тарифов
             price_map = {
-                30: (199, '1 месяц'),
-                90: (499, '3 месяца'),
-                180: (899, '6 месяцев'),
-                365: (1499, '1 год'),
+                30: (99, '1 месяц'),
+                90: (249, '3 месяца'),
+                180: (449, '6 месяцев'),
+                365: (799, '1 год'),
             }
             for days, (price, name) in price_map.items():
                 cursor.execute("""
@@ -391,7 +419,7 @@ def init_database():
             if cursor.fetchone()[0] == 0:
                 cursor.execute("""
                     INSERT INTO tariff_plans (plan_type, name, price, duration_days, sort_order)
-                    VALUES ('vpn', '6 месяцев', 899, 180, 3)
+                    VALUES ('vpn', '6 месяцев', 449, 180, 3)
                 """)
         
         # Реферальная ставка 25%: обновить существующих партнёров с 20% на 25%
@@ -584,7 +612,7 @@ def update_vpn_key(key_id: int, **kwargs) -> bool:
     cursor = conn.cursor()
     try:
         allowed = ['status', 'expiry_date', 'traffic_used', 'traffic_limit', 'key_config',
-                   'last_used', 'last_ip', 'squad_uuid', 'plan_type', 'hwid_hash', 'devices_limit']
+                   'last_used', 'last_ip', 'squad_uuid', 'plan_type', 'hwid_hash', 'devices_limit', 'custom_name']
         updates = []
         values = []
         for k, v in kwargs.items():
@@ -767,29 +795,54 @@ def credit_referral_income(user_id: int, purchase_amount: float, description: st
             return None
         
         referrer_id = row['referrer_id']
-        partner_rate = row['partner_rate'] or 25
-        income = purchase_amount * (partner_rate / 100)
-        if income <= 0:
+        first_level_income = purchase_amount * 0.20
+        if first_level_income <= 0:
             return None
         
         cursor.execute("""
             UPDATE users SET partner_balance = partner_balance + ?,
                            total_earned = total_earned + ?,
                            updated_at = CURRENT_TIMESTAMP WHERE id = ?
-        """, (income, income, referrer_id))
+        """, (first_level_income, first_level_income, referrer_id))
         
-        desc = description or f"Доход от реферала @{row['username'] or user_id}: {partner_rate}% от {purchase_amount}₽"
+        desc = description or f"Доход 1-й линии от реферала @{row['username'] or user_id}: 20% от {purchase_amount}₽"
         cursor.execute("""
             INSERT INTO transactions (user_id, type, amount, status, description)
             VALUES (?, 'referral_income', ?, 'Success', ?)
-        """, (referrer_id, income, desc))
+        """, (referrer_id, first_level_income, desc))
+
+        # 2-я линия: 5% для пригласившего вашего реферера
+        cursor.execute("""
+            SELECT r2.id as second_referrer_id, r2.telegram_id as second_referrer_telegram_id
+            FROM users r1
+            LEFT JOIN users r2 ON r1.referred_by = r2.id
+            WHERE r1.id = ?
+        """, (referrer_id,))
+        second_row = cursor.fetchone()
+        second_level_income = 0.0
+        if second_row and second_row['second_referrer_id']:
+            second_level_income = purchase_amount * 0.05
+            if second_level_income > 0:
+                cursor.execute("""
+                    UPDATE users SET partner_balance = partner_balance + ?,
+                                   total_earned = total_earned + ?,
+                                   updated_at = CURRENT_TIMESTAMP WHERE id = ?
+                """, (second_level_income, second_level_income, second_row['second_referrer_id']))
+                cursor.execute("""
+                    INSERT INTO transactions (user_id, type, amount, status, description)
+                    VALUES (?, 'referral_income', ?, 'Success', ?)
+                """, (
+                    second_row['second_referrer_id'],
+                    second_level_income,
+                    f"Доход 2-й линии: 5% от трат реферала 2-го уровня ({purchase_amount}₽)"
+                ))
         
         conn.commit()
         return {
             'referrer_id': referrer_id,
             'referrer_telegram_id': row['referrer_telegram_id'],
-            'income': income,
-            'rate': partner_rate,
+            'income': first_level_income,
+            'rate': 20,
             'purchase_amount': purchase_amount
         }
     except Exception as e:

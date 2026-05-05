@@ -40,6 +40,13 @@ async function miniApiFetch(path: string, options: RequestInit = {}): Promise<an
   if (res.status === 403) {
     try {
       const data = await res.json();
+      if (data.required_subscription) {
+        return {
+          _needsSubscription: true,
+          channel_link: data.channel_link || 'https://t.me',
+          channel_id: data.channel_id
+        };
+      }
       if (data.banned) {
         return { _banned: true, reason: data.reason || 'Аккаунт заблокирован' };
       }
@@ -113,6 +120,7 @@ interface Device {
   hours_left?: number;
   is_expired?: boolean;
   expiry_date?: string;
+  devices_limit?: number;
 }
 
 interface HistoryItem {
@@ -260,13 +268,31 @@ const PRIVACY_POLICY_TEXT = `
 // Загружаются из API, fallback на дефолтные
 const VPN_PLANS_DEFAULT: Plan[] = [
   { id: 'trial', duration: 'Пробный период', price: 0, highlight: false, days: 1, isTrial: true },
-  { id: '1m', duration: '1 месяц', price: 199, highlight: false, days: 30 },
-  { id: '3m', duration: '3 месяца', price: 499, highlight: false, days: 90 },   // -15%, вместо 599₽
-  { id: '6m', duration: '6 месяцев', price: 899, highlight: true, days: 180 },  // -25%, вместо 1199₽ 👑
-  { id: '1y', duration: '1 год', price: 1499, highlight: false, days: 365 },    // -35%, вместо 2399₽
+  { id: '1m', duration: '1 месяц', price: 99, highlight: false, days: 30 },
+  { id: '3m', duration: '3 месяца', price: 249, highlight: false, days: 90 },
+  { id: '6m', duration: '6 месяцев', price: 449, highlight: true, days: 180 },
+  { id: '1y', duration: '1 год', price: 799, highlight: false, days: 365 },
 ];
 
 const PRESET_AMOUNTS = [100, 250, 500, 1000, 2000, 5000];
+
+const PLAN_EXTRA_DEVICE_PRICE: Record<number, number> = {
+  30: 50,
+  90: 150,
+  180: 300,
+  365: 600,
+};
+
+function normalizedDevicesCount(devices: number): number {
+  return Math.max(2, Math.min(20, Math.floor(devices)));
+}
+
+function computePlanPrice(plan: Plan, devices: number): number {
+  if (plan.isTrial) return 0;
+  const d = normalizedDevicesCount(devices);
+  const extra = PLAN_EXTRA_DEVICE_PRICE[plan.days] ?? 50;
+  return plan.price + (d - 1) * extra;
+}
 
 // Платежные методы загружаются из API с комиссиями, но оставляем дефолтные
 const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
@@ -301,8 +327,9 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
 
 const WITHDRAW_METHODS = [
   { id: 'balance', name: 'На баланс', icon: <Wallet size={20} />, min: 1 },
-  { id: 'card', name: 'На карту', icon: <CreditCard size={20} />, min: 500 },
-  { id: 'crypto', name: 'Криптокошелек', icon: <img src="https://cryptologos.cc/logos/tether-usdt-logo.svg?v=026" className="w-5 h-5 invert" alt="USDT" />, min: 500 },
+  { id: 'card', name: 'На карту РФ', icon: <CreditCard size={20} />, min: 1000 },
+  { id: 'cryptobot', name: 'CryptoBot', icon: <img src="https://cryptologos.cc/logos/tether-usdt-logo.svg?v=026" className="w-5 h-5 invert" alt="USDT" />, min: 10 },
+  { id: 'crypto', name: 'Криптовалюта', icon: <img src="https://cryptologos.cc/logos/tether-usdt-logo.svg?v=026" className="w-5 h-5 invert" alt="USDT" />, min: 300 },
 ];
 
 const PLATFORMS: { id: PlatformId; name: string; icon: React.ReactNode }[] = [
@@ -465,6 +492,57 @@ const INSTRUCTIONS: Record<string, PlatformData> = {
 // 3. UI COMPONENTS
 // ==========================================
 
+const AnimatedBackground: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="max-w-md mx-auto min-h-screen w-full relative text-zinc-200 font-sans selection:bg-blue-500/30 tg-safe-padding overflow-x-clip" style={{ background: '#000', isolation: 'isolate' }}>
+    <style>{`
+      @keyframes drift1 {
+        0%   { transform: translate(0px, 0px); }
+        25%  { transform: translate(30px, 50px); }
+        50%  { transform: translate(-20px, 90px); }
+        75%  { transform: translate(40px, 40px); }
+        100% { transform: translate(0px, 0px); }
+      }
+      @keyframes drift2 {
+        0%   { transform: translate(0px, 0px); }
+        30%  { transform: translate(-40px, -60px); }
+        60%  { transform: translate(20px, -100px); }
+        100% { transform: translate(0px, 0px); }
+      }
+      .mb-orb {
+        position: absolute;
+        border-radius: 50%;
+        pointer-events: none;
+        z-index: 0;
+      }
+      .mb-orb-1 {
+        width: 380px; height: 380px;
+        top: -120px; left: -100px;
+        background: radial-gradient(circle at 50% 50%,
+          rgba(37,99,235,0.13) 0%,
+          rgba(29,78,216,0.06) 45%,
+          transparent 70%);
+        filter: blur(40px);
+        animation: drift1 35s ease-in-out infinite;
+      }
+      .mb-orb-2 {
+        width: 420px; height: 420px;
+        bottom: -80px; right: -140px;
+        background: radial-gradient(circle at 50% 50%,
+          rgba(59,130,246,0.10) 0%,
+          rgba(37,99,235,0.04) 45%,
+          transparent 70%);
+        filter: blur(50px);
+        animation: drift2 45s ease-in-out infinite;
+      }
+    `}</style>
+    <div className="mb-orb mb-orb-1" />
+    <div className="mb-orb mb-orb-2" />
+    <div style={{ position: 'relative', zIndex: 1 }}>
+      {children}
+    </div>
+  </div>
+);
+
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'outline' | 'danger' | 'ghost' | 'trial' | 'gold';
 }
@@ -472,11 +550,11 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 const Button: React.FC<ButtonProps> = ({ children, onClick, variant = 'primary', className = '', disabled = false }) => {
   const baseStyle = "w-full py-3.5 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 active:scale-[0.97] disabled:opacity-50 disabled:active:scale-100 disabled:cursor-not-allowed ripple";
   const variants = {
-    primary: "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/40",
-    secondary: "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700",
-    outline: "border-2 border-blue-600/30 text-blue-400 hover:bg-blue-600/10",
+    primary: "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-black/60",
+    secondary: "bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800",
+    outline: "border-2 border-blue-500/40 text-blue-400 hover:bg-blue-500/10",
     danger: "bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20",
-    ghost: "text-slate-400 hover:text-white hover:bg-slate-800/50",
+    ghost: "text-zinc-400 hover:text-white hover:bg-zinc-900/80",
     trial: "bg-gradient-to-r from-purple-600 to-blue-600 text-white shadow-lg shadow-purple-900/40 hover:brightness-110",
     gold: "bg-gradient-to-r from-amber-500 to-yellow-600 text-white shadow-lg shadow-amber-900/40"
   };
@@ -489,7 +567,7 @@ const Button: React.FC<ButtonProps> = ({ children, onClick, variant = 'primary',
 };
 
 const Card: React.FC<{ children: React.ReactNode, className?: string, onClick?: () => void }> = ({ children, className = '', onClick }) => (
-  <div onClick={onClick} className={`bg-slate-900/80 backdrop-blur-md border border-slate-800 rounded-2xl p-5 card-hover ${className}`}>
+  <div onClick={onClick} className={`bg-zinc-900 backdrop-blur-md border border-zinc-700/80 rounded-2xl p-5 card-hover ${className}`}>
     {children}
   </div>
 );
@@ -497,7 +575,7 @@ const Card: React.FC<{ children: React.ReactNode, className?: string, onClick?: 
 const Header: React.FC<{ title: string, onBack?: () => void }> = ({ title, onBack }) => (
   <div className="flex items-center gap-3 mb-6">
     {onBack && (
-      <button onClick={onBack} className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-300 hover:text-white transition-colors">
+      <button onClick={onBack} className="w-10 h-10 rounded-full bg-zinc-900 flex items-center justify-center text-zinc-300 hover:text-white transition-colors">
         <ChevronLeft size={22} />
       </button>
     )}
@@ -510,10 +588,10 @@ const Modal: React.FC<{ title: string, isOpen: boolean, onClose: () => void, chi
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/80 backdrop-blur-sm transition-opacity" onClick={onClose}></div>
-      <div className={`relative bg-slate-900 border border-slate-700 w-full max-w-sm rounded-2xl p-6 shadow-2xl transform transition-all scale-100 flex flex-col ${fullHeight ? 'h-[85vh]' : 'max-h-[90vh]'}`}>
+      <div className={`relative bg-black border border-zinc-900 w-full max-w-sm rounded-2xl p-6 shadow-2xl shadow-blue-950/20 transform transition-all scale-100 flex flex-col ${fullHeight ? 'h-[85vh]' : 'max-h-[90vh]'}`}>
         <div className="flex justify-between items-center mb-4 shrink-0">
           <h3 className="text-xl font-bold text-white">{title}</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-white">
+          <button onClick={onClose} className="text-zinc-400 hover:text-white">
             <X size={20} />
           </button>
         </div>
@@ -529,7 +607,7 @@ const Modal: React.FC<{ title: string, isOpen: boolean, onClose: () => void, chi
 const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
   const lines = content.split('\n');
   return (
-    <div className="space-y-3 text-slate-300 text-sm leading-relaxed">
+    <div className="space-y-3 text-zinc-300 text-sm leading-relaxed">
       {lines.map((line, idx) => {
         if (line.startsWith('### ')) {
           return <h3 key={idx} className="text-lg font-bold text-white mt-4 mb-2">{line.replace('### ', '')}</h3>;
@@ -547,7 +625,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
              <div key={idx} className="flex gap-2 pl-2">
                 <span className="text-blue-500 mt-1.5">•</span>
                 <span>
-                    {parts.map((part, pIdx) => (pIdx % 2 === 1 ? <strong key={pIdx} className="text-slate-200">{part}</strong> : part))}
+                    {parts.map((part, pIdx) => (pIdx % 2 === 1 ? <strong key={pIdx} className="text-zinc-200">{part}</strong> : part))}
                 </span>
              </div>
            );
@@ -556,7 +634,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
         const parts = line.split('**');
         return (
             <p key={idx} className={line.trim() === '' ? 'h-2' : ''}>
-                {parts.map((part, pIdx) => (pIdx % 2 === 1 ? <strong key={pIdx} className="text-slate-200">{part}</strong> : part))}
+                {parts.map((part, pIdx) => (pIdx % 2 === 1 ? <strong key={pIdx} className="text-zinc-200">{part}</strong> : part))}
             </p>
         );
       })}
@@ -603,6 +681,8 @@ export default function App() {
   // Ban Status
   const [isBanned, setIsBanned] = useState(false);
   const [banReason, setBanReason] = useState<string>('');
+  const [needsChannelSubscription, setNeedsChannelSubscription] = useState(false);
+  const [requiredChannelLink, setRequiredChannelLink] = useState<string>('https://t.me');
 
   // Onboarding (Tutorial)
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -617,8 +697,7 @@ export default function App() {
     step: 1, 
     amount: '', 
     method: null as string | null, 
-    phone: '', 
-    bank: '', 
+    cardNumber: '',
     cryptoNet: '', 
     cryptoAddr: '',
   });
@@ -638,8 +717,9 @@ export default function App() {
   const [vpnPlans, setVpnPlans] = useState<Plan[]>(VPN_PLANS_DEFAULT);
 
   // Connection Wizard State
-  const [wizardStep, setWizardStep] = useState(1); // 1: Platform, 2: Plan (VPN/Whitelist), 3: Payment/Confirm, 4: Instructions
-  const [wizardPlatform, setWizardPlatform] = useState<PlatformId>('android');
+  const [wizardStep, setWizardStep] = useState(1); // 1: тариф + устройства, 2: подтверждение, 3: оплата, 4: успех + инструкция
+  const [wizardDeviceCount, setWizardDeviceCount] = useState(2);
+  const [successInstructionPlatform, setSuccessInstructionPlatform] = useState<PlatformId>('android');
   const [wizardPlan, setWizardPlan] = useState<Plan | null>(null);
   const [wizardType] = useState<'vpn'>('vpn'); // Единая подписка
   const [useAutoPay, setUseAutoPay] = useState(false);
@@ -666,7 +746,7 @@ export default function App() {
     else if (ua.includes('linux')) detected = 'linux';
     
     setActivePlatform(detected);
-    setWizardPlatform(detected);
+    setSuccessInstructionPlatform(detected);
 
     // Определяем Telegram ID и username из Telegram WebApp
     let tgId: number | null = null;
@@ -701,7 +781,20 @@ export default function App() {
       
       // Уведомляем Telegram что приложение готово
       win.Telegram.WebApp.ready();
-      win.Telegram.WebApp.expand();
+      try {
+        if (typeof win.Telegram.WebApp.requestFullscreen === 'function') {
+          win.Telegram.WebApp.requestFullscreen();
+        } else {
+          win.Telegram.WebApp.expand();
+        }
+      } catch {
+        win.Telegram.WebApp.expand();
+      }
+      try {
+        if (typeof win.Telegram.WebApp.disableVerticalSwipes === 'function') {
+          win.Telegram.WebApp.disableVerticalSwipes();
+        }
+      } catch {}
     } else {
       const params = new URLSearchParams(window.location.search);
       const fromQuery = params.get('telegram_id');
@@ -740,6 +833,11 @@ export default function App() {
           userUrl += `&ref=${referralId}`;
         }
         const userData = await miniApiFetch(userUrl);
+        if (userData && userData._needsSubscription) {
+          setNeedsChannelSubscription(true);
+          setRequiredChannelLink(userData.channel_link || 'https://t.me');
+          return;
+        }
         
         // Проверяем бан
         if (userData && userData._banned) {
@@ -1142,7 +1240,14 @@ export default function App() {
   // --- LOGIC: WITHDRAWAL ---
 
   const openWithdrawModal = () => {
-    setWithdrawState(prev => ({ ...prev, step: 1, amount: '', method: null })); 
+    setWithdrawState({
+      step: 1,
+      amount: '',
+      method: null,
+      cardNumber: '',
+      cryptoNet: '',
+      cryptoAddr: '',
+    });
     setWithdrawModalOpen(true);
   };
 
@@ -1156,8 +1261,9 @@ export default function App() {
       setWithdrawState(prev => ({ ...prev, step: 2 }));
     } else if (step === 2) {
       if (!method) return alert("Выберите метод");
-      if (method === 'card' || method === 'crypto') {
-        if (numAmount < 500) return alert("Минимальная сумма вывода на карту/крипто - 500₽");
+      if (method === 'card' || method === 'crypto' || method === 'cryptobot') {
+        const minAmount = method === 'card' ? 1000 : (method === 'cryptobot' ? 10 : 300);
+        if (numAmount < minAmount) return alert(`Минимальная сумма вывода: ${minAmount}₽`);
         
         // Проверка 30-дневного лимита для карты
         if (method === 'card' && lastCardWithdrawal) {
@@ -1181,11 +1287,15 @@ export default function App() {
         };
         
         if (method === 'card') {
-          if (!withdrawState.phone || !withdrawState.bank) return alert("Заполните все поля");
-          requestData.phone = withdrawState.phone;
-          requestData.bank = withdrawState.bank;
+          if (!withdrawState.cardNumber) return alert("Укажите номер карты");
+          requestData.card_number = withdrawState.cardNumber.replace(/\s+/g, '');
+        } else if (method === 'cryptobot') {
+          // Дополнительные данные не требуются
         } else if (method === 'crypto') {
           if (!withdrawState.cryptoNet || !withdrawState.cryptoAddr) return alert("Заполните все поля");
+          if (withdrawState.cryptoNet === 'TRC-20' && !/^T/i.test(withdrawState.cryptoAddr.trim())) {
+            return alert("Для сети TRC-20 адрес должен начинаться с буквы T");
+          }
           requestData.crypto_net = withdrawState.cryptoNet;
           requestData.crypto_addr = withdrawState.cryptoAddr;
         }
@@ -1202,6 +1312,8 @@ export default function App() {
           } else if (method === 'card') {
             setLastCardWithdrawal(new Date().toISOString());
             addHistoryItem('ref_req', 'Заявка на вывод (Карта)', 0);
+          } else if (method === 'cryptobot') {
+            addHistoryItem('ref_req', 'Заявка на вывод (CryptoBot)', 0);
           } else if (method === 'crypto') {
             addHistoryItem('ref_req', 'Заявка на вывод (Crypto)', 0);
           }
@@ -1220,7 +1332,8 @@ export default function App() {
 
   // Функция продления существующей подписки
   const extendSubscription = async (device: Device, plan: Plan) => {
-    const price = plan.price;
+    const devs = normalizedDevicesCount(device.devices_limit || 2);
+    const price = computePlanPrice(plan, devs);
     const currentUserId = await ensureUserId();
     
     if (!currentUserId) {
@@ -1290,6 +1403,7 @@ export default function App() {
             type: 'vpn',
             is_trial: true,
             price: 0,
+            devices: Math.max(1, wizardDeviceCount),
           }),
         });
         
@@ -1308,14 +1422,14 @@ export default function App() {
       return;
     }
 
-    const price = wizardPlan.price;
+    const price = computePlanPrice(wizardPlan, wizardDeviceCount);
     const name = `Подписка (${wizardPlan.duration})`;
 
     if (balance < price) {
       if(window.confirm(`Недостаточно средств. Пополнить баланс на ${price - balance} ₽?`)) {
         setPendingAction({
             type: 'wizard',
-            payload: { wizardType: 'vpn', wizardPlan, price, name }
+            payload: { wizardType: 'vpn', wizardPlan, wizardDeviceCount, price, name }
         });
         setTopupAmount(price - balance);
         setTopupStep(2);
@@ -1332,6 +1446,7 @@ export default function App() {
           days: wizardPlan.days,
           type: 'vpn',
           price: price,
+          devices: wizardDeviceCount,
         }),
       });
       
@@ -1383,40 +1498,34 @@ export default function App() {
             </div>
           )}
           <div>
-            <div className="text-xs text-slate-400 font-medium">Добро пожаловать</div>
-            <div className="font-bold text-slate-100">{displayName}</div>
+            <div className="text-xs text-zinc-400 font-medium">Добро пожаловать</div>
+            <div className="font-bold text-zinc-100">{displayName}</div>
           </div>
         </div>
       </div>
 
-      <div className="relative overflow-hidden bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-3xl p-6 border border-slate-700 shadow-2xl">
-        <div className="absolute top-0 right-0 w-40 h-40 bg-blue-600/10 blur-[60px] rounded-full pointer-events-none"></div>
+      <div className="relative overflow-hidden bg-gradient-to-br from-zinc-900 via-zinc-950 to-black rounded-3xl p-6 border border-zinc-700/70 shadow-2xl shadow-blue-950/30">
         <div className="relative z-10">
           <div className="flex justify-between items-start mb-2">
-            <span className="text-slate-400 text-sm font-medium flex items-center gap-2">
+            <span className="text-zinc-400 text-sm font-medium flex items-center gap-2">
               <CreditCard size={14} /> Баланс счёта
             </span>
-            {balance <= 0 && (
-              <span className="px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 text-xs font-bold border border-red-500/20">
-                Низкий баланс
-              </span>
-            )}
           </div>
-          <div className={`text-4xl font-black mb-6 tracking-tight ${balance <= 0 ? 'text-red-500' : 'text-white'}`}>
+          <div className={`text-4xl font-black mb-6 tracking-tight ${balance < 0 ? 'text-red-500' : 'text-white'}`}>
             {formatMoney(balance)}
           </div>
           <div className="flex gap-3 mb-4">
             <Button onClick={() => { setTopupStep(1); setView('topup'); }} className="flex-1">
               <Zap size={18} fill="currentColor" /> Пополнить
             </Button>
-            <button onClick={() => setView('history')} className="w-14 bg-slate-700/50 hover:bg-slate-700 rounded-xl flex items-center justify-center text-slate-300 border border-slate-600 transition-colors">
+            <button onClick={() => setView('history')} className="w-14 bg-zinc-700/50 hover:bg-zinc-700 rounded-xl flex items-center justify-center text-zinc-300 border border-zinc-600 transition-colors">
               <History size={20} />
             </button>
           </div>
           
           <div className="w-full space-y-3">
             <Button 
-                onClick={() => { setWizardStep(1); setWizardPlan(null); setView('wizard'); }}
+                onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardDeviceCount(2); setView('wizard'); }}
                 className="w-full"
             >
                 <Shield size={20} /> Подключить VPN
@@ -1438,35 +1547,35 @@ export default function App() {
           <div className="w-10 h-10 rounded-full bg-blue-600/10 text-blue-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
             <Monitor size={20} />
           </div>
-          <div className="font-bold text-slate-200">Устройства</div>
-          <div className="text-xs text-slate-500 mt-1">{devices.length} активно</div>
+          <div className="font-bold text-zinc-200">Устройства</div>
+          <div className="text-xs text-zinc-500 mt-1">{devices.length} активно</div>
         </Card>
         <Card onClick={() => setView('referral')} className="cursor-pointer hover:border-green-500/50 transition-colors group">
           <div className="w-10 h-10 rounded-full bg-green-500/10 text-green-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
             <UserPlus size={20} />
           </div>
-          <div className="font-bold text-slate-200">Рефералы</div>
-          <div className="text-xs text-slate-500 mt-1">Заработать ₽</div>
+          <div className="font-bold text-zinc-200">Рефералы</div>
+          <div className="text-xs text-zinc-500 mt-1">Заработать ₽</div>
         </Card>
         <Card onClick={() => setView('promo')} className="cursor-pointer hover:border-purple-500/50 transition-colors group">
           <div className="w-10 h-10 rounded-full bg-purple-500/10 text-purple-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
             <Gift size={20} />
           </div>
-          <div className="font-bold text-slate-200">Промокод</div>
-          <div className="text-xs text-slate-500 mt-1">Активировать</div>
+          <div className="font-bold text-zinc-200">Промокод</div>
+          <div className="text-xs text-zinc-500 mt-1">Активировать</div>
         </Card>
         <Card onClick={() => window.open(SUPPORT_URL, '_blank')} className="cursor-pointer hover:border-orange-500/50 transition-colors group">
           <div className="w-10 h-10 rounded-full bg-orange-500/10 text-orange-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
             <Globe size={20} />
           </div>
-          <div className="font-bold text-slate-200">Поддержка</div>
-          <div className="text-xs text-slate-500 mt-1">Чат в Telegram</div>
+          <div className="font-bold text-zinc-200">Поддержка</div>
+          <div className="text-xs text-zinc-500 mt-1">Чат в Telegram</div>
         </Card>
       </div>
 
       <Card className="mt-3 !py-3 px-4 flex flex-col items-center justify-center gap-2 min-h-[80px]">
-         <div className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">О проекте</div>
-         <div className="flex flex-wrap justify-center gap-x-5 gap-y-2 text-xs font-medium text-slate-400">
+         <div className="text-zinc-500 text-[10px] font-bold uppercase tracking-widest">О проекте</div>
+         <div className="flex flex-wrap justify-center gap-x-5 gap-y-2 text-xs font-medium text-zinc-400">
             <button onClick={() => window.open('https://t.me/blinvpn', '_blank')} className="hover:text-blue-400 transition-colors">Наш канал</button>
             <button onClick={() => openDoc("Договор оферты", publicPages.offer)} className="hover:text-blue-400 transition-colors">Договор оферты</button>
             <button onClick={() => openDoc("Политика конфиденциальности", publicPages.privacy)} className="hover:text-blue-400 transition-colors">Политика конфиденциальности</button>
@@ -1475,13 +1584,16 @@ export default function App() {
     </div>
   );
 
-  const WizardView = () => (
+  const WizardView = () => {
+    const payableTotal = wizardPlan ? computePlanPrice(wizardPlan, wizardDeviceCount) : 0;
+    return (
     <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
       <Header 
         title={
-            wizardStep === 1 ? "Выберите устройство" : 
-            wizardStep === 2 ? "Настройка тарифа" : 
-            wizardStep === 3 ? "Подтверждение" : "Настройка"
+            wizardStep === 1 ? 'Тариф и устройства' :
+            wizardStep === 2 ? 'Подтверждение' :
+            wizardStep === 3 ? 'Оплата' :
+            'Успешно'
         } 
         onBack={() => {
             if (wizardStep === 1) setView('home');
@@ -1490,64 +1602,70 @@ export default function App() {
       />
 
       {wizardStep === 1 && (
-        <div className="flex-1">
+        <div className="flex-1 flex flex-col">
             {devices.length > 0 && (
               <button 
                 onClick={() => setView('devices')}
-                className="w-full mb-4 py-3 px-4 bg-slate-800/80 hover:bg-slate-700 border border-slate-600 rounded-xl flex items-center justify-between transition-colors"
+                className="w-full mb-4 py-3 px-4 bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 rounded-xl flex items-center justify-between transition-colors"
               >
                 <div className="flex items-center gap-3">
                   <Smartphone size={20} className="text-blue-400" />
                   <span className="text-white font-medium">Мои устройства</span>
                   <span className="bg-blue-600 text-white text-xs px-2 py-0.5 rounded-full">{devices.length}</span>
                 </div>
-                <ChevronRight size={20} className="text-slate-400" />
+                <ChevronRight size={20} className="text-zinc-400" />
               </button>
             )}
-            <p className="text-slate-400 text-sm mb-6 text-center">На каком устройстве вы планируете использовать VPN?</p>
-            <div className="grid grid-cols-2 gap-4">
-                {PLATFORMS.map(p => (
-                    <button 
-                        key={p.id}
-                        onClick={() => { setWizardPlatform(p.id); setWizardStep(2); }}
-                        className="bg-slate-800 border-2 border-slate-700 hover:border-blue-500 hover:bg-slate-750 p-6 rounded-2xl flex flex-col items-center gap-4 transition-all"
-                    >
-                        <div className="text-slate-300">{p.icon}</div>
-                        <span className="font-bold text-white">{p.name}</span>
-                    </button>
-                ))}
-            </div>
-        </div>
-      )}
 
-      {wizardStep === 2 && (
-        <div className="flex-1 flex flex-col">
-            {/* Информация о единой подписке */}
-            <div className="bg-gradient-to-r from-blue-500/20 to-purple-500/20 border border-blue-500/30 rounded-2xl p-4 mb-5">
+            <div className="bg-gradient-to-r from-blue-600/15 to-transparent border border-blue-500/25 rounded-2xl p-4 mb-5 animate-fade-in">
                 <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center shrink-0">
+                    <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center shrink-0 shadow-lg shadow-blue-900/40">
                         <Shield size={20} className="text-white" />
                     </div>
                     <div className="flex-1">
                         <div className="font-bold text-white text-sm mb-1">Единая подписка</div>
-                        <div className="text-blue-200/80 text-xs leading-relaxed">
-                            VPN + Обход блокировок операторов в одном тарифе. Работает везде!
+                        <div className="text-blue-200/75 text-xs leading-relaxed">
+                            VPN и обход блокировок операторов.
                         </div>
                     </div>
                 </div>
             </div>
 
-            <div className="space-y-3">
+            {(wizardPlan == null || !wizardPlan.isTrial) && (
+              <div className="bg-black/60 border border-zinc-900 rounded-2xl p-4 mb-5">
+                <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2 font-bold">Количество устройств</div>
+                <div className="flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-blue-600/80 transition-colors disabled:opacity-40"
+                    disabled={wizardDeviceCount <= 2}
+                    onClick={() => setWizardDeviceCount(c => Math.max(2, c - 1))}
+                  >−</button>
+                  <div className="text-center flex-1">
+                    <div className="text-3xl font-black text-white">{wizardDeviceCount}</div>
+                    <div className="text-[11px] text-zinc-500 mt-1">мин. 2, макс. 20</div>
+                  </div>
+                  <button
+                    type="button"
+                    className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-blue-600/80 transition-colors"
+                    onClick={() => setWizardDeviceCount(c => Math.min(20, c + 1))}
+                  >+</button>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-3 flex-1">
                 {(vpnPlans || VPN_PLANS_DEFAULT).filter(plan => !plan.isTrial || !isTrialUsed).map((plan) => {
                     const days = plan.days ?? (plan as any).duration_days;
-                    const discountText = days === 90 ? '-15% выгода' : days === 180 ? '-25% выгода' : days === 365 ? '-35% выгода' : (plan.id === '3m' ? '-15% выгода' : plan.id === '6m' ? '-25% выгода' : plan.id === '1y' ? '-35% выгода' : null);
+                    const discountText = days === 90 ? '-16%' : days === 180 ? '-24%' : days === 365 ? '-33%' : null;
+                    const shown = computePlanPrice(plan, wizardDeviceCount);
                     return (
                     <div 
                         key={plan.id}
-                        onClick={() => { setWizardPlan(plan); setWizardStep(3); }}
-                        className={`relative p-4 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-center card-hover ${
-                            plan.isTrial ? 'border-purple-500 bg-purple-900/20' : 
-                            (plan.highlight ? 'border-amber-500/50 bg-gradient-to-r from-amber-900/20 to-transparent' : 'border-slate-800 bg-slate-800/50 hover:border-slate-600')
+                        onClick={() => { setWizardPlan(plan); setWizardStep(2); }}
+                        className={`relative p-3 rounded-xl border transition-all cursor-pointer flex justify-between items-center card-hover ${
+                            plan.isTrial ? 'border-purple-500/60 bg-purple-950/40' :
+                            (plan.highlight ? 'border-amber-500/50 bg-gradient-to-r from-amber-950/35 to-transparent' : 'border-zinc-900 bg-zinc-950/70 hover:border-blue-600/35')
                         }`}
                     >
                         <div>
@@ -1559,77 +1677,89 @@ export default function App() {
                             {discountText && <div className={`text-xs font-medium ${days === 180 ? 'text-amber-400' : 'text-green-400'}`}>{discountText}</div>}
                         </div>
                         <div className="text-right">
-                            <div className={`font-bold text-xl ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>{plan.price} ₽</div>
-                            <ChevronRight size={20} className="text-slate-500 ml-auto mt-1" />
+                            <div className={`font-bold text-xl ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>
+                              {shown} ₽
+                            </div>
+                            <ChevronRight size={20} className="text-zinc-500 ml-auto mt-1" />
                         </div>
                     </div>
                 );})}
             </div>
-            
-            {/* Что включено */}
-            <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mt-6 space-y-2">
+
+            <div className="bg-zinc-950/80 p-4 rounded-xl border border-zinc-900 mt-6 space-y-2">
                 <div className="text-white font-semibold text-sm mb-2">Что включено:</div>
                 <div className="flex items-center gap-2">
                     <CheckCircle className="text-green-400 shrink-0" size={16} />
-                    <span className="text-slate-300 text-xs">Безлимитный трафик</span>
+                    <span className="text-zinc-300 text-xs">Безлимитный трафик</span>
                 </div>
                 <div className="flex items-center gap-2">
                     <CheckCircle className="text-green-400 shrink-0" size={16} />
-                    <span className="text-slate-300 text-xs">Обход блокировок операторов</span>
+                    <span className="text-zinc-300 text-xs">Обход блокировок операторов</span>
                 </div>
                 <div className="flex items-center gap-2">
                     <CheckCircle className="text-green-400 shrink-0" size={16} />
-                    <span className="text-slate-300 text-xs">Работает при «Беспилотной опасности»</span>
+                    <span className="text-zinc-300 text-xs">Работает при «Беспилотной опасности»</span>
                 </div>
             </div>
         </div>
       )}
 
-      {wizardStep === 3 && (
+      {wizardStep === 2 && wizardPlan && (
         <div className="flex-1 flex flex-col">
-            <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 mb-6 text-center">
-                <div className="text-slate-400 mb-2">Вы подключаете</div>
-                <div className="text-2xl font-bold text-white mb-6">
-                    Подписка на {wizardPlan?.duration}
+            <div className="bg-zinc-950 p-6 rounded-2xl border border-zinc-900 mb-6 text-center">
+                <div className="text-zinc-400 mb-2">{wizardPlan.isTrial ? 'Пробный период' : 'Вы подключаете'}</div>
+                <div className="text-2xl font-bold text-white mb-4">
+                    {wizardPlan.duration}
                 </div>
-                
-                <div className="border-t border-slate-700 pt-4 flex justify-between items-center">
-                    <span className="text-slate-400">Стоимость:</span>
-                    <span className="text-xl font-bold text-white">
-                        {wizardPlan?.price} ₽
-                    </span>
-                </div>
-            </div>
-
-            <div className="bg-yellow-500/10 border border-yellow-500/20 p-4 rounded-xl mb-6 flex gap-3 items-start">
-                <AlertTriangle className="text-yellow-500 shrink-0 mt-0.5" size={18} />
-                <div className="text-yellow-400 text-xs leading-relaxed">
-                    <strong>Важно:</strong> 1 подписка = 1 устройство. При использовании на нескольких устройствах одновременно подписка будет заблокирована.
+                {!wizardPlan.isTrial && (
+                  <div className="text-sm text-zinc-500 mb-4">Устройств в подписке: <span className="text-blue-400 font-semibold">{wizardDeviceCount}</span></div>
+                )}
+                <div className="border-t border-zinc-800 pt-4 flex justify-between items-center">
+                    <span className="text-zinc-400">Итого:</span>
+                    <span className="text-xl font-bold text-white">{payableTotal} ₽</span>
                 </div>
             </div>
 
-            <div className="mt-auto">
+            <div className="mt-auto space-y-3">
                 <div className="flex justify-between items-center mb-4 text-sm">
-                    <span className="text-slate-400">Ваш баланс:</span>
-                    <span className={`${balance < (wizardPlan?.price || 0) ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
+                    <span className="text-zinc-400">Баланс:</span>
+                    <span className={`${balance < payableTotal ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
+                </div>
+                <Button onClick={() => setWizardStep(3)} variant={wizardPlan.isTrial ? 'trial' : 'primary'} className="w-full">
+                  Дальше
+                </Button>
+            </div>
+        </div>
+      )}
+
+      {wizardStep === 3 && wizardPlan && (
+        <div className="flex-1 flex flex-col justify-center">
+            <div className="mt-auto">
+                <div className="flex justify-between items-center mb-6 text-lg">
+                  <span className="text-zinc-400">К оплате</span>
+                  <span className="font-black text-white text-2xl">{payableTotal} ₽</span>
+                </div>
+                <div className="flex justify-between items-center mb-4 text-sm">
+                    <span className="text-zinc-400">Ваш баланс:</span>
+                    <span className={`${balance < payableTotal ? 'text-red-400' : 'text-green-400'} font-bold`}>{balance} ₽</span>
                 </div>
 
-                {balance >= (wizardPlan?.price || 0) ? (
-                    <Button onClick={wizardActivate} variant={wizardPlan?.isTrial ? 'trial' : 'primary'}>
-                        {wizardPlan?.isTrial ? 'Активировать бесплатно' : 'Оплатить и подключить'}
+                {balance >= payableTotal ? (
+                    <Button onClick={wizardActivate} variant={wizardPlan.isTrial ? 'trial' : 'primary'}>
+                        {wizardPlan.isTrial ? 'Активировать бесплатно' : 'Оплатить с баланса'}
                     </Button>
                 ) : (
                     <Button onClick={() => {
-                        const price = wizardPlan?.price || 0;
+                        const price = payableTotal;
                         setPendingAction({
                             type: 'wizard',
-                            payload: { wizardType: 'vpn', wizardPlan, price, name: `Подписка (${wizardPlan?.duration})` }
+                            payload: { wizardType: 'vpn', wizardPlan, wizardDeviceCount, price, name: `Подписка (${wizardPlan.duration})` }
                         });
                         setTopupAmount(price - balance);
                         setTopupStep(2);
                         setView('topup');
                     }}>
-                        Пополнить на {(wizardPlan?.price || 0) - balance} ₽
+                        Пополнить на {payableTotal - balance} ₽
                     </Button>
                 )}
             </div>
@@ -1638,21 +1768,39 @@ export default function App() {
 
       {wizardStep === 4 && (
         <div className="flex-1 flex flex-col h-full animate-fade-in">
-            <div className="text-center mb-6">
-                <div className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center text-green-500 mx-auto mb-4">
+            <div className="text-center mb-4">
+                <div className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center text-green-500 mx-auto mb-4 ring-2 ring-green-500/20">
                     <CheckCircle size={32} />
                 </div>
                 <h2 className="text-2xl font-bold text-white animate-slide-up">Успешно!</h2>
-                <p className="text-slate-400">Подписка активирована. Настройте ваше устройство:</p>
+                <p className="text-zinc-400 text-sm px-2">Подписка активирована. Выберите устройство и откройте инструкцию:</p>
             </div>
 
-            <div className="flex-1 overflow-y-auto bg-slate-800/50 rounded-2xl p-4 border border-slate-700">
-                {INSTRUCTIONS[wizardPlatform].steps.map((step, idx) => (
-                    <div key={idx} className="relative pl-6 border-l-2 border-slate-700 pb-6 last:border-0 last:pb-0">
-                        <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-slate-900 border-2 border-blue-500"></div>
+            <div className="mb-3">
+              <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-2 block">Устройство для настройки</label>
+              <div className="relative">
+                <select
+                  value={successInstructionPlatform}
+                  onChange={(e) => setSuccessInstructionPlatform(e.target.value as PlatformId)}
+                  className="w-full appearance-none bg-black border border-zinc-800 text-white py-3 pl-4 pr-10 rounded-xl focus:outline-none focus:border-blue-500"
+                >
+                  {PLATFORMS.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400">
+                  <ChevronDown size={18} />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto bg-zinc-950/70 rounded-2xl p-4 border border-zinc-900 min-h-[200px]">
+                {(INSTRUCTIONS[successInstructionPlatform] || INSTRUCTIONS.android).steps.map((step, idx) => (
+                    <div key={idx} className="relative pl-6 border-l-2 border-zinc-800 pb-6 last:border-0 last:pb-0">
+                        <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-black border-2 border-blue-600"></div>
                         <h3 className="font-bold text-white text-md mb-1 leading-none">{step.title}</h3>
-                        <p className="text-slate-400 text-xs mb-3 leading-relaxed">{step.desc}</p>
-                        
+                        <p className="text-zinc-400 text-xs mb-3 leading-relaxed">{step.desc}</p>
+
                         {step.actions && (
                             <div className="flex flex-col gap-2">
                             {step.actions.map((action, aIdx) => (
@@ -1668,7 +1816,7 @@ export default function App() {
                                 className={`py-2 px-3 rounded-lg text-xs font-semibold text-center transition-colors ${
                                     action.primary 
                                     ? 'bg-blue-600 text-white hover:bg-blue-500' 
-                                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                                    : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800 border border-zinc-800'
                                 }`}
                                 >
                                 {action.label}
@@ -1686,7 +1834,8 @@ export default function App() {
         </div>
       )}
     </div>
-  );
+    );
+  };
 
   const DevicesView = () => (
     <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
@@ -1709,10 +1858,10 @@ export default function App() {
           const isLowTime = !isExpired && !isForever && (device.days_left !== undefined && device.days_left <= 3);
           
           return (
-          <div key={device.id} className={`rounded-xl p-4 border card-hover ${isExpired ? 'bg-red-900/20 border-red-500/50' : 'bg-slate-800 border-slate-700'}`}>
+          <div key={device.id} className={`rounded-xl p-4 border card-hover ${isExpired ? 'bg-red-900/20 border-red-500/50' : 'bg-zinc-800 border-zinc-700'}`}>
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-4">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isExpired ? 'bg-red-900/30 text-red-400' : 'bg-slate-700 text-slate-300'}`}>
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isExpired ? 'bg-red-900/30 text-red-400' : 'bg-zinc-700 text-zinc-300'}`}>
                   {device.type === 'ios' || device.type === 'android' ? <Smartphone size={20} /> : <Monitor size={20} />}
                 </div>
                 <div>
@@ -1720,24 +1869,24 @@ export default function App() {
                     {device.is_trial ? 'Пробная подписка' : 'Подписка'} | #{device.id}
                   </div>
                   {timeLeftText ? (
-                    <div className={`text-xs font-medium ${isExpired ? 'text-red-400' : isLowTime ? 'text-orange-400' : isForever ? 'text-yellow-400' : 'text-slate-400'}`}>
+                    <div className={`text-xs font-medium ${isExpired ? 'text-red-400' : isLowTime ? 'text-orange-400' : isForever ? 'text-yellow-400' : 'text-zinc-400'}`}>
                       {timeLeftText}
                     </div>
                   ) : (
-                    <div className="text-xs text-slate-500">Бессрочно</div>
+                    <div className="text-xs text-zinc-500">Бессрочно</div>
                   )}
                 </div>
               </div>
               <div className="flex gap-2">
                 <button 
                   onClick={() => openEditModal(device)}
-                  className="p-2 rounded-lg bg-slate-700 text-slate-300 hover:text-white hover:bg-blue-600 transition-colors"
+                  className="p-2 rounded-lg bg-zinc-700 text-zinc-300 hover:text-white hover:bg-blue-600 transition-colors"
                 >
                   <Edit2 size={16} />
                 </button>
                 <button 
                   onClick={() => openDeleteModal(device)}
-                  className="p-2 rounded-lg bg-slate-700 text-slate-300 hover:text-white hover:bg-red-600 transition-colors"
+                  className="p-2 rounded-lg bg-zinc-700 text-zinc-300 hover:text-white hover:bg-red-600 transition-colors"
                 >
                   <Trash2 size={16} />
                 </button>
@@ -1757,7 +1906,7 @@ export default function App() {
             ) : (
               <button 
                 onClick={() => { setActivePlatform(device.type); setView('instruction_view'); }}
-                className="w-full bg-slate-700/50 hover:bg-slate-700 py-2 rounded-lg text-sm text-blue-400 flex items-center justify-center gap-2 transition-colors border border-slate-600/50"
+                className="w-full bg-zinc-700/50 hover:bg-zinc-700 py-2 rounded-lg text-sm text-blue-400 flex items-center justify-center gap-2 transition-colors border border-zinc-600/50"
               >
                 <BookOpen size={16} /> Инструкция по подключению
               </button>
@@ -1765,11 +1914,11 @@ export default function App() {
           </div>
         );})}
         {devices.length === 0 && (
-          <div className="text-center py-10 text-slate-500">Нет подключенных устройств</div>
+          <div className="text-center py-10 text-zinc-500">Нет подключенных устройств</div>
         )}
       </div>
       <div className="mt-6 mb-4">
-        <Button onClick={() => { setWizardStep(1); setWizardPlan(null); setView('wizard'); }}>
+        <Button onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardDeviceCount(2); setView('wizard'); }}>
           <Plus size={20} /> Добавить устройство
         </Button>
       </div>
@@ -1779,7 +1928,9 @@ export default function App() {
   // View для продления подписки - выбор тарифа
   const ExtendSubscriptionView = () => {
     const plansForExtend = vpnPlans.filter(p => !p.isTrial); // Без триала
-    
+    const extDevCnt = extendingDevice ? normalizedDevicesCount(extendingDevice.devices_limit || 2) : 2;
+    const priceForExtend = (p: Plan) => computePlanPrice(p, extDevCnt);
+
     return (
       <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
         <Header 
@@ -1792,8 +1943,8 @@ export default function App() {
         />
         
         {extendingDevice && (
-          <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-4">
-            <div className="text-slate-400 text-sm mb-1">Продление ключа</div>
+          <div className="bg-zinc-800/50 p-4 rounded-xl border border-zinc-700 mb-4">
+            <div className="text-zinc-400 text-sm mb-1">Продление ключа</div>
             <div className="text-white font-medium">
 {extendingDevice.is_trial ? 'Пробная подписка' : 'Подписка'} | #{extendingDevice.id}
             </div>
@@ -1801,7 +1952,10 @@ export default function App() {
         )}
         
         <div className="flex-1">
-          <div className="text-slate-400 text-sm mb-4">Выберите период продления:</div>
+          <div className="text-xs text-zinc-500 mb-2">
+            Цена продления зависит от числа устройств по вашему ключу (сейчас: <span className="text-blue-400 font-semibold">{extDevCnt}</span>).
+          </div>
+          <div className="text-zinc-400 text-sm mb-4">Выберите период продления:</div>
           <div className="grid gap-3">
             {plansForExtend.map(plan => (
               <button
@@ -1810,7 +1964,7 @@ export default function App() {
                 className={`p-4 rounded-xl text-left transition-all border ${
                   extendPlan?.id === plan.id
                     ? 'bg-blue-600/20 border-blue-500 ring-1 ring-blue-500'
-                    : 'bg-slate-800 border-slate-700 hover:bg-slate-750'
+                    : 'bg-zinc-800 border-zinc-700 hover:bg-zinc-750'
                 }`}
               >
                 <div className="flex justify-between items-center">
@@ -1818,10 +1972,10 @@ export default function App() {
                     <div className={`font-bold ${extendPlan?.id === plan.id ? 'text-blue-400' : 'text-white'}`}>
                       {plan.duration}
                     </div>
-                    <div className="text-slate-500 text-sm">{plan.days} дней</div>
+                    <div className="text-zinc-500 text-sm">{plan.days} дней</div>
                   </div>
-                  <div className={`text-lg font-bold ${extendPlan?.id === plan.id ? 'text-blue-400' : 'text-slate-300'}`}>
-                    {plan.price} ₽
+                  <div className={`text-lg font-bold ${extendPlan?.id === plan.id ? 'text-blue-400' : 'text-zinc-300'}`}>
+                    {priceForExtend(plan)} ₽
                   </div>
                 </div>
               </button>
@@ -1838,7 +1992,7 @@ export default function App() {
               }
             }}
           >
-            <Zap size={18} /> Продлить за {extendPlan?.price || 0} ₽
+            <Zap size={18} /> Продлить за {extendPlan ? priceForExtend(extendPlan) : 0} ₽
           </Button>
         </div>
       </div>
@@ -1859,9 +2013,9 @@ export default function App() {
         <>
           <div className="flex-1">
             <div className="text-center py-6">
-               <div className="text-slate-400 text-sm mb-2">Введите или выберите сумму</div>
+               <div className="text-zinc-400 text-sm mb-2">Выберите сумму</div>
                <div className="text-5xl font-bold text-white tracking-tight">
-                 {topupAmount > 0 ? topupAmount : 0}<span className="text-slate-600 text-3xl ml-1">₽</span>
+                 {topupAmount > 0 ? topupAmount : 0}<span className="text-zinc-600 text-3xl ml-1">₽</span>
                </div>
             </div>
 
@@ -1873,7 +2027,7 @@ export default function App() {
                   className={`py-4 rounded-xl text-sm font-bold transition-all border ${
                     topupAmount === amount 
                     ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/40 transform scale-105' 
-                    : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                    : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'
                   }`}
                 >
                   {amount} ₽
@@ -1906,14 +2060,14 @@ export default function App() {
       {topupStep === 2 && (
         <>
           <div className="flex-1 space-y-3">
-             <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 mb-6 space-y-2">
+             <div className="bg-zinc-800/50 p-4 rounded-xl border border-zinc-700 mb-6 space-y-2">
                 <div className="flex justify-between items-center text-sm">
-                   <span className="text-slate-400">Сумма:</span>
+                   <span className="text-zinc-400">Сумма:</span>
                    <span className="text-white">{topupAmount} ₽</span>
                 </div>
                 {selectedMethod && (
                   <div className="flex justify-between items-center text-sm">
-                     <span className="text-slate-400">Комиссия ({
+                     <span className="text-zinc-400">Комиссия ({
                         (() => {
                             const method = paymentMethods.find(m => m.id === selectedMethod);
                             if (method?.variants && selectedVariant) {
@@ -1922,7 +2076,7 @@ export default function App() {
                             return method?.feePercent;
                         })()
                      }%):</span>
-                     <span className="text-slate-300">+{
+                     <span className="text-zinc-300">+{
                         (() => {
                            const total = getPaymentTotal();
                            return (total - topupAmount).toFixed(1).replace(/\.0$/, '');
@@ -1930,7 +2084,7 @@ export default function App() {
                      } ₽</span>
                   </div>
                 )}
-                <div className="flex justify-between items-center pt-2 border-t border-slate-700 font-bold text-lg">
+                <div className="flex justify-between items-center pt-2 border-t border-zinc-700 font-bold text-lg">
                    <span className="text-white">Итого к оплате:</span>
                    <span className="text-blue-400">{getPaymentTotal()} ₽</span>
                 </div>
@@ -1950,14 +2104,14 @@ export default function App() {
                     className={`w-full p-4 rounded-xl flex items-center justify-between transition-all border ${
                       selectedMethod === method.id
                       ? 'bg-blue-600/10 border-blue-600 text-white'
-                      : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750'
+                      : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-750'
                     }`}
                   >
                     <div className="flex items-center gap-3">
                       <span className="text-2xl">{method.icon}</span>
                       <span className="font-medium text-left">
                         <div className="leading-tight">{method.name}</div>
-                        <div className="text-xs text-slate-500 font-normal mt-0.5">
+                        <div className="text-xs text-zinc-500 font-normal mt-0.5">
                            {method.variants ? 'Выберите провайдера' : (method.feePercent === 0 ? 'Без комиссии' : `Комиссия ${method.feePercent}%`)}
                         </div>
                       </span>
@@ -1970,7 +2124,7 @@ export default function App() {
                           <select 
                             value={selectedVariant || ''}
                             onChange={(e) => setSelectedVariant(e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-600 rounded-lg p-2 text-sm text-white focus:border-blue-500 outline-none"
+                            className="w-full bg-zinc-900 border border-zinc-600 rounded-lg p-2 text-sm text-white focus:border-blue-500 outline-none"
                             onClick={(e) => e.stopPropagation()}
                           >
                               {method.variants.map(v => (
@@ -2051,10 +2205,10 @@ export default function App() {
           <Shield size={40} className="text-blue-500" />
         </div>
         <h2 className="text-xl font-bold text-white mb-2">Подключите защиту</h2>
-        <p className="text-slate-400 mb-6 max-w-xs">
+        <p className="text-zinc-400 mb-6 max-w-xs">
           Единая подписка включает VPN и обход блокировок операторов
         </p>
-        <Button onClick={() => { setWizardStep(1); setWizardPlan(null); setView('wizard'); }}>
+        <Button onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardDeviceCount(2); setView('wizard'); }}>
           Открыть мастер подключения
         </Button>
       </div>
@@ -2122,6 +2276,7 @@ export default function App() {
                         days: payload.wizardPlan?.days || 30,
                         type: 'vpn',
                         price: payload.price,
+                        devices: payload.wizardDeviceCount ?? 2,
                       }),
                     });
                     
@@ -2129,7 +2284,6 @@ export default function App() {
                       addHistoryItem('buy_dev', `Подключение: ${payload.name}`, -payload.price);
                       setPendingAction(null);
                       setPaymentUrl(null);
-                      setActivePlatform(wizardPlatform);
                       await refreshAll();
                       setWizardStep(4);
                       setView('wizard');
@@ -2145,7 +2299,7 @@ export default function App() {
             // Если не удалось выполнить действие - просто переходим к инструкциям
             setPendingAction(null);
             setPaymentUrl(null);
-            setActivePlatform(wizardPlatform);
+            setActivePlatform(successInstructionPlatform);
             await refreshDevices();
             setView('instruction_view');
           } else {
@@ -2186,10 +2340,10 @@ export default function App() {
           <CreditCard className="text-blue-400" size={32} />
         </div>
         <h2 className="text-2xl font-bold text-white mb-3">Обрабатываем платёж...</h2>
-        <p className="text-slate-400 mb-2 max-w-xs">
+        <p className="text-zinc-400 mb-2 max-w-xs">
           {pendingAction ? 'VPN подключится автоматически после оплаты' : 'Завершите оплату в открывшемся окне'}
         </p>
-        <p className="text-slate-500 text-xs mb-8">
+        <p className="text-zinc-500 text-xs mb-8">
           Страница обновится автоматически
         </p>
         {paymentUrl && (
@@ -2208,7 +2362,7 @@ export default function App() {
             Перейти к оплате
           </Button>
         )}
-        <div className="mt-4 text-xs text-slate-500">
+        <div className="mt-4 text-xs text-zinc-500">
           {checking ? 'Проверка оплаты...' : 'Автоматическая проверка каждые 3 сек.'}
         </div>
         <button 
@@ -2217,7 +2371,7 @@ export default function App() {
         >
           <MessageCircle size={16} /> Связаться с поддержкой
         </button>
-        <button onClick={() => { setPaymentUrl(null); setPendingAction(null); setPollingActive(false); setView('home'); }} className="mt-3 text-slate-500 text-sm hover:text-slate-300">
+        <button onClick={() => { setPaymentUrl(null); setPendingAction(null); setPollingActive(false); setView('home'); }} className="mt-3 text-zinc-500 text-sm hover:text-zinc-300">
           Отменить
         </button>
       </div>
@@ -2230,7 +2384,7 @@ export default function App() {
         <CheckCircle size={48} />
       </div>
       <h2 className="text-3xl font-bold text-white mb-2">Успешно!</h2>
-      <p className="text-slate-400 mb-8">Баланс пополнен на {topupAmount} ₽.</p>
+      <p className="text-zinc-400 mb-8">Баланс пополнен на {topupAmount} ₽.</p>
       <Button onClick={async () => {
         setTopupAmount(0);
         setSelectedMethod(null);
@@ -2252,18 +2406,18 @@ export default function App() {
         <Header title="Настройка" onBack={() => setView('devices')} />
 
         <div className="mb-6 relative">
-          <label className="text-xs text-slate-500 mb-2 block uppercase font-bold tracking-wider">Ваша платформа</label>
+          <label className="text-xs text-zinc-500 mb-2 block uppercase font-bold tracking-wider">Ваша платформа</label>
           <div className="relative">
             <select 
               value={activePlatform}
               onChange={(e) => setActivePlatform(e.target.value as PlatformId)}
-              className="w-full appearance-none bg-slate-800 border border-slate-700 text-white py-3 pl-4 pr-10 rounded-xl focus:outline-none focus:border-blue-500"
+              className="w-full appearance-none bg-zinc-800 border border-zinc-700 text-white py-3 pl-4 pr-10 rounded-xl focus:outline-none focus:border-blue-500"
             >
               {Object.entries(INSTRUCTIONS).map(([key, data]) => (
                 <option key={key} value={key}>{data.title}</option>
               ))}
             </select>
-            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-400">
               <ChevronDown size={18} />
             </div>
           </div>
@@ -2279,10 +2433,10 @@ export default function App() {
           </div>
 
           {currentInstr.steps.map((step, idx) => (
-            <div key={idx} className="relative pl-6 border-l-2 border-slate-700 pb-2 last:border-0">
-              <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-slate-900 border-2 border-blue-500"></div>
+            <div key={idx} className="relative pl-6 border-l-2 border-zinc-700 pb-2 last:border-0">
+              <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-zinc-900 border-2 border-blue-500"></div>
               <h3 className="font-bold text-white text-lg mb-2 leading-none">{step.title}</h3>
-              <p className="text-slate-400 text-sm mb-4 leading-relaxed">{step.desc}</p>
+              <p className="text-zinc-400 text-sm mb-4 leading-relaxed">{step.desc}</p>
               
               {step.actions && (
                 <div className="flex flex-col gap-2">
@@ -2303,7 +2457,7 @@ export default function App() {
                       className={`py-3 px-4 rounded-xl text-sm font-semibold text-center transition-colors ${
                         action.primary 
                         ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-600/30' 
-                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                        : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
                       }`}
                     >
                       {action.label}
@@ -2323,17 +2477,17 @@ export default function App() {
       <Header title="История" onBack={() => setView('home')} />
       <div className="space-y-3">
         {history.map(item => (
-          <div key={item.id} className="bg-slate-800/50 p-4 rounded-xl border border-slate-800 flex justify-between items-center">
+          <div key={item.id} className="bg-zinc-800/50 p-4 rounded-xl border border-zinc-800 flex justify-between items-center">
             <div className="flex items-center gap-3">
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center ${item.amount > 0 ? 'bg-green-500/10 text-green-500' : (item.amount < 0 ? 'bg-red-500/10 text-red-500' : 'bg-slate-700 text-slate-400')}`}>
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center ${item.amount > 0 ? 'bg-green-500/10 text-green-500' : (item.amount < 0 ? 'bg-red-500/10 text-red-500' : 'bg-zinc-700 text-zinc-400')}`}>
                 {item.amount > 0 ? <Download size={18} /> : (item.amount < 0 ? <LogOut size={18} /> : <Clock size={18} />)}
               </div>
               <div>
-                <div className="font-medium text-slate-200">{item.title}</div>
-                <div className="text-xs text-slate-500">{item.date}</div>
+                <div className="font-medium text-zinc-200">{item.title}</div>
+                <div className="text-xs text-zinc-500">{item.date}</div>
               </div>
             </div>
-            <div className={`font-bold ${item.amount > 0 ? 'text-green-500' : (item.amount < 0 ? 'text-slate-200' : 'text-slate-400')}`}>
+            <div className={`font-bold ${item.amount > 0 ? 'text-green-500' : (item.amount < 0 ? 'text-zinc-200' : 'text-zinc-400')}`}>
               {item.amount > 0 ? '+' : ''}{item.amount !== 0 ? formatMoney(item.amount) : '0 ₽'}
             </div>
           </div>
@@ -2349,31 +2503,31 @@ export default function App() {
         <Header title={selectedReferral.name} onBack={() => setView('referral')} />
         
         <div className="grid grid-cols-2 gap-4 mb-6">
-           <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
-              <div className="text-xs text-slate-400 mb-1">Потратил всего</div>
+           <div className="bg-zinc-800 p-4 rounded-xl border border-zinc-700">
+              <div className="text-xs text-zinc-400 mb-1">Потратил всего</div>
               <div className="text-xl font-bold text-white">{selectedReferral.spent.toFixed(2)} ₽</div>
            </div>
-           <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
-              <div className="text-xs text-slate-400 mb-1">Вы получили</div>
+           <div className="bg-zinc-800 p-4 rounded-xl border border-zinc-700">
+              <div className="text-xs text-zinc-400 mb-1">Вы получили</div>
               <div className="text-xl font-bold text-green-500">+{selectedReferral.myProfit.toFixed(2)} ₽</div>
            </div>
         </div>
 
-        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3 px-1">История операций</h3>
+        <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-wider mb-3 px-1">История операций</h3>
         <div className="space-y-3">
            {selectedReferral.history.length > 0 ? selectedReferral.history.map((h, idx) => (
-              <div key={idx} className="bg-slate-800/50 p-3 rounded-xl border border-slate-800 flex justify-between items-center">
+              <div key={idx} className="bg-zinc-800/50 p-3 rounded-xl border border-zinc-800 flex justify-between items-center">
                  <div>
-                    <div className="font-medium text-slate-200">{h.title}</div>
-                    <div className="text-xs text-slate-500">{h.date}</div>
+                    <div className="font-medium text-zinc-200">{h.title}</div>
+                    <div className="text-xs text-zinc-500">{h.date}</div>
                  </div>
                  <div className="text-right">
-                    <div className="text-slate-300">{h.amount.toFixed(2)} ₽</div>
+                    <div className="text-zinc-300">{h.amount.toFixed(2)} ₽</div>
                     <div className="text-xs text-green-500 font-bold">+{h.income.toFixed(2)} ₽</div>
                  </div>
               </div>
            )) : (
-              <div className="text-slate-500 text-center py-4">Нет операций</div>
+              <div className="text-zinc-500 text-center py-4">Нет операций</div>
            )}
         </div>
      </div>
@@ -2384,8 +2538,8 @@ export default function App() {
     <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
       <Header title="Реферальная программа" onBack={() => setView('home')} />
       
-      <div className="bg-gradient-to-br from-green-900/40 to-slate-900 border border-green-500/20 p-6 rounded-2xl mb-6 text-center">
-        <div className="text-slate-400 text-sm mb-1">Доступно для вывода</div>
+      <div className="bg-gradient-to-br from-green-900/40 to-black border border-green-500/20 p-6 rounded-2xl mb-6 text-center">
+        <div className="text-zinc-400 text-sm mb-1">Доступно для вывода</div>
         <div className="text-4xl font-bold text-green-500 mb-4">{referrals.partnerBalance.toFixed(2)} ₽</div>
         
         {referrals.partnerBalance > 0 ? (
@@ -2396,25 +2550,25 @@ export default function App() {
             Вывести средства
           </button>
         ) : (
-          <div className="text-slate-500 text-sm mb-4">Пригласите друзей, чтобы заработать</div>
+          <div className="text-zinc-500 text-sm mb-4">Пригласите друзей, чтобы заработать</div>
         )}
 
         <div className="grid grid-cols-2 gap-4 border-t border-white/10 pt-4">
           <div>
             <div className="text-xl font-bold text-white">{referrals.count}</div>
-            <div className="text-xs text-slate-500">Приглашено</div>
+            <div className="text-xs text-zinc-500">Приглашено</div>
           </div>
           <div>
             <div className="text-xl font-bold text-white">25%</div>
-            <div className="text-xs text-slate-500">Ваш доход</div>
+            <div className="text-xs text-zinc-500">Ваш доход</div>
           </div>
         </div>
       </div>
 
-      <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 mb-6">
-        <label className="text-xs text-slate-500 mb-2 block uppercase font-bold tracking-wider">Ваша ссылка</label>
+      <div className="bg-zinc-800 p-4 rounded-xl border border-zinc-700 mb-6">
+        <label className="text-xs text-zinc-500 mb-2 block uppercase font-bold tracking-wider">Ваша ссылка</label>
         <div className="flex gap-2">
-          <div className="bg-slate-900 flex-1 p-3 rounded-lg text-slate-300 font-mono text-sm truncate">
+          <div className="bg-zinc-900 flex-1 p-3 rounded-lg text-zinc-300 font-mono text-sm truncate">
             {telegramId ? `https://t.me/${BOT_USERNAME_MINI}?start=ref${telegramId}` : 'Загрузка...'}
           </div>
           <button
@@ -2431,36 +2585,36 @@ export default function App() {
       </div>
       
       <div>
-        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3 px-1">Приглашенные пользователи</h3>
+        <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-wider mb-3 px-1">Приглашенные пользователи</h3>
         <div className="space-y-2 pb-6">
           {referralList.length === 0 ? (
-            <div className="text-center py-8 bg-slate-800/30 rounded-xl border border-slate-800">
-              <UserPlus size={32} className="text-slate-600 mx-auto mb-3" />
-              <p className="text-slate-500 text-sm">У вас пока нет рефералов</p>
-              <p className="text-slate-600 text-xs mt-1">Поделитесь ссылкой выше, чтобы приглашать друзей</p>
+            <div className="text-center py-8 bg-zinc-800/30 rounded-xl border border-zinc-800">
+              <UserPlus size={32} className="text-zinc-600 mx-auto mb-3" />
+              <p className="text-zinc-500 text-sm">У вас пока нет рефералов</p>
+              <p className="text-zinc-600 text-xs mt-1">Поделитесь ссылкой выше, чтобы приглашать друзей</p>
             </div>
           ) : (
             referralList.map(user => (
               <button 
                  key={user.id} 
                  onClick={() => { setSelectedReferral(user); setView('referral_detail'); }}
-                 className="w-full bg-slate-800/50 border border-slate-800 p-3 rounded-xl flex justify-between items-center hover:bg-slate-800 transition-colors"
+                 className="w-full bg-zinc-800/50 border border-zinc-800 p-3 rounded-xl flex justify-between items-center hover:bg-zinc-800 transition-colors"
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-slate-400">
+                  <div className="w-8 h-8 rounded-full bg-zinc-700 flex items-center justify-center text-zinc-400">
                     <User size={14} />
                   </div>
                   <div className="text-left">
-                    <div className="text-sm font-bold text-slate-200">{user.name}</div>
-                    <div className="text-[10px] text-slate-500">{user.date}</div>
+                    <div className="text-sm font-bold text-zinc-200">{user.name}</div>
+                    <div className="text-[10px] text-zinc-500">{user.date}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                    <div className="text-right">
-                     <div className="text-xs text-slate-500">Доход</div>
+                     <div className="text-xs text-zinc-500">Доход</div>
                      <div className="text-sm font-bold text-green-500">+{user.myProfit.toFixed(2)} ₽</div>
                    </div>
-                   <ChevronRight size={16} className="text-slate-600" />
+                   <ChevronRight size={16} className="text-zinc-600" />
                 </div>
               </button>
             ))
@@ -2480,14 +2634,14 @@ export default function App() {
             <Gift size={40} />
           </div>
           <h2 className="text-xl font-bold text-white mb-2">Активация бонуса</h2>
-          <p className="text-slate-400 text-center text-sm mb-8">
+          <p className="text-zinc-400 text-center text-sm mb-8">
             Введите промокод для получения скидки.
           </p>
           <input 
             value={code}
             onChange={(e) => setCode(e.target.value.toUpperCase())}
             placeholder="PROMO2025"
-            className="w-full bg-slate-800 border border-slate-600 rounded-xl p-4 text-center text-2xl font-mono text-white tracking-widest uppercase focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none mb-4 placeholder:text-slate-700"
+            className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-4 text-center text-2xl font-mono text-white tracking-widest uppercase focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none mb-4 placeholder:text-zinc-700"
           />
           <Button 
             disabled={!code} 
@@ -2535,9 +2689,48 @@ export default function App() {
   };
 
   // Страница "Доступ ограничен"
+  if (needsChannelSubscription) {
+    return (
+      <AnimatedBackground>
+        <div className="p-4 min-h-screen flex flex-col items-center justify-center">
+          <div className="w-full max-w-sm rounded-2xl border border-zinc-700 bg-zinc-900/80 p-5 animate-scale-in">
+            <h1 className="text-xl font-bold text-white mb-3">Подписка обязательна</h1>
+            <p className="text-sm text-zinc-400 mb-4">
+              Для использования мини-приложения нужно подписаться на канал сообщества.
+            </p>
+            <div className="text-xs text-zinc-500 mb-4">ID канала: -1003036752851</div>
+            <div className="space-y-3">
+              <a
+                href={requiredChannelLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center w-full py-3 bg-blue-600 hover:bg-blue-500 rounded-xl text-white font-semibold transition-all"
+              >
+                Открыть канал
+              </a>
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  if (!telegramId) return;
+                  const result = await miniApiFetch(`/user/info?telegram_id=${telegramId}&username=${encodeURIComponent(username)}`);
+                  if (result && !result._needsSubscription) {
+                    setNeedsChannelSubscription(false);
+                    await refreshAll();
+                  }
+                }}
+              >
+                Проверить подписку
+              </Button>
+            </div>
+          </div>
+        </div>
+      </AnimatedBackground>
+    );
+  }
+
   if (isBanned) {
     return (
-      <div className="max-w-md mx-auto bg-black min-h-screen relative text-slate-200 font-sans selection:bg-blue-500/30">
+      <AnimatedBackground>
         <div className="p-4 min-h-screen flex flex-col items-center justify-center">
           <div className="text-center px-4 animate-in fade-in duration-500">
             {/* Иконка */}
@@ -2551,7 +2744,7 @@ export default function App() {
             <h1 className="text-2xl font-bold text-white mb-3">Доступ ограничен</h1>
             
             {/* Описание */}
-            <p className="text-slate-400 mb-6 leading-relaxed">
+            <p className="text-zinc-400 mb-6 leading-relaxed">
               Ваш аккаунт заблокирован за нарушение правил сервиса.
             </p>
             
@@ -2564,14 +2757,14 @@ export default function App() {
             )}
             
             {/* Инфо блок */}
-            <div className="bg-slate-800/50 rounded-xl p-4 mb-6 text-left">
+            <div className="bg-zinc-800/50 rounded-xl p-4 mb-6 text-left">
               <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
-                <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 Информация
               </h3>
-              <ul className="text-sm text-slate-400 space-y-2">
+              <ul className="text-sm text-zinc-400 space-y-2">
                 <li>• Администрация оставляет за собой право отказать в разблокировке</li>
                 <li>• Подробности о причинах блокировки могут не предоставляться в целях защиты алгоритмов безопасности</li>
               </ul>
@@ -2582,7 +2775,7 @@ export default function App() {
               href={SUPPORT_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center justify-center gap-2 w-full py-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-xl text-white font-medium transition-colors"
+              className="flex items-center justify-center gap-2 w-full py-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 rounded-xl text-white font-medium transition-colors"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
@@ -2591,13 +2784,13 @@ export default function App() {
             </a>
           </div>
         </div>
-      </div>
+      </AnimatedBackground>
     );
   }
 
   return (
-    <div className="max-w-md mx-auto bg-black min-h-screen relative text-slate-200 font-sans selection:bg-blue-500/30">
-      <div className="p-4 min-h-screen flex flex-col">
+    <AnimatedBackground>
+      <div className="p-4 min-h-screen flex flex-col overflow-x-clip animate-fade-in">
         {view === 'home' && <HomeView />}
         {view === 'wizard' && <WizardView />}
         {view === 'topup' && <TopUpView />}
@@ -2625,7 +2818,7 @@ export default function App() {
             type="text"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:border-blue-500 outline-none"
+            className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white focus:border-blue-500 outline-none"
             placeholder="Название устройства"
             autoFocus
           />
@@ -2639,7 +2832,7 @@ export default function App() {
         onClose={() => setDeleteModalOpen(false)}
       >
         <div className="space-y-4">
-          <p className="text-slate-300">
+          <p className="text-zinc-300">
             Вы уверены, что хотите удалить <b>{currentDevice?.name}</b>? Это действие нельзя отменить.
           </p>
           <div className="grid grid-cols-2 gap-3">
@@ -2669,10 +2862,10 @@ export default function App() {
       >
         {withdrawState.step === 1 && (
           <div className="space-y-4">
-            <div className="text-sm text-slate-400">Доступно: <span className="text-green-500 font-bold">{referrals.partnerBalance.toFixed(2)} ₽</span></div>
-            {referrals.partnerBalance < 500 && (
+            <div className="text-sm text-zinc-400">Доступно: <span className="text-green-500 font-bold">{referrals.partnerBalance.toFixed(2)} ₽</span></div>
+            {referrals.partnerBalance < 1000 && (
               <div className="p-3 bg-yellow-900/20 border border-yellow-500/30 rounded-xl text-yellow-400 text-sm">
-                Минимальная сумма для вывода на карту или криптовалюту — 500₽. На баланс можно вывести любую сумму.
+                Минимумы вывода: баланс — 1₽, карта РФ — 1000₽, CryptoBot — 10₽, криптовалюта — 300₽.
               </div>
             )}
             <input
@@ -2680,7 +2873,7 @@ export default function App() {
               placeholder="Сумма вывода"
               value={withdrawState.amount}
               onChange={(e) => setWithdrawState({ ...withdrawState, amount: e.target.value })}
-              className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:border-blue-500 outline-none"
+              className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white focus:border-blue-500 outline-none"
             />
             <Button onClick={handleWithdrawNext}>Далее</Button>
           </div>
@@ -2688,7 +2881,7 @@ export default function App() {
 
         {withdrawState.step === 2 && (
           <div className="space-y-3">
-            <div className="text-sm text-slate-400 mb-2">Выберите метод:</div>
+            <div className="text-sm text-zinc-400 mb-2">Выберите метод:</div>
             {WITHDRAW_METHODS.map(method => (
               <button
                 key={method.id}
@@ -2697,11 +2890,11 @@ export default function App() {
                 className={`w-full p-4 rounded-xl flex items-center justify-between transition-all border ${
                   withdrawState.method === method.id
                   ? 'bg-blue-600/10 border-blue-600 text-white'
-                  : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750 disabled:opacity-50 disabled:cursor-not-allowed'
+                  : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-750 disabled:opacity-50 disabled:cursor-not-allowed'
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-slate-300">
+                  <div className="w-8 h-8 rounded-full bg-zinc-700 flex items-center justify-center text-zinc-300">
                     {method.icon}
                   </div>
                   <div className="text-left">
@@ -2724,47 +2917,48 @@ export default function App() {
         {withdrawState.step === 3 && (
           <div className="space-y-4">
             {withdrawState.method === 'balance' && (
-              <p className="text-slate-300 text-center">
+              <p className="text-zinc-300 text-center">
                 Средства будут зачислены на ваш внутренний баланс моментально.
               </p>
             )}
             
             {withdrawState.method === 'card' && (
               <>
-                <div className="text-sm text-slate-400 mb-2">Заполните реквизиты:</div>
-                <input
-                  type="tel"
-                  placeholder="+7 9xx xxx xx xx"
-                  value={withdrawState.phone}
-                  onChange={(e) => setWithdrawState({ ...withdrawState, phone: e.target.value })}
-                  className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white mb-2 focus:border-blue-500 outline-none"
-                />
+                <div className="text-sm text-zinc-400 mb-2">Заполните реквизиты:</div>
                 <input
                   type="text"
-                  placeholder="Название банка (Сбер, Тинькофф...)"
-                  value={withdrawState.bank}
-                  onChange={(e) => setWithdrawState({ ...withdrawState, bank: e.target.value })}
-                  className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:border-blue-500 outline-none"
+                  placeholder="Номер карты"
+                  value={withdrawState.cardNumber}
+                  onChange={(e) => setWithdrawState({ ...withdrawState, cardNumber: e.target.value })}
+                  className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white mb-2 focus:border-blue-500 outline-none"
                 />
               </>
             )}
 
+            {withdrawState.method === 'cryptobot' && (
+              <p className="text-zinc-300 text-center">
+                Для вывода в CryptoBot дополнительные реквизиты не требуются.
+              </p>
+            )}
+
             {withdrawState.method === 'crypto' && (
               <>
-                <div className="text-sm text-slate-400 mb-2">Реквизиты кошелька:</div>
-                <input
-                  type="text"
-                  placeholder="Сеть (TRC-20, BEP-20...)"
+                <div className="text-sm text-zinc-400 mb-2">Реквизиты кошелька:</div>
+                <select
                   value={withdrawState.cryptoNet}
                   onChange={(e) => setWithdrawState({ ...withdrawState, cryptoNet: e.target.value })}
-                  className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white mb-2 focus:border-blue-500 outline-none"
-                />
+                  className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white mb-2 focus:border-blue-500 outline-none"
+                >
+                  <option value="">Выберите сеть</option>
+                  <option value="TON">TON</option>
+                  <option value="TRC-20">TRC-20</option>
+                </select>
                 <input
                   type="text"
                   placeholder="Адрес кошелька"
                   value={withdrawState.cryptoAddr}
                   onChange={(e) => setWithdrawState({ ...withdrawState, cryptoAddr: e.target.value })}
-                  className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:border-blue-500 outline-none font-mono text-sm"
+                  className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white focus:border-blue-500 outline-none font-mono text-sm"
                 />
               </>
             )}
@@ -2784,7 +2978,7 @@ export default function App() {
             <h3 className="text-xl font-bold text-white mb-2">
               {withdrawState.method === 'balance' ? 'Готово!' : 'Заявка принята'}
             </h3>
-            <p className="text-slate-400 text-sm mb-6">
+            <p className="text-zinc-400 text-sm mb-6">
               {withdrawState.method === 'balance' 
                 ? 'Средства зачислены на ваш баланс.' 
                 : 'Если нарушений нет, средства поступят в течение 3-х рабочих дней.'}
@@ -2796,67 +2990,53 @@ export default function App() {
 
       {/* Онбординг для новых пользователей */}
       {showOnboarding && (
-        <div className="fixed inset-0 z-[100] bg-slate-950 flex flex-col">
+        <div className="fixed inset-0 z-[100] bg-zinc-950 flex flex-col animate-fade-in">
           {/* Progress dots */}
           <div className="flex justify-center gap-2 pt-6 pb-4">
-            {[0, 1, 2, 3].map(i => (
+            {[0, 1, 2].map(i => (
               <div 
                 key={i} 
-                className={`w-2 h-2 rounded-full transition-all ${i === onboardingStep ? 'bg-blue-500 w-6' : 'bg-slate-700'}`}
+                className={`w-2 h-2 rounded-full transition-all ${i === onboardingStep ? 'bg-blue-500 w-6' : 'bg-zinc-700'}`}
               />
             ))}
           </div>
           
           {/* Content */}
           <div className="flex-1 flex flex-col items-center justify-center px-8 text-center">
+            <div className={`w-24 h-24 mb-6 ${onboardingStep === 0 ? 'animate-pulse-soft' : 'animate-scale-in'}`}>
+              <img
+                src="/assets/logo.png"
+                onError={(e) => { (e.currentTarget.style.display = 'none'); }}
+                alt="BlinVPN"
+                className={`w-full h-full object-contain mx-auto ${onboardingStep === 0 ? '' : 'translate-y-[-8px]'} transition-all duration-500`}
+              />
+            </div>
             {onboardingStep === 0 && (
               <>
-                <div className="w-24 h-24 bg-blue-600/20 rounded-full flex items-center justify-center mb-6">
-                  <Shield className="text-blue-500" size={48} />
-                </div>
-                <h2 className="text-2xl font-bold text-white mb-4">Добро пожаловать!</h2>
-                <p className="text-slate-400 leading-relaxed">
-                  BLIN VPN — это современный и безопасный VPN-сервис. 
-                  Мы поможем вам защитить ваше интернет-соединение.
+                <h2 className="text-2xl font-bold text-white mb-4 animate-slide-up">Добро пожаловать в БлинВПН</h2>
+                <p className="text-zinc-400 leading-relaxed">
+                  Быстрый, безопасный и удобный VPN для стабильного доступа к интернету.
                 </p>
               </>
             )}
             
             {onboardingStep === 1 && (
               <>
-                <div className="w-24 h-24 bg-green-600/20 rounded-full flex items-center justify-center mb-6">
-                  <Gift className="text-green-500" size={48} />
+                <div className="flex gap-2 mb-4 text-xs text-zinc-300 animate-slide-up">
+                  <span>Германия</span><span>•</span><span>Финляндия</span><span>•</span><span>Нидерланды</span><span>•</span><span>Россия</span><span>•</span><span>США</span>
                 </div>
-                <h2 className="text-2xl font-bold text-white mb-4">Бесплатный пробный период</h2>
-                <p className="text-slate-400 leading-relaxed">
-                  Попробуйте VPN абсолютно бесплатно! 
-                  Активируйте 24-часовой пробный период и оцените качество сервиса.
+                <h2 className="text-2xl font-bold text-white mb-4">Много локаций</h2>
+                <p className="text-zinc-400 leading-relaxed">
+                  Выбирайте удобную страну и подключайтесь к серверам с высокой скоростью.
                 </p>
               </>
             )}
             
             {onboardingStep === 2 && (
               <>
-                <div className="w-24 h-24 bg-purple-600/20 rounded-full flex items-center justify-center mb-6">
-                  <UserPlus className="text-purple-500" size={48} />
-                </div>
-                <h2 className="text-2xl font-bold text-white mb-4">Реферальная программа</h2>
-                <p className="text-slate-400 leading-relaxed">
-                  Приглашайте друзей и получайте бонусы! 
-                  За каждого приглашённого друга вы получите 10% от его первого пополнения.
-                </p>
-              </>
-            )}
-            
-            {onboardingStep === 3 && (
-              <>
-                <div className="w-24 h-24 bg-yellow-600/20 rounded-full flex items-center justify-center mb-6">
-                  <Rocket className="text-yellow-500" size={48} />
-                </div>
-                <h2 className="text-2xl font-bold text-white mb-4">Начнём!</h2>
-                <p className="text-slate-400 leading-relaxed">
-                  Всё готово для начала работы. 
-                  Нажмите "Подключить VPN" на главном экране, чтобы настроить защиту.
+                <h2 className="text-2xl font-bold text-white mb-4">Универсальный обход ограничений</h2>
+                <p className="text-zinc-400 leading-relaxed">
+                  Работает при мобильных ограничениях и сценариях вроде режима «беспилотной опасности».
                 </p>
               </>
             )}
@@ -2864,20 +3044,20 @@ export default function App() {
           
           {/* Buttons */}
           <div className="px-6 pb-8 space-y-3">
-            {onboardingStep < 3 ? (
+            {onboardingStep < 2 ? (
               <>
                 <button 
                   onClick={() => setOnboardingStep(prev => prev + 1)}
-                  className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold transition-colors"
+                  className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold transition-all hover:scale-[1.01]"
                 >
-                  Далее
+                  Начнем
                 </button>
                 <button 
                   onClick={() => {
                     setShowOnboarding(false);
                     localStorage.setItem(`onboarding_${telegramId}`, 'true');
                   }}
-                  className="w-full py-3 text-slate-500 hover:text-slate-300 transition-colors"
+                  className="w-full py-3 text-zinc-500 hover:text-zinc-300 transition-all"
                 >
                   Пропустить
                 </button>
@@ -2888,7 +3068,7 @@ export default function App() {
                   setShowOnboarding(false);
                   localStorage.setItem(`onboarding_${telegramId}`, 'true');
                 }}
-                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold transition-colors"
+                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold transition-all hover:scale-[1.01]"
               >
                 Начать пользоваться
               </button>
@@ -2896,6 +3076,6 @@ export default function App() {
           </div>
         </div>
       )}
-    </div>
+    </AnimatedBackground>
   );
 }

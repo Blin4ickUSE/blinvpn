@@ -378,6 +378,25 @@ const SmoothAreaChart: React.FC<SmoothAreaChartProps> = ({ color, data, label, h
   );
 };
 
+const CombinedLinesChart: React.FC<{ labels: string[]; usersData: number[]; keysData: number[] }> = ({ labels, usersData, keysData }) => {
+    const points = labels.map((label, index) => ({ label, users: usersData[index] || 0, keys: keysData[index] || 0 }));
+    const maxValue = Math.max(1, ...points.map(p => Math.max(p.users, p.keys)));
+    const toPath = (values: number[]) => values.map((val, i) => `${(i / Math.max(1, values.length - 1)) * 100},${100 - (val / maxValue) * 90}`).join(' ');
+    if (!points.length) return <div className="h-48 flex items-center justify-center text-gray-500">Нет данных</div>;
+    return (
+        <div className="space-y-3">
+            <svg viewBox="0 0 100 100" className="w-full h-56">
+                <polyline fill="none" stroke="#3b82f6" strokeWidth="1.8" points={toPath(points.map(p => p.users))} />
+                <polyline fill="none" stroke="#a855f7" strokeWidth="1.8" points={toPath(points.map(p => p.keys))} />
+            </svg>
+            <div className="flex gap-4 text-sm">
+                <div className="flex items-center text-blue-400"><span className="w-3 h-0.5 bg-blue-400 mr-2"></span>Новые пользователи</div>
+                <div className="flex items-center text-purple-400"><span className="w-3 h-0.5 bg-purple-400 mr-2"></span>Новые ключи</div>
+            </div>
+        </div>
+    );
+};
+
 interface PieChartItem {
     label: string;
     value: number;
@@ -638,12 +657,9 @@ const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, o
 interface TransactionModalProps {
     transaction: Transaction;
     onClose: () => void;
-    onRefund: (id: number) => void;
 }
 
-const TransactionModal: React.FC<TransactionModalProps> = ({ transaction, onClose, onRefund }) => {
-  const [refundStep, setRefundStep] = useState(0); 
-
+const TransactionModal: React.FC<TransactionModalProps> = ({ transaction, onClose }) => {
   if (!transaction) return null;
   const isIncome = transaction.type === 'income';
 
@@ -669,16 +685,6 @@ const TransactionModal: React.FC<TransactionModalProps> = ({ transaction, onClos
         </div>
 
         <div className="flex gap-3">
-            {isIncome && refundStep === 0 && (
-                <button onClick={() => setRefundStep(1)} className="flex-1 py-2.5 bg-red-600/10 hover:bg-red-600/20 text-red-400 border border-red-600/20 rounded-xl transition-colors font-medium flex items-center justify-center">
-                    <RefreshCw size={16} className="mr-2"/> Сделать возврат
-                </button>
-            )}
-            {refundStep === 1 && (
-                <button onClick={() => { onRefund(transaction.id); onClose(); }} className="flex-1 py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-xl transition-colors font-bold flex items-center justify-center animate-in fade-in">
-                    <AlertTriangle size={16} className="mr-2"/> Подтвердить возврат
-                </button>
-            )}
             <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl transition-colors font-medium">Закрыть</button>
         </div>
       </div>
@@ -728,7 +734,7 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
             }
         })();
     }, []);
-    
+
     const handleCreate = async () => { 
         if(!selectedUser) {
             onToast('Ошибка', 'Выберите пользователя', 'error');
@@ -1078,6 +1084,8 @@ function LoginForm({ onLogin }: { onLogin: (secret: string) => void }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [secret, setSecret] = useState('');
+  const [tempToken, setTempToken] = useState('');
+  const [verifyCode, setVerifyCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [initInfo, setInitInfo] = useState<{username?: string; password?: string; newAdmin?: boolean} | null>(null);
@@ -1112,13 +1120,38 @@ function LoginForm({ onLogin }: { onLogin: (secret: string) => void }) {
 
       const data = await res.json();
 
-      if (res.ok && data.session_token) {
+      if (res.ok && data.requires_2fa && data.temp_token) {
+        setTempToken(data.temp_token);
+      } else if (res.ok && data.session_token) {
         setPanelSecret(data.session_token);
         onLogin(data.session_token);
       } else {
         setError(data.error || 'Неверные учетные данные');
       }
     } catch (err) {
+      setError('Ошибка подключения к серверу');
+    }
+    setLoading(false);
+  };
+
+  const handleVerifyCodeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const res = await fetch('/api/panel/auth/verify-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ temp_token: tempToken, code: verifyCode })
+      });
+      const data = await res.json();
+      if (res.ok && data.session_token) {
+        setPanelSecret(data.session_token);
+        onLogin(data.session_token);
+      } else {
+        setError(data.error || 'Неверный код подтверждения');
+      }
+    } catch {
       setError('Ошибка подключения к серверу');
     }
     setLoading(false);
@@ -1200,7 +1233,7 @@ function LoginForm({ onLogin }: { onLogin: (secret: string) => void }) {
           </button>
         </div>
 
-        {authMode === 'credentials' ? (
+        {authMode === 'credentials' && !tempToken ? (
           <form onSubmit={handleCredentialsSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-400 mb-2">Логин</label>
@@ -1244,6 +1277,27 @@ function LoginForm({ onLogin }: { onLogin: (secret: string) => void }) {
               ) : (
                 'Войти'
               )}
+            </button>
+          </form>
+        ) : authMode === 'credentials' && tempToken ? (
+          <form onSubmit={handleVerifyCodeSubmit} className="space-y-4">
+            <div className="bg-blue-500/10 border border-blue-500/30 text-blue-300 px-4 py-3 rounded-lg text-sm">
+              Код подтверждения отправлен администраторам в Telegram.
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-400 mb-2">Код подтверждения</label>
+              <input
+                type="text"
+                value={verifyCode}
+                onChange={(e) => setVerifyCode(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                placeholder="123456"
+                required
+              />
+            </div>
+            {error && <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg text-sm">{error}</div>}
+            <button type="submit" disabled={loading || !verifyCode} className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-blue-900/30">
+              {loading ? 'Проверка...' : 'Подтвердить вход'}
             </button>
           </form>
         ) : (
@@ -1560,21 +1614,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
     <div className="min-h-screen bg-gray-950 text-gray-100 font-sans selection:bg-blue-500 selection:text-white">
       <ToastContainer toasts={toasts} removeToast={(id) => setToasts(prev => prev.filter(t => t.id !== id))} />
       
-      {selectedTransaction && (<TransactionModal transaction={selectedTransaction} onClose={() => setSelectedTransaction(null)} onRefund={async (id) => {
-        try {
-          const result = await apiFetch(`/panel/transactions/${id}/refund`, { method: 'POST' });
-          if (result.success) {
-            addToast('Возврат', result.message || `Возврат по транзакции #${id} успешно выполнен`, 'success');
-            // Обновляем список транзакций
-            const updatedTransactions = await apiFetch('/panel/transactions?limit=100');
-            setTransactions(updatedTransactions || []);
-          } else {
-            addToast('Ошибка', result.error || 'Не удалось выполнить возврат', 'error');
-          }
-        } catch (e: any) {
-          addToast('Ошибка', e.message || 'Не удалось выполнить возврат', 'error');
-        }
-      }} />)}
+      {selectedTransaction && (<TransactionModal transaction={selectedTransaction} onClose={() => setSelectedTransaction(null)} />)}
       {selectedUser && (<UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} onToast={addToast} />)}
       {isCreateKeyOpen && (<CreateKeyModal onClose={() => setIsCreateKeyOpen(false)} users={users} onToast={addToast} />)}
       {editingKey && (<KeyEditModal keyItem={editingKey} onClose={() => setEditingKey(null)} onSave={handleUpdateKey} onDelete={handleDeleteKey} />)}
@@ -1597,8 +1637,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             {[
                 { category: "Главное", items: [{ name: "Главная страница", icon: Home }, { name: "Финансы", icon: DollarSign }, { name: "Статистика", icon: BarChart2 }] },
                 { category: "Пользователи", items: [{ name: "Пользователи", icon: Users }, { name: "Ключи", icon: Key }] },
-                { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Тарифы", icon: Tag }] },
-                { category: "Система", items: [{ name: "Сквады", icon: Zap }, { name: "Инструменты", icon: Terminal }] },
+                { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Тарифы", icon: Tag }, { name: "Промокоды", icon: Gift }] },
                 { category: "Другое", items: [{ name: "Настройки", icon: Settings }] }
             ].map((section, idx) => (
                 <div key={idx}>
@@ -1654,9 +1693,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             {activePage === 'Пользователи' && <UsersPage users={users} userSearch={userSearch} setUserSearch={setUserSearch} setSelectedUser={setSelectedUser} setMassActionType={setMassActionType} />}
             {activePage === 'Ключи' && <KeysPage keys={keys} keySearch={keySearch} setKeySearch={setKeySearch} setIsCreateKeyOpen={setIsCreateKeyOpen} setEditingKey={setEditingKey} />}
             {activePage === 'Рассылка' && <MailingPage onToast={addToast} />}
-            {activePage === 'Тарифы' && <TariffsPage promos={promos} plans={plans} setPlans={setPlans} onToast={addToast} />}
-            {activePage === 'Сквады' && <SquadsPage onToast={addToast} />}
-            {activePage === 'Инструменты' && <ToolsPage onToast={addToast} />}
+            {activePage === 'Тарифы' && <TariffsPage plans={plans} setPlans={setPlans} onToast={addToast} />}
+            {activePage === 'Промокоды' && <PromocodesPage promos={promos} onToast={addToast} />}
             {activePage === 'Настройки' && <SettingsPage onToast={addToast} />}
         </div>
       </main>
@@ -1731,21 +1769,12 @@ const Dashboard = () => {
                 color="indigo"
               />
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-sm">
-                    <div className="flex justify-between items-center mb-6">
-                        <h3 className="text-lg font-semibold text-gray-200 flex items-center"><TrendingUp className="w-5 h-5 mr-2 text-blue-500" />Динамика новых пользователей</h3>
-                        <span className="text-xs font-medium text-green-400 bg-green-500/10 px-2 py-1 rounded">{labels.at(-1) || ''}</span>
-                    </div>
-                    <SmoothAreaChart color="#3b82f6" label="Пользователей" data={usersData} id="chart1" labels={labels} />
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-sm">
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-lg font-semibold text-gray-200 flex items-center"><TrendingUp className="w-5 h-5 mr-2 text-blue-500" />Динамика новых пользователей и ключей</h3>
+                    <span className="text-xs font-medium text-green-400 bg-green-500/10 px-2 py-1 rounded">{labels.at(-1) || ''}</span>
                 </div>
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-sm">
-                    <div className="flex justify-between items-center mb-6">
-                        <h3 className="text-lg font-semibold text-gray-200 flex items-center"><Key className="w-5 h-5 mr-2 text-purple-500" />Новые ключи</h3>
-                        <span className="text-xs font-medium text-purple-400 bg-purple-500/10 px-2 py-1 rounded">{labels.at(-1) || ''}</span>
-                    </div>
-                    <SmoothAreaChart color="#a855f7" label="Ключей" data={keysData} id="chart2" labels={labels} />
-                </div>
+                <CombinedLinesChart labels={labels} usersData={usersData} keysData={keysData} />
             </div>
         </div>
     );
@@ -2117,12 +2146,9 @@ interface MailingPageProps {
 const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
     const [stats, setStats] = useState<{
         totalSent: number;
-        delivered: number;
-        clicks: number;
-        lastCampaign: string | null;
-        lastCampaignDate: string | null;
     } | null>(null);
     const [history, setHistory] = useState<any[]>([]);
+    const [selectedHistoryItem, setSelectedHistoryItem] = useState<any | null>(null);
     const [message, setMessage] = useState('');
     const [buttonType, setButtonType] = useState<string>('');
     const [buttonValue, setButtonValue] = useState('');
@@ -2157,6 +2183,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
             onToast('Ошибка', 'Введите текст сообщения', 'error');
             return;
         }
+        if (!confirm('Подтвердить отправку рассылки?')) return;
         try {
             const payload: any = {
                 message,
@@ -2202,25 +2229,6 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                     value={stats ? stats.totalSent.toLocaleString('ru-RU') : '—'} 
                     icon={Send} 
                     color="blue" 
-                />
-                <StatCard 
-                    title="Доставляемость" 
-                    value={stats ? stats.delivered.toFixed(1) + '%' : '—'} 
-                    icon={CheckCircle} 
-                    color="green" 
-                />
-                <StatCard 
-                    title="Переходов" 
-                    value={stats ? stats.clicks.toLocaleString('ru-RU') : '—'} 
-                    icon={MousePointer} 
-                    color="purple" 
-                />
-                <StatCard 
-                    title="Последняя кампания" 
-                    value={stats?.lastCampaign || '—'} 
-                    subValue={stats?.lastCampaignDate ? new Date(stats.lastCampaignDate).toLocaleDateString('ru-RU') : ''} 
-                    icon={Clock} 
-                    color="orange" 
                 />
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -2317,26 +2325,61 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                             <Users size={12} className="mr-1"/> {item.sent_count || 0}
                                         </span>
                                     </div>
+                                    <div className="flex gap-2 mt-3">
+                                        <button onClick={() => setSelectedHistoryItem(item)} className="text-xs px-2 py-1 rounded bg-blue-600/20 text-blue-300 hover:bg-blue-600/30">Открыть</button>
+                                        <button onClick={async () => {
+                                            if (!confirm('Удалить рассылку и попытаться удалить сообщения у пользователей?')) return;
+                                            try {
+                                                await apiFetch(`/panel/mailing/${item.id}`, { method: 'DELETE' });
+                                                onToast('Успех', 'Рассылка удалена', 'success');
+                                                const historyData = await apiFetch('/panel/mailing/history');
+                                                if (Array.isArray(historyData)) setHistory(historyData);
+                                            } catch {
+                                                onToast('Ошибка', 'Не удалось удалить рассылку', 'error');
+                                            }
+                                        }} className="text-xs px-2 py-1 rounded bg-red-600/20 text-red-300 hover:bg-red-600/30">Удалить</button>
+                                    </div>
                                 </div>
                             ))
                         )}
                     </div>
                 </div>
             </div>
+            {selectedHistoryItem && (
+                <div className="fixed inset-0 bg-black/70 z-[70] flex items-center justify-center p-4" onClick={() => setSelectedHistoryItem(null)}>
+                    <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-2xl p-6" onClick={e => e.stopPropagation()}>
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-xl font-bold text-white">{selectedHistoryItem.title || 'Текст рассылки'}</h3>
+                            <button onClick={() => setSelectedHistoryItem(null)} className="text-gray-400 hover:text-white"><X size={20} /></button>
+                        </div>
+                        <div className="text-gray-200 whitespace-pre-wrap bg-gray-950 border border-gray-800 rounded-xl p-4 max-h-[60vh] overflow-auto">
+                            {selectedHistoryItem.message_text || 'Пустое сообщение'}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
 
 interface TariffsPageProps {
-  promos: Promo[];
   plans: Plan[];
   setPlans: React.Dispatch<React.SetStateAction<Plan[]>>;
   onToast: (title: string, msg: string, type: ToastType) => void;
 }
 
-const TariffsPage: React.FC<TariffsPageProps> = ({ promos, plans, setPlans, onToast }) => {
-    const [activeTab, setActiveTab] = useState('plans');
-    const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
+const TariffsPage: React.FC<TariffsPageProps> = ({ onToast }) => {
+    return (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div><h2 className="text-2xl font-bold text-white">Тарифы</h2><p className="text-gray-400 mt-1">Управление тарифными планами</p></div>
+            </div>
+            <TariffsPlansPage onToast={onToast} />
+        </div>
+    );
+};
+
+const PromocodesPage: React.FC<{ promos: Promo[]; onToast: (title: string, msg: string, type: ToastType) => void }> = ({ promos, onToast }) => {
     const [newPromo, setNewPromo] = useState<{ code: string; type: Promo['type']; value: string; limit: string; expires: string }>({
         code: '',
         type: 'balance',
@@ -2351,191 +2394,39 @@ const TariffsPage: React.FC<TariffsPageProps> = ({ promos, plans, setPlans, onTo
             return;
         }
         try {
-            const payload: any = {
-                code: newPromo.code.toUpperCase(),
-                type: newPromo.type,
-                value: newPromo.value,
-                uses_limit: newPromo.limit ? Number(newPromo.limit) : null,
-                expires_at: newPromo.expires || null,
-                is_active: 1,
-            };
-            const res = await apiFetch('/panel/promocodes', {
+            await apiFetch('/panel/promocodes', {
                 method: 'POST',
-                body: JSON.stringify(payload),
+                body: JSON.stringify({
+                    code: newPromo.code.toUpperCase(),
+                    type: newPromo.type,
+                    value: newPromo.value,
+                    uses_limit: newPromo.limit ? Number(newPromo.limit) : null,
+                    expires_at: newPromo.expires || null,
+                    is_active: 1,
+                }),
             });
-
-            const p = res?.promocode || payload;
-            const mapped: Promo = {
-                id: p.id,
-                code: p.code,
-                type: p.type,
-                value: String(p.value),
-                uses: p.uses_count ?? 0,
-                limit: p.uses_limit ?? 0,
-                expires: p.expires_at
-                    ? new Date(p.expires_at).toLocaleDateString('ru-RU')
-                    : 'Бессрочно',
-            };
-
             onToast('Успех', 'Промокод создан', 'success');
-            // локальное обновление списка промо
-            // setPlans не трогаем; промокоды приходят в родитель через стейт, поэтому тут просто уведомляем
-            // в реальном приложении можно поднять setPromos в App и пробрасывать сюда сеттер
-            promos.push(mapped);
             setNewPromo({ code: '', type: 'balance', value: '', limit: '', expires: '' });
-        } catch (e: any) {
-            console.error(e);
+        } catch {
             onToast('Ошибка', 'Не удалось создать промокод', 'error');
         }
     };
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div><h2 className="text-2xl font-bold text-white">Тарифы и Маркетинг</h2><p className="text-gray-400 mt-1">Управление ценами, скидками и промокодами</p></div>
-                <div className="flex bg-gray-900 border border-gray-800 rounded-xl p-1">
-                    <button onClick={() => setActiveTab('plans')} className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${activeTab === 'plans' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}>Тарифные планы</button>
-                    <button onClick={() => setActiveTab('promos')} className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${activeTab === 'promos' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}>Промокоды</button>
-                    <button onClick={() => setActiveTab('discounts')} className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${activeTab === 'discounts' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}>Авто-скидки</button>
+            <div><h2 className="text-2xl font-bold text-white">Промокоды</h2></div>
+            <PromocodesStats promos={promos} />
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                <h3 className="text-lg font-bold text-gray-200 mb-4">Новый промокод</h3>
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                    <input type="text" value={newPromo.code} onChange={e => setNewPromo({ ...newPromo, code: e.target.value.toUpperCase() })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Код" />
+                    <select value={newPromo.type} onChange={e => setNewPromo({ ...newPromo, type: e.target.value as Promo['type'] })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"><option value="balance">Баланс</option><option value="discount">Скидка</option><option value="subscription">Подписка</option></select>
+                    <input type="text" value={newPromo.value} onChange={e => setNewPromo({ ...newPromo, value: e.target.value })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Значение" />
+                    <input type="number" value={newPromo.limit} onChange={e => setNewPromo({ ...newPromo, limit: e.target.value })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Лимит" />
+                    <input type="text" value={newPromo.expires} onChange={e => setNewPromo({ ...newPromo, expires: e.target.value })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="2026-12-31" />
                 </div>
+                <button onClick={handleCreatePromo} className="mt-4 px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg">Создать</button>
             </div>
-
-            {activeTab === 'plans' && (
-                <TariffsPlansPage onToast={onToast} />
-            )}
-
-            {activeTab === 'promos' && (
-                <>
-                <PromocodesStats promos={promos} />
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 mb-6">
-                    <h3 className="text-lg font-bold text-gray-200 mb-4 flex items-center">
-                        <Plus size={20} className="mr-2 text-blue-500" /> Новый промокод
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-                        <div>
-                            <label className="text-xs text-gray-500 mb-1 block">Код</label>
-                            <input
-                                type="text"
-                                value={newPromo.code}
-                                onChange={e => setNewPromo({ ...newPromo, code: e.target.value.toUpperCase() })}
-                                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono"
-                                placeholder="NEW2025"
-                            />
-                        </div>
-                        <div>
-                            <label className="text-xs text-gray-500 mb-1 block">Тип</label>
-                            <select
-                                value={newPromo.type}
-                                onChange={e => setNewPromo({ ...newPromo, type: e.target.value as Promo['type'] })}
-                                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
-                            >
-                                <option value="balance">Пополнение баланса</option>
-                                <option value="discount">Скидка (%)</option>
-                                <option value="subscription">Подписка (дней)</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label className="text-xs text-gray-500 mb-1 block">Значение</label>
-                            <input
-                                type="text"
-                                value={newPromo.value}
-                                onChange={e => setNewPromo({ ...newPromo, value: e.target.value })}
-                                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                                placeholder="100 / 10 / 30"
-                            />
-                        </div>
-                        <div>
-                            <label className="text-xs text-gray-500 mb-1 block">Лимит</label>
-                            <input
-                                type="number"
-                                value={newPromo.limit}
-                                onChange={e => setNewPromo({ ...newPromo, limit: e.target.value })}
-                                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                                placeholder="100"
-                            />
-                        </div>
-                        <div>
-                            <label className="text-xs text-gray-500 mb-1 block">Истекает (YYYY-MM-DD)</label>
-                            <input
-                                type="text"
-                                value={newPromo.expires}
-                                onChange={e => setNewPromo({ ...newPromo, expires: e.target.value })}
-                                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                                placeholder="2025-12-31"
-                            />
-                        </div>
-                    </div>
-                    <div className="flex justify-end mt-4">
-                        <button
-                            onClick={handleCreatePromo}
-                            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-900/20 transition-colors flex items-center"
-                        >
-                            <Save size={18} className="mr-2" /> Создать промокод
-                        </button>
-                    </div>
-                </div>
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-sm">
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse">
-                            <thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase tracking-wider"><th className="px-6 py-4">Код</th><th className="px-6 py-4">Тип</th><th className="px-6 py-4">Значение</th><th className="px-6 py-4">Использовано</th><th className="px-6 py-4">Срок действия</th><th className="px-6 py-4 text-right"></th></tr></thead>
-                            <tbody className="divide-y divide-gray-800">
-                                {promos.map((p) => (
-                                    <tr key={p.id} className="hover:bg-gray-800/30 transition-colors group">
-                                        <td className="px-6 py-4">
-                                            <span className="text-sm font-bold text-white font-mono bg-gray-800 px-2 py-1 rounded border border-gray-700">
-                                                {p.code}
-                                            </span>
-                                        </td>
-                                        <td className="px-6 py-4 text-sm text-gray-300">
-                                            {p.type === 'balance' && 'Пополнение'}
-                                            {p.type === 'discount' && 'Скидка'}
-                                            {p.type === 'subscription' && 'Подписка'}
-                                        </td>
-                                        <td className="px-6 py-4 text-sm font-bold text-green-400">{p.value}</td>
-                                        <td className="px-6 py-4 text-sm text-gray-400">
-                                            {p.uses} / {p.limit || '∞'}
-                                        </td>
-                                        <td className="px-6 py-4 text-sm text-gray-400">{p.expires}</td>
-                                        <td className="px-6 py-4 text-right">
-                                            <button
-                                                className="text-red-500 hover:text-red-400 p-2 hover:bg-red-500/10 rounded-lg transition-colors"
-                                                onClick={async () => {
-                                                    try {
-                                                        await apiFetch(`/panel/promocodes/${p.id}`, {
-                                                            method: 'PUT',
-                                                            body: JSON.stringify({ is_active: 0 }),
-                                                        });
-                                                        onToast('Промокод', 'Промокод деактивирован', 'success');
-                                                    } catch (e) {
-                                                        console.error(e);
-                                                        onToast('Ошибка', 'Не удалось деактивировать промокод', 'error');
-                                                    }
-                                                }}
-                                            >
-                                                <Ban size={16} />
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-                </>
-            )}
-
-            {activeTab === 'discounts' && (
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-                    <div className="p-4 border-b border-gray-800 flex justify-between items-center"><h3 className="text-lg font-bold text-white">Автоматические правила</h3><button className="text-blue-400 text-sm hover:underline font-medium">+ Добавить правило</button></div>
-                    <table className="w-full text-left">
-                        <thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase"><th className="px-6 py-4">Название</th><th className="px-6 py-4">Условие</th><th className="px-6 py-4">Бонус</th><th className="px-6 py-4">Статус</th><th className="px-6 py-4 text-right"></th></tr></thead>
-                        <tbody className="divide-y divide-gray-800">
-                            <tr><td className="px-6 py-4 text-white font-medium">Бонус за крипту</td><td className="px-6 py-4 text-gray-400 text-sm">Пополнение {'>'} 1000₽ через Crypto</td><td className="px-6 py-4 text-green-400 font-bold">+10%</td><td className="px-6 py-4"><span className="bg-green-500/10 text-green-400 border border-green-500/20 px-2 py-0.5 rounded text-xs">Активна</span></td><td className="px-6 py-4 text-right"><button className="text-gray-500 hover:text-white"><Settings size={16}/></button></td></tr>
-                            <tr><td className="px-6 py-4 text-white font-medium">Скидка на год</td><td className="px-6 py-4 text-gray-400 text-sm">Покупка тарифа "12 месяцев"</td><td className="px-6 py-4 text-blue-400 font-bold">-20% Цена</td><td className="px-6 py-4"><span className="bg-green-500/10 text-green-400 border border-green-500/20 px-2 py-0.5 rounded text-xs">Активна</span></td><td className="px-6 py-4 text-right"><button className="text-gray-500 hover:text-white"><Settings size={16}/></button></td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            )}
         </div>
     );
 };
@@ -2610,7 +2501,7 @@ const TariffsPlansPage: React.FC<{ onToast: (title: string, msg: string, type: T
                         <h3 className="text-lg font-bold text-white flex items-center">
                             <Zap size={20} className="mr-2 text-blue-500" /> Тарифы подписки
                         </h3>
-                        <p className="text-sm text-gray-400 mt-1">VPN + обход блокировок операторов. Чем больше срок — тем выгоднее: 3 мес -15%, 6 мес -25%, год -35%</p>
+                        <p className="text-sm text-gray-400 mt-1">VPN подписка. Чем больше срок — тем выгоднее: 3 мес -15%, 6 мес -25%, год -35%</p>
                     </div>
                     <button 
                         onClick={() => setEditingPlan({ plan_type: 'vpn', name: '', price: 0, duration_days: 30 })}
@@ -3849,7 +3740,7 @@ interface SettingsPageProps {
 }
 
 const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
-    const [activeTab, setActiveTab] = useState<'general' | 'payments' | 'subs' | 'backups'>('general');
+    const [activeTab, setActiveTab] = useState<'general' | 'payments' | 'squads' | 'backups'>('general');
     const [settings, setSettings] = useState<any>({});
     const [loading, setLoading] = useState(true);
     
@@ -3867,6 +3758,19 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
             }
         })();
     }, []);
+
+    useEffect(() => {
+        if (loading) return;
+        const t = setTimeout(async () => {
+            try {
+                await apiFetch('/panel/settings', {
+                    method: 'PUT',
+                    body: JSON.stringify(settings),
+                });
+            } catch {}
+        }, 700);
+        return () => clearTimeout(t);
+    }, [settings, loading]);
 
     const handleSave = async () => {
         try {
@@ -3918,7 +3822,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden sticky top-24">
                     <div className="p-4 border-b border-gray-800"><h2 className="font-bold text-white">Категории</h2></div>
                     <nav className="p-2 space-y-1">
-                        {[{id: 'general', icon: Settings, label: 'Основное'}, {id: 'payments', icon: CreditCard, label: 'Платежи'}, {id: 'subs', icon: Zap, label: 'Подписки'}, {id: 'backups', icon: Cloud, label: 'Резервные копии'}].map(tab => (
+                        {[{id: 'general', icon: Settings, label: 'Основное'}, {id: 'payments', icon: CreditCard, label: 'Платежи'}, {id: 'squads', icon: Zap, label: 'Сквады'}, {id: 'backups', icon: Cloud, label: 'Резервные копии'}].map(tab => (
                             <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`w-full flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-colors ${activeTab === tab.id ? 'bg-blue-600/10 text-blue-400' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
                                 <tab.icon size={18} className="mr-3"/> {tab.label}
                             </button>
@@ -3939,52 +3843,47 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
                                 onChange={v => setSettings({ ...settings, TELEGRAM_BOT_TOKEN: v })}
                             />
                             <Input 
-                                label="ID Администратора" 
-                                placeholder="123456789" 
-                                value={settings.TELEGRAM_ADMIN_ID || ''}
-                                onChange={v => setSettings({ ...settings, TELEGRAM_ADMIN_ID: v })}
+                                label="Telegram ID админов (через запятую)" 
+                                placeholder="123456789,987654321" 
+                                value={settings.TELEGRAM_ADMIN_IDS || ''}
+                                onChange={v => setSettings({ ...settings, TELEGRAM_ADMIN_IDS: v })}
                             />
                             <Input 
-                                label="Сайт мини-приложения" 
-                                placeholder="https://t.me/yourbot/app" 
-                                value={settings.MINIAPP_URL || ''}
-                                onChange={v => setSettings({ ...settings, MINIAPP_URL: v })}
+                                label="Panel Remnawave URL" 
+                                placeholder="https://remna.example.com" 
+                                value={settings.REMWAVE_PANEL_URL || ''}
+                                onChange={v => setSettings({ ...settings, REMWAVE_PANEL_URL: v })}
                             />
                             <Input 
-                                label="API ключ Remnawave" 
+                                label="Remnawave API Token" 
                                 placeholder="rem_..." 
                                 value={settings.REMWAVE_API_KEY || ''}
                                 onChange={v => setSettings({ ...settings, REMWAVE_API_KEY: v })}
                             />
                         </Section>
-                        <Section title="Remnawave">
-                            <Input 
-                                label="URL панели Remnawave" 
-                                placeholder="https://admka.blann.ru" 
-                                value={settings.REMWAVE_PANEL_URL || ''}
-                                onChange={v => setSettings({ ...settings, REMWAVE_PANEL_URL: v })}
+                        <Section title="Безопасность панели">
+                            <Input
+                                label="Новый пароль панели"
+                                placeholder="Введите новый пароль"
+                                type="password"
+                                onChange={v => setSettings({ ...settings, PANEL_NEW_PASSWORD: v })}
+                                value={settings.PANEL_NEW_PASSWORD || ''}
                             />
+                            <button onClick={async () => {
+                                try {
+                                    await apiFetch('/panel/auth/change-password', { method: 'POST', body: JSON.stringify({ new_password: settings.PANEL_NEW_PASSWORD }) });
+                                    onToast('Успех', 'Пароль панели изменен', 'success');
+                                    setSettings({ ...settings, PANEL_NEW_PASSWORD: '' });
+                                } catch {
+                                    onToast('Ошибка', 'Не удалось изменить пароль', 'error');
+                                }
+                            }} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg">Сменить пароль</button>
                         </Section>
                     </>
                 )}
 
                 {activeTab === 'payments' && (
                     <>
-                        <Section title="YooKassa">
-                            <Input 
-                                label="ShopID" 
-                                placeholder="123456" 
-                                value={settings.YOOKASSA_SHOP_ID || ''}
-                                onChange={v => setSettings({ ...settings, YOOKASSA_SHOP_ID: v })}
-                            />
-                            <Input 
-                                label="SecretKey" 
-                                placeholder="live_..." 
-                                type="password" 
-                                value={settings.YOOKASSA_SECRET_KEY || ''}
-                                onChange={v => setSettings({ ...settings, YOOKASSA_SECRET_KEY: v })}
-                            />
-                        </Section>
                         <Section title="Platega">
                             <Input 
                                 label="Merchant ID" 
@@ -3995,75 +3894,16 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
                             <Input 
                                 label="SecretKey" 
                                 placeholder="key_..." 
-                                type="password" 
+                                type="text" 
                                 value={settings.PLATEGA_SECRET_KEY || ''}
                                 onChange={v => setSettings({ ...settings, PLATEGA_SECRET_KEY: v })}
                             />
                         </Section>
-                        <Section title="Heleket">
-                            <Input 
-                                label="Merchant ID" 
-                                placeholder="1234" 
-                                value={settings.HELEKET_MERCHANT || ''}
-                                onChange={v => setSettings({ ...settings, HELEKET_MERCHANT: v })}
-                            />
-                            <Input 
-                                label="Heleket API Key" 
-                                placeholder="api_..." 
-                                type="password" 
-                                value={settings.HELEKET_API_KEY || ''}
-                                onChange={v => setSettings({ ...settings, HELEKET_API_KEY: v })}
-                            />
-                            <Input 
-                                label="Домен" 
-                                placeholder="https://heleket.com" 
-                                value={settings.HELEKET_API_URL || ''}
-                                onChange={v => setSettings({ ...settings, HELEKET_API_URL: v })}
-                            />
-                        </Section>
-                        <Section title="Мой Налог">
-                            <div className="flex items-center justify-between">
-                                <label className="block text-sm font-medium text-gray-400">Включить автоматические чеки</label>
-                                <Toggle 
-                                    checked={settings.NALOG_ENABLED === 'true' || settings.NALOG_ENABLED === true} 
-                                    onChange={v => setSettings({ ...settings, NALOG_ENABLED: v ? 'true' : 'false' })}
-                                />
-                            </div>
-                            <Input 
-                                label="ИНН" 
-                                placeholder="123456789012" 
-                                value={settings.NALOG_INN || ''}
-                                onChange={v => setSettings({ ...settings, NALOG_INN: v })}
-                            />
-                            <Input 
-                                label="Пароль от ЛК 'Мой Налог'" 
-                                placeholder="Ваш пароль" 
-                                type="password" 
-                                value={settings.NALOG_PASSWORD || ''}
-                                onChange={v => setSettings({ ...settings, NALOG_PASSWORD: v })}
-                            />
-                            <Input 
-                                label="Путь для сохранения токена" 
-                                placeholder="data/nalog_token.json" 
-                                value={settings.NALOG_TOKEN_PATH || ''}
-                                onChange={v => setSettings({ ...settings, NALOG_TOKEN_PATH: v })}
-                            />
-                            <Input 
-                                label="Название услуги в чеке" 
-                                placeholder="Приобретение услуги в RSecktor Pay" 
-                                value={settings.NALOG_SERVICE_NAME || ''}
-                                onChange={v => setSettings({ ...settings, NALOG_SERVICE_NAME: v })}
-                            />
-                            <p className="text-xs text-gray-500 mt-2">
-                                После настройки чеки будут автоматически создаваться для всех успешных платежей через YooKassa. 
-                                Email для отправки чеков настраивается в личном кабинете "Мой Налог".
-                            </p>
-                        </Section>
                     </>
                 )}
 
-                {activeTab === 'subs' && (
-                    <SubscriptionSettingsTab onToast={onToast} />
+                {activeTab === 'squads' && (
+                    <SquadsPage onToast={onToast} />
                 )}
 
                 {activeTab === 'backups' && (
