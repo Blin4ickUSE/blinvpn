@@ -274,7 +274,7 @@ const VPN_PLANS_DEFAULT: Plan[] = [
   { id: '1y', duration: '1 год', price: 799, highlight: false, days: 365 },
 ];
 
-const PRESET_AMOUNTS = [100, 250, 500, 1000, 2000, 5000];
+const PRESET_AMOUNTS = [1, 100, 250, 500, 1000, 2000, 5000];
 
 const PLAN_EXTRA_DEVICE_PRICE: Record<number, number> = {
   30: 50,
