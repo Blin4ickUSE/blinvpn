@@ -87,6 +87,292 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
 }
 
 // ==========================================
+// 0.1 PAGINATION / SERVER-SIDE SEARCH HELPERS
+// ==========================================
+
+// Сколько строк показываем на одной странице
+const PAGE_SIZE = 100;
+
+// Универсальный парсер ответа backend:
+// поддерживает голый массив [...] и обёртки { items/data/results, total/count }
+function parseListResponse(res: any): { items: any[]; total: number | null } {
+  if (Array.isArray(res)) {
+    return { items: res, total: null };
+  }
+  if (res && typeof res === 'object') {
+    const items =
+      (Array.isArray(res.items) && res.items) ||
+      (Array.isArray(res.data) && res.data) ||
+      (Array.isArray(res.results) && res.results) ||
+      (Array.isArray(res.rows) && res.rows) ||
+      [];
+    const totalRaw =
+      res.total ?? res.count ?? res.total_count ?? res.totalCount ?? null;
+    const total = totalRaw == null ? null : Number(totalRaw);
+    return { items, total: Number.isFinite(total as number) ? total : null };
+  }
+  return { items: [], total: null };
+}
+
+// Простой debounce-хук для поля поиска
+function useDebouncedValue<T>(value: T, delay = 300): T {
+  const [debounced, setDebounced] = useState<T>(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
+}
+
+interface UsePaginatedListOptions {
+  // базовый путь, например '/panel/users'
+  basePath: string;
+  // строка поиска (raw, до debounce)
+  search: string;
+  // доп. фильтры в query (например { status: 'Banned' }); пустые/'all' игнорируются
+  extraParams?: Record<string, string | undefined>;
+  // маппер элемента из API в нужный тип
+  mapItem: (raw: any) => any;
+  // дополнительный клиентский фильтр (например по статусу),
+  // применяется ТОЛЬКО когда работаем в клиентском режиме (backend отдал всё)
+  clientFilter?: (item: any) => boolean;
+  // включить загрузку (например только когда страница активна)
+  enabled?: boolean;
+  // сигнал внешнего обновления
+  reloadKey?: number;
+}
+
+interface UsePaginatedListResult {
+  items: any[];        // элементы для текущей страницы (уже нарезанные)
+  total: number;       // всего записей (после поиска/фильтра)
+  page: number;        // текущая страница (1-based)
+  totalPages: number;
+  loading: boolean;
+  error: string | null;
+  setPage: (p: number) => void;
+  nextPage: () => void;
+  prevPage: () => void;
+  reload: () => void;
+}
+
+// Главный хук: серверная пагинация + серверный поиск,
+// с надёжным fallback на клиентскую пагинацию, если backend
+// игнорирует параметры (отдаёт весь список целиком).
+function usePaginatedList(opts: UsePaginatedListOptions): UsePaginatedListResult {
+  const {
+    basePath,
+    search,
+    extraParams,
+    mapItem,
+    clientFilter,
+    enabled = true,
+    reloadKey = 0,
+  } = opts;
+
+  const debouncedSearch = useDebouncedValue(search.trim(), 300);
+
+  const [page, setPageState] = useState(1);
+  const [items, setItems] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [localReload, setLocalReload] = useState(0);
+
+  // Сериализуем доп. параметры, чтобы корректно реагировать на их смену
+  const extraKey = JSON.stringify(extraParams || {});
+
+  // Сброс на первую страницу при изменении поиска / фильтров
+  useEffect(() => {
+    setPageState(1);
+  }, [debouncedSearch, extraKey]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+
+    const run = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const offset = (page - 1) * PAGE_SIZE;
+
+        // Собираем query. Дублируем имена параметров под разные backend-схемы:
+        // limit/offset + page, search + q.
+        const qp = new URLSearchParams();
+        qp.set('limit', String(PAGE_SIZE));
+        qp.set('offset', String(offset));
+        qp.set('page', String(page));
+        if (debouncedSearch) {
+          qp.set('search', debouncedSearch);
+          qp.set('q', debouncedSearch);
+        }
+        if (extraParams) {
+          for (const [k, v] of Object.entries(extraParams)) {
+            if (v != null && v !== '' && v !== 'all') qp.set(k, v);
+          }
+        }
+
+        const res = await apiFetch(`${basePath}?${qp.toString()}`);
+        if (cancelled) return;
+
+        const { items: rawItems, total: serverTotal } = parseListResponse(res);
+
+        // Определяем, отработал ли backend пагинацию.
+        // Если он отдал больше, чем PAGE_SIZE — значит игнорирует limit,
+        // и нам надо самим искать + резать на клиенте.
+        const backendIgnoresPaging = rawItems.length > PAGE_SIZE;
+
+        if (backendIgnoresPaging) {
+          // КЛИЕНТСКИЙ режим: ищем и режем сами по всему массиву.
+          let all = rawItems.map(mapItem);
+
+          if (debouncedSearch) {
+            const q = debouncedSearch.toLowerCase();
+            all = all.filter((it: any) => searchableMatch(it, q));
+          }
+          if (clientFilter) {
+            all = all.filter(clientFilter);
+          }
+
+          const totalCount = all.length;
+          const start = (page - 1) * PAGE_SIZE;
+          const pageItems = all.slice(start, start + PAGE_SIZE);
+
+          setItems(pageItems);
+          setTotal(totalCount);
+        } else {
+          // СЕРВЕРНЫЙ режим: backend уже отдал нужную порцию.
+          let pageItems = rawItems.map(mapItem);
+
+          // Клиентский фильтр статуса применяем только если backend
+          // его не поддержал (на всякий случай — это не ломает серверный поиск).
+          if (clientFilter) {
+            pageItems = pageItems.filter(clientFilter);
+          }
+
+          // total: берём с сервера, если он есть; иначе оцениваем.
+          let totalCount: number;
+          if (serverTotal != null) {
+            totalCount = serverTotal;
+          } else if (pageItems.length < PAGE_SIZE) {
+            // последняя (или единственная) страница
+            totalCount = offset + pageItems.length;
+          } else {
+            // полная страница без total — есть как минимум ещё одна
+            totalCount = offset + pageItems.length + 1;
+          }
+
+          setItems(pageItems);
+          setTotal(totalCount);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setError(e?.message || 'Не удалось загрузить данные');
+          setItems([]);
+          setTotal(0);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [basePath, page, debouncedSearch, extraKey, enabled, reloadKey, localReload]);
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  const setPage = (p: number) => {
+    const clamped = Math.min(Math.max(1, p), Math.max(1, totalPages));
+    setPageState(clamped);
+  };
+
+  return {
+    items,
+    total,
+    page,
+    totalPages,
+    loading,
+    error,
+    setPage,
+    nextPage: () => setPage(page + 1),
+    prevPage: () => setPage(page - 1),
+    reload: () => setLocalReload((n) => n + 1),
+  };
+}
+
+// Поля, по которым ищем в клиентском fallback-режиме.
+function searchableMatch(item: any, q: string): boolean {
+  const fields = [
+    item.username,
+    item.name,
+    item.user,
+    item.key,
+    item.refCode,
+    item.telegramId != null ? String(item.telegramId) : '',
+    item.id != null ? String(item.id) : '',
+  ];
+  return fields.some((f) => typeof f === 'string' && f.toLowerCase().includes(q));
+}
+
+interface PaginationBarProps {
+  page: number;
+  totalPages: number;
+  total: number;
+  loading?: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+  // подпись слева, например "Всего в базе"
+  totalLabel?: string;
+}
+
+// Панель пагинации в стиле панели (как на референсе VPN)
+const PaginationBar: React.FC<PaginationBarProps> = ({
+  page,
+  totalPages,
+  total,
+  loading,
+  onPrev,
+  onNext,
+  totalLabel = 'Всего в базе',
+}) => {
+  const canPrev = page > 1 && !loading;
+  const canNext = page < totalPages && !loading;
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1">
+      <div className="text-sm text-gray-400 flex items-center gap-2">
+        {loading && <Loader size={14} className="animate-spin text-orange-400" />}
+        <span>
+          {totalLabel}: <span className="text-white font-semibold">{total.toLocaleString('ru-RU')}</span>
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={onPrev}
+          disabled={!canPrev}
+          className="px-4 py-2 rounded-xl text-sm font-medium border border-gray-700 bg-gray-900 text-gray-200 hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          Назад
+        </button>
+        <span className="text-sm text-gray-300 min-w-[64px] text-center tabular-nums">
+          {page} / {totalPages}
+        </span>
+        <button
+          onClick={onNext}
+          disabled={!canNext}
+          className="px-4 py-2 rounded-xl text-sm font-medium border border-gray-700 bg-gray-900 text-gray-200 hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          Вперёд
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ==========================================
 // 1. TYPES & INTERFACES
 // ==========================================
 
@@ -842,16 +1128,56 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
     const [selectedSquads, setSelectedSquads] = useState<string[]>([]);
     const [squads, setSquads] = useState<{uuid: string; name: string}[]>([]);
     const [loadingSquads, setLoadingSquads] = useState(false);
-    
-    const filteredUsers: User[] =
-        searchUser && users
-            ? users
-                  .filter((u: User) =>
-                      u.username.toLowerCase().includes(searchUser.toLowerCase()) ||
-                      u.telegramId.toString().includes(searchUser)
-                  )
-                  .slice(0, 3)
-            : [];
+
+    // Серверный поиск пользователя (чтобы находить любого, а не только из загруженной пачки)
+    const debouncedUserSearch = useDebouncedValue(searchUser.trim(), 300);
+    const [remoteUsers, setRemoteUsers] = useState<User[]>([]);
+    const [searchingUsers, setSearchingUsers] = useState(false);
+
+    useEffect(() => {
+        if (!debouncedUserSearch) {
+            setRemoteUsers([]);
+            return;
+        }
+        let cancelled = false;
+        (async () => {
+            setSearchingUsers(true);
+            try {
+                const qp = new URLSearchParams();
+                qp.set('limit', '10');
+                qp.set('offset', '0');
+                qp.set('search', debouncedUserSearch);
+                qp.set('q', debouncedUserSearch);
+                const res = await apiFetch(`/panel/users?${qp.toString()}`);
+                if (cancelled) return;
+                const { items } = parseListResponse(res);
+                let mapped = items.map(mapApiUser);
+                // Если backend проигнорировал поиск и вернул всё — фильтруем на клиенте
+                if (mapped.length > 10) {
+                    const q = debouncedUserSearch.toLowerCase();
+                    mapped = mapped.filter((u: User) =>
+                        u.username.toLowerCase().includes(q) || u.telegramId.toString().includes(q)
+                    );
+                }
+                setRemoteUsers(mapped.slice(0, 8));
+            } catch (e) {
+                if (!cancelled) setRemoteUsers([]);
+            } finally {
+                if (!cancelled) setSearchingUsers(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [debouncedUserSearch]);
+
+    // Объединяем: серверный результат + локальный fallback (на случай оффлайна)
+    const filteredUsers: User[] = (() => {
+        if (!searchUser) return [];
+        if (remoteUsers.length > 0) return remoteUsers;
+        const q = searchUser.toLowerCase();
+        return (users || [])
+            .filter((u: User) => u.username.toLowerCase().includes(q) || u.telegramId.toString().includes(q))
+            .slice(0, 8);
+    })();
     
     useEffect(() => {
         (async () => {
@@ -1626,45 +1952,17 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           }
         }
 
-        // Пользователи
+        // Пользователи (нужны только как офлайн-фоллбэк для CreateKeyModal;
+        // страницы "Пользователи"/"Подписки" грузят данные постранично сами)
         try {
-          const usersFromApi = await apiFetch('/panel/users?limit=5000');
-          if (!cancelled && Array.isArray(usersFromApi)) {
-            const mapped: User[] = usersFromApi.map((u: any) => ({
-              id: u.id,
-              telegramId: u.telegram_id,
-              username: u.username ? (u.username.startsWith('@') ? u.username : `@${u.username}`) : `id${u.telegram_id}`,
-              name: u.full_name || '',
-              balance: u.balance ?? 0,
-              // Приоритет: in_blacklist -> Banned, is_banned -> Banned, иначе статус из БД или Trial
-              status: (u.in_blacklist || u.is_banned) ? 'Banned' : ((u.status as UserStatus) || 'Trial'),
-              traffic: 0,
-              maxTraffic: 100,
-              devices: 0,
-              maxDevices: 1,
-              regDate: u.registration_date ? new Date(u.registration_date).toLocaleDateString('ru-RU') : '',
-              paidUntil: u.paid_until ? new Date(u.paid_until).toLocaleDateString('ru-RU') : '—',
-              autoPayDetails: { sbp: false, card: false, crypto: false },
-              refLink: `https://t.me/${BOT_USERNAME}?start=ref=${u.telegram_id}`,
-              refCode: u.referral_code || '',
-              squads: [],
-              firstDeposit: false,
-              wasPaid: false,
-              isPartner: !!u.is_partner,
-              partnerBalance: u.partner_balance ?? 0,
-              partnerRate: u.partner_rate ?? 25,
-              secondLevelRate: u.second_level_rate ?? 5,
-              thirdLevelRate: u.third_level_rate ?? 2,
-              referrals: 0,
-              totalEarned: u.total_earned ?? 0,
-              inBlacklist: !!u.in_blacklist,
-            }));
-            setUsers(mapped);
+          const usersFromApi = await apiFetch('/panel/users?limit=500&offset=0');
+          if (!cancelled) {
+            const { items } = parseListResponse(usersFromApi);
+            setUsers(items.map(mapApiUser));
           }
         } catch (e) {
           console.error('Failed to load users from API', e);
           if (!cancelled) {
-            addToast('Ошибка', 'Не удалось загрузить пользователей', 'error');
             setUsers([]);
           }
         }
@@ -1694,33 +1992,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           }
         }
 
-        // Ключи VPN
-        try {
-          const keysFromApi = await apiFetch('/panel/keys?limit=5000');
-          if (!cancelled && Array.isArray(keysFromApi)) {
-            const mappedKeys: KeyItem[] = keysFromApi.map((k: any) => ({
-              id: k.id,
-              key: k.key_config || k.key_uuid || `key_${k.id}`,
-              user: k.username || `@user_${k.user_id}`,
-              status: (k.status as KeyStatus) || 'Active',
-              expiry: k.expiry_date
-                ? Math.ceil((new Date(k.expiry_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-                : 0,
-              trafficUsed: k.traffic_used ?? 0,
-              trafficLimit: k.traffic_limit ?? 0,
-              devicesUsed: k.devices_used ?? 0,
-              devicesLimit: k.devices_limit ?? 1,
-              server: k.server_location || 'Unknown',
-            }));
-            setKeys(mappedKeys);
-          }
-        } catch (e) {
-          console.error('Failed to load keys from API', e);
-          if (!cancelled) {
-            addToast('Ошибка', 'Не удалось загрузить ключи', 'error');
-            setKeys([]);
-          }
-        }
+        // Ключи VPN больше не грузим целиком на старте —
+        // страница "Подписки" грузит их постранично (по 100) сама.
 
       } catch (e) {
         console.error('Initial panel data load failed', e);
@@ -1797,8 +2070,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <div className="p-4 md:p-6">
             {activePage === 'Главная страница' && <Dashboard />}
             {activePage === 'Финансы' && <FinancePage transactions={transactions} onSelectTransaction={setSelectedTransaction} />}
-            {activePage === 'Пользователи' && <UsersPage users={users} userSearch={userSearch} setUserSearch={setUserSearch} setSelectedUser={setSelectedUser} setMassActionType={setMassActionType} />}
-            {activePage === 'Подписки' && <KeysPage keys={keys} keySearch={keySearch} setKeySearch={setKeySearch} setIsCreateKeyOpen={setIsCreateKeyOpen} setEditingKey={setEditingKey} />}
+            {activePage === 'Пользователи' && <UsersPage userSearch={userSearch} setUserSearch={setUserSearch} setSelectedUser={setSelectedUser} setMassActionType={setMassActionType} />}
+            {activePage === 'Подписки' && <KeysPage keySearch={keySearch} setKeySearch={setKeySearch} setIsCreateKeyOpen={setIsCreateKeyOpen} setEditingKey={setEditingKey} />}
             {activePage === 'Рассылка' && <MailingPage onToast={addToast} />}
             {activePage === 'Промокоды' && <PromocodesPage promos={promos} onToast={addToast} />}
             {activePage === 'Настройки' && <SettingsPage onToast={addToast} />}
@@ -2077,27 +2350,94 @@ const FinancePage: React.FC<FinancePageProps> = ({ transactions, onSelectTransac
     );
 };
 
+// ==========================================
+// SHARED API -> UI MAPPERS (используются и при первичной загрузке,
+// и в постраничной загрузке через usePaginatedList)
+// ==========================================
+
+function mapApiUser(u: any): User {
+  return {
+    id: u.id,
+    telegramId: u.telegram_id,
+    username: u.username ? (u.username.startsWith('@') ? u.username : `@${u.username}`) : `id${u.telegram_id}`,
+    name: u.full_name || '',
+    balance: u.balance ?? 0,
+    // Приоритет: in_blacklist -> Banned, is_banned -> Banned, иначе статус из БД или Trial
+    status: (u.in_blacklist || u.is_banned) ? 'Banned' : ((u.status as UserStatus) || 'Trial'),
+    traffic: 0,
+    maxTraffic: 100,
+    devices: 0,
+    maxDevices: 1,
+    regDate: u.registration_date ? new Date(u.registration_date).toLocaleDateString('ru-RU') : '',
+    paidUntil: u.paid_until ? new Date(u.paid_until).toLocaleDateString('ru-RU') : '—',
+    autoPayDetails: { sbp: false, card: false, crypto: false },
+    refLink: `https://t.me/${BOT_USERNAME}?start=ref=${u.telegram_id}`,
+    refCode: u.referral_code || '',
+    squads: [],
+    firstDeposit: false,
+    wasPaid: false,
+    isPartner: !!u.is_partner,
+    partnerBalance: u.partner_balance ?? 0,
+    partnerRate: u.partner_rate ?? 25,
+    secondLevelRate: u.second_level_rate ?? 5,
+    thirdLevelRate: u.third_level_rate ?? 2,
+    referrals: 0,
+    totalEarned: u.total_earned ?? 0,
+    inBlacklist: !!u.in_blacklist,
+  };
+}
+
+function mapApiKey(k: any): KeyItem {
+  return {
+    id: k.id,
+    key: k.key_config || k.key_uuid || `key_${k.id}`,
+    user: k.username || `@user_${k.user_id}`,
+    status: (k.status as KeyStatus) || 'Active',
+    expiry: k.expiry_date
+      ? Math.ceil((new Date(k.expiry_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+      : 0,
+    trafficUsed: k.traffic_used ?? 0,
+    trafficLimit: k.traffic_limit ?? 0,
+    devicesUsed: k.devices_used ?? 0,
+    devicesLimit: k.devices_limit ?? 1,
+    server: k.server_location || 'Unknown',
+  };
+}
+
 interface UsersPageProps {
-  users: User[];
   userSearch: string;
   setUserSearch: (s: string) => void;
   setSelectedUser: (u: User) => void;
   setMassActionType: (t: string | null) => void;
 }
 
-const UsersPage: React.FC<UsersPageProps> = ({ users, userSearch, setUserSearch, setSelectedUser, setMassActionType }) => {
+const UsersPage: React.FC<UsersPageProps> = ({ userSearch, setUserSearch, setSelectedUser, setMassActionType }) => {
     const [statusFilter, setStatusFilter] = useState<'all' | 'Trial' | 'Active' | 'Banned'>('all');
     const [showFilterMenu, setShowFilterMenu] = useState(false);
-    
-    const filteredUsers = users.filter(u => {
-        const matchesSearch = u.username.toLowerCase().includes(userSearch.toLowerCase()) || 
-                              u.name.toLowerCase().includes(userSearch.toLowerCase()) ||
-                              u.telegramId.toString().includes(userSearch);
-        const matchesStatus = statusFilter === 'all' || 
-                              (statusFilter === 'Banned' ? u.status === 'Banned' : u.status === statusFilter);
-        return matchesSearch && matchesStatus;
+
+    // Серверная пагинация + поиск (100 строк на страницу) с fallback на клиент
+    const {
+        items: pageUsers,
+        total,
+        page,
+        totalPages,
+        loading,
+        error,
+        nextPage,
+        prevPage,
+    } = usePaginatedList({
+        basePath: '/panel/users',
+        search: userSearch,
+        extraParams: { status: statusFilter === 'all' ? undefined : statusFilter },
+        mapItem: mapApiUser,
+        // клиентский фильтр статуса — на случай, если backend отдаёт всё разом
+        clientFilter: (u: User) =>
+            statusFilter === 'all' ? true :
+            statusFilter === 'Banned' ? u.status === 'Banned' : u.status === statusFilter,
     });
-    
+
+    const filteredUsers: User[] = pageUsers;
+
     const [showMassMenu, setShowMassMenu] = useState(false);
     const menuRef = useRef<HTMLDivElement>(null);
 
@@ -2168,12 +2508,19 @@ const UsersPage: React.FC<UsersPageProps> = ({ users, userSearch, setUserSearch,
                     )}
                 </div>
             </div>
+            {error && (
+                <div className="bg-red-600/10 border border-red-500/30 rounded-xl px-4 py-3 text-sm text-red-300">{error}</div>
+            )}
             <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-sm">
                 <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                         <thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase tracking-wider"><th className="px-6 py-4">Пользователь</th><th className="px-6 py-4">Баланс</th><th className="px-6 py-4">Подписка</th><th className="px-6 py-4">Партнер</th><th className="px-6 py-4 text-right">Действие</th></tr></thead>
                         <tbody className="divide-y divide-gray-800">
-                            {filteredUsers.map((user) => (
+                            {loading && filteredUsers.length === 0 ? (
+                                <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-500"><Loader size={20} className="animate-spin inline-block mr-2 text-orange-400" />Загрузка...</td></tr>
+                            ) : filteredUsers.length === 0 ? (
+                                <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-500">Ничего не найдено</td></tr>
+                            ) : filteredUsers.map((user) => (
                                 <tr key={user.id} onClick={() => setSelectedUser(user)} className="hover:bg-gray-800/30 cursor-pointer group">
                                     <td className="px-6 py-4 text-sm font-medium text-white flex items-center"><div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center mr-3 text-xs font-bold text-gray-300">{user.username.substring(0, 2).toUpperCase()}</div>{user.username}</td>
                                     <td className="px-6 py-4 text-sm text-white font-bold">{user.balance} ₽</td>
@@ -2186,32 +2533,53 @@ const UsersPage: React.FC<UsersPageProps> = ({ users, userSearch, setUserSearch,
                     </table>
                 </div>
             </div>
+            <PaginationBar
+                page={page}
+                totalPages={totalPages}
+                total={total}
+                loading={loading}
+                onPrev={prevPage}
+                onNext={nextPage}
+            />
         </div>
     );
 };
 
 interface KeysPageProps {
-  keys: KeyItem[];
   keySearch: string;
   setKeySearch: (s: string) => void;
   setIsCreateKeyOpen: (b: boolean) => void;
   setEditingKey: (k: KeyItem | null) => void;
 }
 
-const KeysPage: React.FC<KeysPageProps> = ({ keys, keySearch, setKeySearch, setIsCreateKeyOpen, setEditingKey }) => {
+const KeysPage: React.FC<KeysPageProps> = ({ keySearch, setKeySearch, setIsCreateKeyOpen, setEditingKey }) => {
     const [statusFilter, setStatusFilter] = useState<'all' | 'Active' | 'Expired' | 'Banned'>('all');
     const [showFilterMenu, setShowFilterMenu] = useState(false);
-    
-    const filteredKeys = keys.filter(k => {
-        const matchesSearch = k.key.toLowerCase().includes(keySearch.toLowerCase()) || k.user.toLowerCase().includes(keySearch.toLowerCase());
-        const matchesStatus = statusFilter === 'all' || k.status === statusFilter;
-        return matchesSearch && matchesStatus;
+
+    // Серверная пагинация + поиск (100 строк на страницу) с fallback на клиент
+    const {
+        items: pageKeys,
+        total,
+        page,
+        totalPages,
+        loading,
+        error,
+        nextPage,
+        prevPage,
+    } = usePaginatedList({
+        basePath: '/panel/keys',
+        search: keySearch,
+        extraParams: { status: statusFilter === 'all' ? undefined : statusFilter },
+        mapItem: mapApiKey,
+        clientFilter: (k: KeyItem) => statusFilter === 'all' ? true : k.status === statusFilter,
     });
-    
+
+    const filteredKeys: KeyItem[] = pageKeys;
+
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4"><div><h2 className="text-2xl font-bold text-white">Подписки</h2><p className="text-gray-400 mt-1">Управление подписками VLESS/Vmess</p></div><button onClick={() => setIsCreateKeyOpen(true)} className="flex items-center px-5 py-2.5 bg-orange-600 hover:bg-orange-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-orange-900/20 transition-all"><Plus size={18} className="mr-2" />Создать</button></div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6"><StatCard title="Всего ключей" value={keys.length} icon={Key} color="blue" /><StatCard title="Истёкшие" value={keys.filter(k => k.status === 'Expired').length} icon={Clock} color="orange" /><StatCard title="Заблокированные" value={keys.filter(k => k.status === 'Banned').length} icon={Ban} color="red" /></div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6"><StatCard title="Всего ключей" value={total} icon={Key} color="blue" /><StatCard title="Истёкшие (стр.)" value={filteredKeys.filter(k => k.status === 'Expired').length} icon={Clock} color="orange" /><StatCard title="Заблок. (стр.)" value={filteredKeys.filter(k => k.status === 'Banned').length} icon={Ban} color="red" /></div>
             <div className="flex space-x-4">
                 <div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={keySearch} onChange={e => setKeySearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500" placeholder="Поиск по ключу, пользователю..." /></div>
                 <div className="relative">
@@ -2228,12 +2596,19 @@ const KeysPage: React.FC<KeysPageProps> = ({ keys, keySearch, setKeySearch, setI
                     )}
                 </div>
             </div>
+            {error && (
+                <div className="bg-red-600/10 border border-red-500/30 rounded-xl px-4 py-3 text-sm text-red-300">{error}</div>
+            )}
              <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-sm">
                 <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                         <thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase tracking-wider"><th className="px-6 py-4">ID / Ключ</th><th className="px-6 py-4">Пользователь</th><th className="px-6 py-4">Статус</th><th className="px-6 py-4">Осталось</th><th className="px-6 py-4">Трафик</th><th className="px-6 py-4">Устр.</th><th className="px-6 py-4 text-right"></th></tr></thead>
                         <tbody className="divide-y divide-gray-800">
-                            {filteredKeys.map((k) => (
+                            {loading && filteredKeys.length === 0 ? (
+                                <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-500"><Loader size={20} className="animate-spin inline-block mr-2 text-orange-400" />Загрузка...</td></tr>
+                            ) : filteredKeys.length === 0 ? (
+                                <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-500">Ничего не найдено</td></tr>
+                            ) : filteredKeys.map((k) => (
                                 <tr key={k.id} onClick={() => setEditingKey(k)} className="hover:bg-gray-800/30 transition-colors group cursor-pointer relative">
                                     <td className="px-6 py-4"><div className="text-sm font-mono text-white">#{k.id}</div><div className="text-xs text-gray-500 truncate w-32 font-mono mt-0.5 opacity-70">{k.key}</div></td>
                                     <td className="px-6 py-4 text-sm text-orange-400 font-medium">{k.user}</td><td className="px-6 py-4"><span className={`px-2 py-1 rounded text-xs font-medium border ${k.status === 'Active' ? 'bg-green-500/10 text-green-400 border-green-500/20' : k.status === 'Expired' ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>{k.status}</span></td>
@@ -2246,6 +2621,15 @@ const KeysPage: React.FC<KeysPageProps> = ({ keys, keySearch, setKeySearch, setI
                     </table>
                 </div>
             </div>
+            <PaginationBar
+                page={page}
+                totalPages={totalPages}
+                total={total}
+                loading={loading}
+                onPrev={prevPage}
+                onNext={nextPage}
+                totalLabel="Всего подписок"
+            />
         </div>
     );
 };
