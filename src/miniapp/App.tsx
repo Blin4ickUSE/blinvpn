@@ -725,6 +725,190 @@ const AnimatedBackground: React.FC<{ children: React.ReactNode }> = ({ children 
         cursor: not-allowed !important;
         opacity: 0.6 !important;
       }
+
+      /* ====== CORE ANIMATION PRIMITIVES ====== */
+      @keyframes blinFadeIn {
+        from { opacity: 0; }
+        to   { opacity: 1; }
+      }
+      @keyframes blinSlideUp {
+        from { opacity: 0; transform: translateY(16px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes blinSlideDown {
+        from { opacity: 0; transform: translateY(-12px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes blinScaleIn {
+        from { opacity: 0; transform: scale(0.9); }
+        to   { opacity: 1; transform: scale(1); }
+      }
+      @keyframes blinZoomIn {
+        from { opacity: 0; transform: scale(0.6); }
+        60%  { opacity: 1; transform: scale(1.04); }
+        to   { opacity: 1; transform: scale(1); }
+      }
+      @keyframes blinPulseSoft {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50%      { transform: scale(1.06); opacity: 0.92; }
+      }
+      @keyframes blinSpin { to { transform: rotate(360deg); } }
+
+      .animate-fade-in   { animation: blinFadeIn 0.4s ease-out both; }
+      .animate-slide-up  { animation: blinSlideUp 0.5s cubic-bezier(0.22,1,0.36,1) both; }
+      .animate-slide-down{ animation: blinSlideDown 0.4s cubic-bezier(0.22,1,0.36,1) both; }
+      .animate-scale-in  { animation: blinScaleIn 0.45s cubic-bezier(0.22,1,0.36,1) both; }
+      .animate-zoom-in   { animation: blinZoomIn 0.5s cubic-bezier(0.34,1.56,0.64,1) both; }
+      .animate-pulse-soft{ animation: blinPulseSoft 2.6s ease-in-out infinite; }
+      .animate-spin      { animation: blinSpin 1s linear infinite; }
+
+      /* ====== TAILWIND-STYLE animate-in (fallback impl, in case plugin absent) ====== */
+      .animate-in {
+        animation-duration: 0.4s;
+        animation-timing-function: cubic-bezier(0.22,1,0.36,1);
+        animation-fill-mode: both;
+      }
+      .duration-300 { animation-duration: 0.3s; }
+      .duration-500 { animation-duration: 0.5s; }
+      @keyframes blinEnterFadeUp {
+        from { opacity: 0; transform: translateY(16px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes blinEnterFromRight {
+        from { opacity: 0; transform: translateX(28px); }
+        to   { opacity: 1; transform: translateX(0); }
+      }
+      @keyframes blinEnterFromTop {
+        from { opacity: 0; transform: translateY(-10px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      .fade-in.slide-in-from-bottom-4 { animation-name: blinEnterFadeUp; }
+      .slide-in-from-right            { animation-name: blinEnterFromRight; }
+      .slide-in-from-top-2            { animation-name: blinEnterFromTop; }
+      .zoom-in                        { animation-name: blinZoomIn; }
+      /* lone "fade-in" used with animate-in */
+      .animate-in.fade-in:not(.slide-in-from-bottom-4):not(.slide-in-from-right):not(.zoom-in) {
+        animation-name: blinFadeIn;
+      }
+
+      /* ====== PAGE / ROUTE TRANSITIONS ====== */
+      @keyframes pageInForward {
+        from { opacity: 0; transform: translateX(36px); }
+        to   { opacity: 1; transform: translateX(0); }
+      }
+      @keyframes pageInBack {
+        from { opacity: 0; transform: translateX(-36px); }
+        to   { opacity: 1; transform: translateX(0); }
+      }
+      .page-enter-forward { animation: pageInForward 0.34s cubic-bezier(0.22,1,0.36,1) both; }
+      .page-enter-back    { animation: pageInBack 0.34s cubic-bezier(0.22,1,0.36,1) both; }
+
+      /* ====== BACK BUTTON ====== */
+      .blin-back-btn { transition: background-color .2s, color .2s, transform .2s; }
+      .blin-back-btn:hover  { transform: translateX(-2px); }
+      .blin-back-btn:active { transform: translateX(-4px) scale(0.92); }
+      .blin-back-btn:hover .blin-back-ico { transform: translateX(-2px); }
+      .blin-back-ico { transition: transform .2s ease; }
+
+      /* ====== CARDS & BUTTONS ====== */
+      .card-hover { transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease; }
+      .card-hover:hover  { transform: translateY(-2px); box-shadow: 0 10px 30px -12px rgba(234,88,12,0.25); }
+      .card-hover:active { transform: scale(0.985); }
+
+      /* Ripple effect for buttons */
+      .ripple { position: relative; overflow: hidden; }
+      .ripple::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at center, rgba(255,255,255,0.35) 0%, transparent 60%);
+        opacity: 0;
+        transform: scale(0.4);
+        transition: transform .5s ease, opacity .7s ease;
+        pointer-events: none;
+      }
+      .ripple:active::after { opacity: 1; transform: scale(1); transition: 0s; }
+
+      /* Scrollbar */
+      .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+      .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+      .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 999px; }
+      .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #ea580c; }
+
+      /* ====== ONBOARDING (livelier welcome) ====== */
+      @keyframes logoFloat {
+        0%, 100% { transform: translateY(0); }
+        50%      { transform: translateY(-10px); }
+      }
+      @keyframes logoIntro {
+        0%   { opacity: 0; transform: scale(0.4) rotate(-12deg); filter: blur(6px); }
+        60%  { opacity: 1; transform: scale(1.08) rotate(4deg); filter: blur(0); }
+        100% { opacity: 1; transform: scale(1) rotate(0deg); }
+      }
+      @keyframes ringPulse {
+        0%   { transform: scale(0.8); opacity: 0.7; }
+        70%  { transform: scale(1.7); opacity: 0; }
+        100% { transform: scale(1.7); opacity: 0; }
+      }
+      @keyframes glowBreath {
+        0%, 100% { opacity: 0.35; transform: scale(1); }
+        50%      { opacity: 0.7;  transform: scale(1.15); }
+      }
+      @keyframes shimmerSweep {
+        0%   { transform: translateX(-150%) rotate(20deg); }
+        100% { transform: translateX(150%) rotate(20deg); }
+      }
+      @keyframes dotPop {
+        from { transform: scale(0.4); opacity: 0; }
+        to   { transform: scale(1); opacity: 1; }
+      }
+      @keyframes contentStep {
+        from { opacity: 0; transform: translateY(22px) scale(0.98); }
+        to   { opacity: 1; transform: translateY(0) scale(1); }
+      }
+
+      .ob-logo-wrap { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+      .ob-logo-glow {
+        position: absolute; inset: -30%;
+        background: radial-gradient(circle, rgba(234,88,12,0.55) 0%, rgba(234,88,12,0.0) 65%);
+        filter: blur(14px);
+        border-radius: 50%;
+        animation: glowBreath 3.2s ease-in-out infinite;
+        z-index: 0;
+      }
+      .ob-logo-ring {
+        position: absolute; inset: 0;
+        border: 2px solid rgba(249,115,22,0.55);
+        border-radius: 50%;
+        animation: ringPulse 2.8s ease-out infinite;
+        z-index: 0;
+      }
+      .ob-logo-ring.delay { animation-delay: 1.4s; }
+      .ob-logo-img {
+        position: relative; z-index: 1;
+        animation: logoIntro 0.9s cubic-bezier(0.34,1.56,0.64,1) both,
+                   logoFloat 4s ease-in-out 0.9s infinite;
+      }
+      .ob-logo-img.static { animation: logoIntro 0.7s cubic-bezier(0.34,1.56,0.64,1) both; }
+      .ob-shimmer {
+        position: absolute; top: 0; left: 0; width: 60%; height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);
+        animation: shimmerSweep 3.5s ease-in-out 1s infinite;
+        z-index: 2; pointer-events: none; border-radius: 50%;
+      }
+      .ob-step-content { animation: contentStep 0.55s cubic-bezier(0.22,1,0.36,1) both; }
+      .ob-dot         { animation: dotPop 0.4s cubic-bezier(0.34,1.56,0.64,1) both; }
+      .ob-stagger-1 { animation-delay: 0.08s; }
+      .ob-stagger-2 { animation-delay: 0.20s; }
+      .ob-stagger-3 { animation-delay: 0.32s; }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
     `}</style>
     <div className="mb-orb mb-orb-1" />
     <div className="mb-orb mb-orb-2" />
@@ -3684,4 +3868,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-}
+      }
