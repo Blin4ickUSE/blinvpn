@@ -5,6 +5,9 @@ WORKDIR /app
 COPY src/miniapp/package*.json ./
 RUN npm install
 
+# Импорты из miniapp: ../../api, ../../core (рядом с /app, не внутри miniapp)
+COPY src/api /api
+COPY src/core /core
 COPY src/miniapp/ ./
 
 # dist — только бандл; sdk кладём в dist/sdk один раз при сборке образа (не в git)
