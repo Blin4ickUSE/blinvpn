@@ -2,10 +2,10 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-COPY panel/package*.json ./
+COPY src/panel/package*.json ./
 RUN npm install
 
-COPY panel/ ./
+COPY src/panel/ ./
 
 RUN npm run build
 
