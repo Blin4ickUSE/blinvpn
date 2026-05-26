@@ -72,7 +72,7 @@ def format_expiry_for_notification(expiry_date_str: str) -> str:
     except Exception:
         return str(expiry_date_str) if expiry_date_str else ''
 
-BOT_TOKEN = os.getenv('BOT_TOKEN', '')
+BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') or os.getenv('BOT_TOKEN', '')
 REQUIRED_CHANNEL_ID = int(os.getenv('REQUIRED_CHANNEL_ID', '-1003036752851'))
 REQUIRED_CHANNEL_LINK = os.getenv('REQUIRED_CHANNEL_LINK', 'https://t.me/blinvpn')
 
@@ -503,7 +503,10 @@ def verify_telegram_webapp_data(init_data: str) -> dict | None:
     Проверяет подлинность данных Telegram WebApp.
     Возвращает данные пользователя если валидно, иначе None.
     """
-    if not init_data or not BOT_TOKEN:
+    if not init_data:
+        return None
+    if not BOT_TOKEN:
+        logger.error('Telegram WebApp verify: TELEGRAM_BOT_TOKEN / BOT_TOKEN не задан')
         return None
     
     try:
@@ -552,12 +555,23 @@ def verify_telegram_webapp_data(init_data: str) -> dict | None:
         logger.error(f"Error verifying Telegram WebApp data: {e}")
         return None
 
+def get_telegram_init_data_from_request() -> str:
+    """initData из X-Telegram-Init-Data или Authorization: tma <initData>."""
+    init_data = (request.headers.get('X-Telegram-Init-Data') or '').strip()
+    if init_data:
+        return init_data
+    auth = (request.headers.get('Authorization') or '').strip()
+    if auth.lower().startswith('tma '):
+        return auth[4:].strip()
+    return ''
+
+
 def get_telegram_user_from_request() -> dict | None:
     """
     Получает и проверяет Telegram пользователя из запроса.
-    Проверяет X-Telegram-Init-Data заголовок.
+    Проверяет X-Telegram-Init-Data / Authorization: tma.
     """
-    init_data = request.headers.get('X-Telegram-Init-Data', '')
+    init_data = get_telegram_init_data_from_request()
     if init_data:
         return verify_telegram_webapp_data(init_data)
     return None

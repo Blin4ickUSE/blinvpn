@@ -32,7 +32,10 @@ async function miniApiFetch(path: string, options: RequestInit = {}): Promise<an
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> | undefined),
   };
-  if (initData) headers['X-Telegram-Init-Data'] = initData;
+  if (initData) {
+    headers['X-Telegram-Init-Data'] = initData;
+    headers['Authorization'] = `tma ${initData}`;
+  }
 
   const res = await fetch(url, {
     ...options,
@@ -941,11 +944,13 @@ export default function App() {
   useEffect(() => {
     const win: any = window as any;
 
-    const waitForTelegramUser = async (maxMs = 4000): Promise<any | null> => {
+    const waitForTelegramUser = async (maxMs = 8000): Promise<any | null> => {
       const step = 100;
       for (let t = 0; t < maxMs; t += step) {
-        const user = win.Telegram?.WebApp?.initDataUnsafe?.user;
-        if (user) return user;
+        const webApp = win.Telegram?.WebApp;
+        const user = webApp?.initDataUnsafe?.user;
+        const initData = webApp?.initData;
+        if (user && initData) return user;
         await new Promise((r) => setTimeout(r, step));
       }
       return win.Telegram?.WebApp?.initDataUnsafe?.user || null;
@@ -1033,7 +1038,10 @@ export default function App() {
       try {
         const initData = win.Telegram?.WebApp?.initData || '';
         const headers: Record<string, string> = {};
-        if (initData) headers['X-Telegram-Init-Data'] = initData;
+        if (initData) {
+          headers['X-Telegram-Init-Data'] = initData;
+          headers['Authorization'] = `tma ${initData}`;
+        }
         const res = await fetch(`/api/user/avatar?telegram_id=${tgId}`, { headers });
         if (res.ok) {
           const blob = await res.blob();
