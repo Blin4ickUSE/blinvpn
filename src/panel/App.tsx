@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Home, DollarSign, BarChart2, Users, Key, Mail, Tag, Percent, 
+  Home, DollarSign, Users, Key, Mail, Tag, Percent, 
   MessageSquare, Server, FileText, Globe, Settings, Menu, X, CheckCircle, 
   AlertCircle, TrendingUp, CreditCard, Search, Filter, ArrowUpRight, 
   ArrowDownLeft, Activity, Calendar, Download, Loader, RefreshCcw, 
@@ -1826,10 +1826,10 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       }} />}
 
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-gray-900 border-r border-gray-800 transform transition-transform duration-300 ease-in-out ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 overflow-y-auto custom-scrollbar`}>
-        <div className="p-6 border-b border-gray-800 hidden md:block"><h1 className="text-2xl font-bold text-blue-500 tracking-wider">BlinVPN</h1><p className="text-xs text-gray-500 mt-1">Admin Panel v3.2</p></div>
+        <div className="p-6 border-b border-gray-800 hidden md:block"><h1 className="text-2xl font-bold text-blue-500 tracking-wider">BlinVPN</h1><p className="text-xs text-gray-500 mt-1">Панель управления v2.0</p></div>
         <nav className="p-4 space-y-6">
             {[
-                { category: "Главное", items: [{ name: "Главная страница", icon: Home }, { name: "Финансы", icon: DollarSign }, { name: "Статистика", icon: BarChart2 }] },
+                { category: "Главное", items: [{ name: "Главная страница", icon: Home }, { name: "Финансы", icon: DollarSign }] },
                 { category: "Пользователи", items: [{ name: "Пользователи", icon: Users }, { name: "Ключи", icon: Key }] },
                 { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Тарифы", icon: Tag }, { name: "Промокоды", icon: Gift }] },
                 { category: "Другое", items: [{ name: "Настройки", icon: Settings }] }
@@ -1883,7 +1883,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         <div className="p-4 md:p-6">
             {activePage === 'Главная страница' && <Dashboard />}
             {activePage === 'Финансы' && <FinancePage transactions={transactions} onSelectTransaction={setSelectedTransaction} />}
-            {activePage === 'Статистика' && <StatisticsPage />}
             {activePage === 'Пользователи' && <UsersPage users={users} userSearch={userSearch} setUserSearch={setUserSearch} setSelectedUser={setSelectedUser} setMassActionType={setMassActionType} />}
             {activePage === 'Ключи' && <KeysPage keys={keys} keySearch={keySearch} setKeySearch={setKeySearch} setIsCreateKeyOpen={setIsCreateKeyOpen} setEditingKey={setEditingKey} />}
             {activePage === 'Рассылка' && <MailingPage onToast={addToast} />}
@@ -1907,6 +1906,8 @@ const Dashboard = () => {
         active_keys: number;
         monthly_revenue: number;
     } | null>(null);
+    const [stats, setStats] = useState<any>(null);
+    const [statsLoading, setStatsLoading] = useState(true);
 
     useEffect(() => {
         (async () => {
@@ -1932,13 +1933,29 @@ const Dashboard = () => {
                 console.error('Failed to load dashboard summary', e);
             }
         })();
+
+        (async () => {
+            setStatsLoading(true);
+            try {
+                const data = await apiFetch('/panel/statistics/full');
+                if (data) {
+                    setStats(data);
+                }
+            } catch (e) {
+                console.error('Failed to load statistics', e);
+            } finally {
+                setStatsLoading(false);
+            }
+        })();
     }, []);
 
     const fmtNumber = (v: number) =>
         v.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
 
     const fmtMoney = (v: number) =>
-        `${v.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₽`;
+        v >= 1000000
+            ? `${(v / 1000000).toFixed(1)}M ₽`
+            : `${v.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₽`;
 
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1974,6 +1991,95 @@ const Dashboard = () => {
                   subsNewData={subsNewData}
                 />
             </div>
+
+            {statsLoading ? (
+                <div className="flex items-center justify-center h-48"><Loader className="animate-spin text-blue-500" size={32} /></div>
+            ) : stats ? (
+                <>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                        <StatCard title="Всего пользователей" value={fmtNumber(stats.totalUsers)} icon={Users} color="blue" />
+                        <StatCard title="Активных подписок" value={fmtNumber(stats.activeSubscriptions)} icon={CheckCircle} color="green" />
+                        <StatCard title="Платежей сегодня" value={fmtNumber(stats.paymentsToday)} icon={CreditCard} color="indigo" />
+                        <StatCard title="Баланс клиентов" value={fmtMoney(stats.clientsBalance)} icon={Wallet} color="gray" />
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+                        <div className="lg:col-span-3 bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                            <div className="flex justify-between items-center mb-6">
+                                <h3 className="text-lg font-bold text-gray-200">Выручка по дням</h3>
+                                <select className="bg-gray-800 border-gray-700 text-gray-300 text-sm rounded-lg p-2 focus:ring-blue-500 focus:border-blue-500"><option>За 30 дней</option><option>За неделю</option><option>За год</option></select>
+                            </div>
+                            <SmoothAreaChart color="#10b981" label="Выручка (₽)" data={stats.revenueData || []} height={250} id="revChart" labels={stats.revenueLabels || []} />
+                        </div>
+                        <div className="space-y-4">
+                            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 flex flex-col justify-center h-[calc(50%-8px)]">
+                                <p className="text-gray-400 text-sm">В среднем в день</p>
+                                <div className="text-2xl font-bold text-white mt-1">{fmtMoney(stats.avgDaily || 0)}</div>
+                                <div className="text-green-400 text-xs mt-2 flex items-center"><ArrowUpRight size={12} className="mr-1" /> Растет</div>
+                            </div>
+                            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 flex flex-col justify-center h-[calc(50%-8px)]">
+                                <p className="text-gray-400 text-sm">Лучший день</p>
+                                <div className="text-2xl font-bold text-white mt-1">{fmtMoney(stats.bestDayValue || 0)}</div>
+                                <div className="text-gray-500 text-xs mt-2">{stats.bestDayDate || ''}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                            <h3 className="text-lg font-bold text-gray-200 mb-6">Распределение пользователей</h3>
+                            <PieChartComponent data={stats.userDistData || []} colors={['#3b82f6', '#ef4444', '#a855f7', '#f97316', '#6b7280']} />
+                        </div>
+                        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                             <h3 className="text-lg font-bold text-gray-200 mb-6">Способы оплаты</h3>
+                             <PieChartComponent data={stats.paymentMethodsData || []} colors={['#10b981', '#3b82f6', '#f59e0b', '#6b7280']} />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                             <h3 className="text-lg font-bold text-gray-200 mb-4">Подписки</h3>
+                             <div className="space-y-4">
+                                 <div className="flex justify-between"><span className="text-gray-400">Всего подписок</span><span className="text-white font-bold">{fmtNumber(stats.totalSubscriptions)}</span></div>
+                                 <div className="flex justify-between"><span className="text-gray-400">Платные</span><span className="text-green-400 font-bold">{fmtNumber(stats.paidSubscriptions)}</span></div>
+                                 <div className="flex justify-between"><span className="text-gray-400">Куплено за неделю</span><span className="text-blue-400 font-bold">+{fmtNumber(stats.boughtThisWeek)}</span></div>
+                             </div>
+                         </div>
+                         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                             <h3 className="text-lg font-bold text-gray-200 mb-4">Конверсия Trial {'>'} Paid</h3>
+                             <div className="flex items-end gap-2 mb-2">
+                                 <span className="text-4xl font-bold text-white">{stats.conversionRate?.toFixed(1) || 0}%</span>
+                             </div>
+                             <p className="text-xs text-gray-500">Пользователей переходят на платный тариф после пробного периода.</p>
+                             <div className="w-full bg-gray-800 h-2 rounded-full mt-4"><div className="bg-green-500 h-2 rounded-full" style={{width: `${Math.min(stats.conversionRate || 0, 100)}%`}}></div></div>
+                         </div>
+                         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                             <h3 className="text-lg font-bold text-gray-200 mb-4">Рефералы</h3>
+                             <div className="space-y-4">
+                                 <div className="flex justify-between"><span className="text-gray-400">Всего приглашено</span><span className="text-white font-bold">{fmtNumber(stats.totalInvited)}</span></div>
+                                 <div className="flex justify-between"><span className="text-gray-400">Партнеров</span><span className="text-white font-bold">{fmtNumber(stats.partners)}</span></div>
+                                 <div className="flex justify-between"><span className="text-gray-400">Выплачено</span><span className="text-white font-bold">{fmtMoney(stats.totalPaid)}</span></div>
+                             </div>
+                         </div>
+                    </div>
+
+                    <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+                        <div className="p-5 border-b border-gray-800"><h3 className="text-lg font-bold text-gray-200">Топ рефералов</h3></div>
+                        <table className="w-full text-left">
+                            <thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase"><th className="px-6 py-4">Пользователь</th><th className="px-6 py-4">Пригласил</th><th className="px-6 py-4">Заработал</th></tr></thead>
+                            <tbody className="divide-y divide-gray-800">
+                                {(stats.topReferrers || []).map((r: any) => (
+                                    <tr key={r.id}>
+                                        <td className="px-6 py-4 text-white font-medium flex items-center"><Trophy size={16} className={`mr-2 ${r.id === 1 ? 'text-yellow-400' : r.id === 2 ? 'text-gray-400' : 'text-orange-400'}`}/> {r.name}</td>
+                                        <td className="px-6 py-4 text-gray-300">{r.count} чел.</td>
+                                        <td className="px-6 py-4 text-green-400 font-bold">{r.earned.toLocaleString('ru-RU')} ₽</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </>
+            ) : null}
         </div>
     );
 };
@@ -2037,129 +2143,6 @@ const FinancePage: React.FC<FinancePageProps> = ({ transactions, onSelectTransac
                 />
             </div>
             <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-sm"><div className="overflow-x-auto"><table className="w-full text-left border-collapse"><thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase tracking-wider"><th className="px-6 py-4">ID</th><th className="px-6 py-4">Пользователь</th><th className="px-6 py-4">Сумма</th><th className="px-6 py-4">Статус</th><th className="px-6 py-4">Дата</th></tr></thead><tbody className="divide-y divide-gray-800">{transactions.map((tx) => (<tr key={tx.id} onClick={() => onSelectTransaction(tx)} className="hover:bg-gray-800/30 cursor-pointer"><td className="px-6 py-4 text-sm text-gray-500">#{tx.id}</td><td className="px-6 py-4 text-sm text-gray-300">{tx.user}</td><td className={`px-6 py-4 text-sm font-bold ${tx.amount > 0 ? 'text-green-400' : 'text-white'}`}>{tx.amount > 0 ? '+' : ''}{tx.amount} ₽</td><td className="px-6 py-4 text-sm text-gray-400">{tx.status}</td><td className="px-6 py-4 text-sm text-gray-500">{tx.date}</td></tr>))}</tbody></table></div></div>
-        </div>
-    );
-};
-
-const StatisticsPage = () => {
-    const [stats, setStats] = useState<any>(null);
-
-    useEffect(() => {
-        (async () => {
-            try {
-                const data = await apiFetch('/panel/statistics/full');
-                if (data) {
-                    setStats(data);
-                }
-            } catch (e) {
-                console.error('Failed to load statistics', e);
-            }
-        })();
-    }, []);
-
-    const fmtNumber = (v: number) => v.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
-    const fmtMoney = (v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M ₽` : `${v.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₽`;
-
-    if (!stats) {
-        return (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <div><h2 className="text-2xl font-bold text-white">Статистика</h2><p className="text-gray-400 mt-1">Детальная аналитика проекта</p></div>
-                <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-blue-500" size={32} /></div>
-            </div>
-        );
-    }
-
-    return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div><h2 className="text-2xl font-bold text-white">Статистика</h2><p className="text-gray-400 mt-1">Детальная аналитика проекта</p></div>
-            
-            {/* Core Metrics */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-                <StatCard title="Всего пользователей" value={fmtNumber(stats.totalUsers)} icon={Users} color="blue" />
-                <StatCard title="Активных подписок" value={fmtNumber(stats.activeSubscriptions)} icon={CheckCircle} color="green" />
-                <StatCard title="Платежей сегодня" value={fmtNumber(stats.paymentsToday)} icon={CreditCard} color="indigo" />
-                <StatCard title="Баланс клиентов" value={fmtMoney(stats.clientsBalance)} icon={Wallet} color="gray" />
-            </div>
-
-            {/* Revenue & Quick Metrics */}
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-                <div className="lg:col-span-3 bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                    <div className="flex justify-between items-center mb-6">
-                        <h3 className="text-lg font-bold text-gray-200">Выручка по дням</h3>
-                        <select className="bg-gray-800 border-gray-700 text-gray-300 text-sm rounded-lg p-2 focus:ring-blue-500 focus:border-blue-500"><option>За 30 дней</option><option>За неделю</option><option>За год</option></select>
-                    </div>
-                    <SmoothAreaChart color="#10b981" label="Выручка (₽)" data={stats.revenueData || []} height={250} id="revChart" labels={stats.revenueLabels || []} />
-                </div>
-                <div className="space-y-4">
-                    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 flex flex-col justify-center h-[calc(50%-8px)]">
-                        <p className="text-gray-400 text-sm">В среднем в день</p>
-                        <div className="text-2xl font-bold text-white mt-1">{fmtMoney(stats.avgDaily || 0)}</div>
-                        <div className="text-green-400 text-xs mt-2 flex items-center"><ArrowUpRight size={12} className="mr-1" /> Растет</div>
-                    </div>
-                    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 flex flex-col justify-center h-[calc(50%-8px)]">
-                        <p className="text-gray-400 text-sm">Лучший день</p>
-                        <div className="text-2xl font-bold text-white mt-1">{fmtMoney(stats.bestDayValue || 0)}</div>
-                        <div className="text-gray-500 text-xs mt-2">{stats.bestDayDate || ''}</div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Distributions */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                    <h3 className="text-lg font-bold text-gray-200 mb-6">Распределение пользователей</h3>
-                    <PieChartComponent data={stats.userDistData || []} colors={['#3b82f6', '#ef4444', '#a855f7', '#f97316', '#6b7280']} />
-                </div>
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                     <h3 className="text-lg font-bold text-gray-200 mb-6">Способы оплаты</h3>
-                     <PieChartComponent data={stats.paymentMethodsData || []} colors={['#10b981', '#3b82f6', '#f59e0b', '#6b7280']} />
-                </div>
-            </div>
-
-            {/* Subscriptions & Conversion */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                     <h3 className="text-lg font-bold text-gray-200 mb-4">Подписки</h3>
-                     <div className="space-y-4">
-                         <div className="flex justify-between"><span className="text-gray-400">Всего подписок</span><span className="text-white font-bold">{fmtNumber(stats.totalSubscriptions)}</span></div>
-                         <div className="flex justify-between"><span className="text-gray-400">Платные</span><span className="text-green-400 font-bold">{fmtNumber(stats.paidSubscriptions)}</span></div>
-                         <div className="flex justify-between"><span className="text-gray-400">Куплено за неделю</span><span className="text-blue-400 font-bold">+{fmtNumber(stats.boughtThisWeek)}</span></div>
-                     </div>
-                 </div>
-                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                     <h3 className="text-lg font-bold text-gray-200 mb-4">Конверсия Trial {'>'} Paid</h3>
-                     <div className="flex items-end gap-2 mb-2">
-                         <span className="text-4xl font-bold text-white">{stats.conversionRate?.toFixed(1) || 0}%</span>
-                     </div>
-                     <p className="text-xs text-gray-500">Пользователей переходят на платный тариф после пробного периода.</p>
-                     <div className="w-full bg-gray-800 h-2 rounded-full mt-4"><div className="bg-green-500 h-2 rounded-full" style={{width: `${Math.min(stats.conversionRate || 0, 100)}%`}}></div></div>
-                 </div>
-                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                     <h3 className="text-lg font-bold text-gray-200 mb-4">Рефералы</h3>
-                     <div className="space-y-4">
-                         <div className="flex justify-between"><span className="text-gray-400">Всего приглашено</span><span className="text-white font-bold">{fmtNumber(stats.totalInvited)}</span></div>
-                         <div className="flex justify-between"><span className="text-gray-400">Партнеров</span><span className="text-white font-bold">{fmtNumber(stats.partners)}</span></div>
-                         <div className="flex justify-between"><span className="text-gray-400">Выплачено</span><span className="text-white font-bold">{fmtMoney(stats.totalPaid)}</span></div>
-                     </div>
-                 </div>
-            </div>
-
-            {/* Top Referrers */}
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-                <div className="p-5 border-b border-gray-800"><h3 className="text-lg font-bold text-gray-200">Топ рефералов</h3></div>
-                <table className="w-full text-left">
-                    <thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase"><th className="px-6 py-4">Пользователь</th><th className="px-6 py-4">Пригласил</th><th className="px-6 py-4">Заработал</th></tr></thead>
-                    <tbody className="divide-y divide-gray-800">
-                        {(stats.topReferrers || []).map((r: any) => (
-                            <tr key={r.id}>
-                                <td className="px-6 py-4 text-white font-medium flex items-center"><Trophy size={16} className={`mr-2 ${r.id === 1 ? 'text-yellow-400' : r.id === 2 ? 'text-gray-400' : 'text-orange-400'}`}/> {r.name}</td>
-                                <td className="px-6 py-4 text-gray-300">{r.count} чел.</td>
-                                <td className="px-6 py-4 text-green-400 font-bold">{r.earned.toLocaleString('ru-RU')} ₽</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
         </div>
     );
 };

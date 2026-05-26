@@ -1023,7 +1023,7 @@ def create_payment():
             payment = platega.platega_api.create_payment(
                 float(amount),
                 int(user_id),
-                description="Пополнение баланса BlinVPN (РФ карты)",
+                description="Пополнение баланса (карта РФ)",
                 payment_method=platega.PLATEGA_METHOD_CARD_RUB,
                 return_url=return_url,
                 failed_url=failed_url,
@@ -1040,7 +1040,7 @@ def create_payment():
             payment = platega.platega_api.create_payment(
                 float(amount),
                 int(user_id),
-                description="Пополнение баланса BlinVPN (Иностранные карты)",
+                description="Пополнение баланса (иностр. карта)",
                 payment_method=platega.PLATEGA_METHOD_INTL,
                 return_url=return_url,
                 failed_url=failed_url,
@@ -1057,6 +1057,7 @@ def create_payment():
             payment = rollypay.rollypay_api.create_sbp_payment(
                 float(amount),
                 int(user_id),
+                description="Пополнение баланса (СБП)",
                 success_redirect_url=return_url,
                 fail_redirect_url=failed_url,
             )
@@ -1073,7 +1074,7 @@ def create_payment():
             inv = cryptopay.cryptopay_api.create_invoice(
                 user_id=int(user_id),
                 amount_rub=float(amount),
-                description="Пополнение баланса BlinVPN (CryptoPay)",
+                description="Пополнение баланса (криптовалюта)",
             )
             if inv:
                 # Create pending tx for webhook/reconcile idempotency.
@@ -1120,8 +1121,8 @@ def create_payment():
             import secrets
             payload = f"stars_{user_id}_{int(time.time())}_{secrets.token_hex(3)}"
             invoice = {
-                "title": "Пополнение баланса BlinVPN",
-                "description": f"Пополнение баланса на {stars}₽ (Telegram Stars)",
+                "title": "Пополнение баланса",
+                "description": f"Пополнение на {stars} ₽",
                 "payload": payload,
                 "provider_token": "",
                 "currency": "XTR",

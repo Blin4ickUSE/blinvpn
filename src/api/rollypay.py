@@ -89,9 +89,9 @@ class RollyPayAPI:
             "payment_currency": "RUB",
             "payment_method": payment_method,
             "order_id": order_id,
-            "description": description or "Пополнение баланса BlinVPN",
+            "description": description or "Пополнение баланса (СБП)",
             "customer_id": str(user_id),
-            "metadata": {"user_id": user_id, "source": "blinvpn"},
+            "metadata": {"user_id": user_id, "source": "balance_topup"},
         }
         if self.terminal_id:
             payload["terminal_id"] = self.terminal_id

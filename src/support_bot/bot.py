@@ -4,6 +4,7 @@
 """
 import asyncio
 import logging
+from collections import defaultdict
 import os
 import sys
 from datetime import datetime
@@ -41,6 +42,19 @@ if not SUPPORT_GROUP_ID:
 
 bot = Bot(token=SUPPORT_BOT_TOKEN)
 dp  = Dispatcher()
+
+# Один топик на пользователя: блокировка от гонки при спаме сообщений
+_topic_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
+def _is_dead_topic_error(err: str) -> bool:
+    err = err.lower()
+    return (
+        "thread not found" in err
+        or "topic_deleted" in err
+        or "message thread not found" in err
+        or "forum topic deleted" in err
+    )
 
 # ─── Эмодзи-иконки топиков ────────────────────────────────────────────────────
 ICON_DEFAULT  = "💬"
@@ -246,15 +260,12 @@ async def _create_topic(telegram_id: int, username: str, user: dict) -> int:
 
 
 async def _ensure_topic(telegram_id: int, username: str, user: dict) -> int:
-    """Вернуть существующий topic_id (без проверок) или создать новый с карточкой.
-
-    НЕ делаем разрушительную проверку «жив ли топик» — это создавало топики на каждое
-    сообщение. Мёртвый топик ловим по фактической ошибке при отправке в него.
-    """
-    topic_id = _get_support_topic(telegram_id)
-    if topic_id:
-        return topic_id
-    return await _create_topic(telegram_id, username, user)
+    """Вернуть существующий topic_id или создать новый (с блокировкой от гонки при спаме)."""
+    async with _topic_locks[telegram_id]:
+        topic_id = _get_support_topic(telegram_id)
+        if topic_id:
+            return topic_id
+        return await _create_topic(telegram_id, username, user)
 
 
 def _set_card_msg_id(telegram_id: int, msg_id):
@@ -315,12 +326,28 @@ async def user_to_topic(message: Message):
     topic_id = await _ensure_topic(tg_id, username, user)
 
     # Пересылаем сообщение в топик
-    sent = await _forward_to_topic(message, topic_id)
-    if sent is None:
-        # Топик мёртв (оператор удалил тему) — создаём новый с карточкой и шлём заново
-        logger.info(f"Topic {topic_id} dead for {tg_id}, recreating")
-        topic_id = await _create_topic(tg_id, username, user)
+    try:
         sent = await _forward_to_topic(message, topic_id)
+    except Exception as e:
+        logger.error(f"Forward failed for {tg_id} (topic {topic_id}): {e}")
+        await message.answer(
+            'Не удалось доставить сообщение оператору. Попробуйте через несколько секунд.',
+        )
+        return
+
+    if sent is None:
+        # Топик мёртв (оператор удалил тему) — один раз пересоздаём под блокировкой
+        logger.info(f"Topic {topic_id} dead for {tg_id}, recreating")
+        async with _topic_locks[tg_id]:
+            topic_id = await _create_topic(tg_id, username, user)
+            try:
+                sent = await _forward_to_topic(message, topic_id)
+            except Exception as e:
+                logger.error(f"Forward after recreate failed for {tg_id}: {e}")
+                await message.answer(
+                    'Не удалось доставить сообщение оператору. Попробуйте через несколько секунд.',
+                )
+                return
 
     # Сохраняем маппинг user_msg_id → topic_msg_id для reply/edit/delete
     if sent:
@@ -405,10 +432,10 @@ async def _forward_to_topic(message: Message, topic_id: int) -> Optional[Message
             except Exception as e2:
                 err = str(e2).lower()
         # Топик удалён / не найден → сигнал пересоздать
-        if "thread not found" in err or "topic_deleted" in err or "message thread not found" in err:
+        if _is_dead_topic_error(err):
             return None
         logger.error(f"_forward_to_topic error: {err}")
-        return None
+        raise
 
 
 # ─── Сообщения от оператора (в топике) → пользователь ────────────────────────
