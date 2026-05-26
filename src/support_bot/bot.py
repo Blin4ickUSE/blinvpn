@@ -330,9 +330,10 @@ async def user_to_topic(message: Message):
         sent = await _forward_to_topic(message, topic_id)
     except Exception as e:
         logger.error(f"Forward failed for {tg_id} (topic {topic_id}): {e}")
-        await message.answer(
-            'Не удалось доставить сообщение оператору. Попробуйте через несколько секунд.',
-        )
+        try:
+            await message.delete()
+        except Exception:
+            pass
         return
 
     if sent is None:
@@ -344,9 +345,10 @@ async def user_to_topic(message: Message):
                 sent = await _forward_to_topic(message, topic_id)
             except Exception as e:
                 logger.error(f"Forward after recreate failed for {tg_id}: {e}")
-                await message.answer(
-                    'Не удалось доставить сообщение оператору. Попробуйте через несколько секунд.',
-                )
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
                 return
 
     # Сохраняем маппинг user_msg_id → topic_msg_id для reply/edit/delete
