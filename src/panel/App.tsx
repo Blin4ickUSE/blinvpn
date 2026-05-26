@@ -1,7 +1,6 @@
-/// <reference types="vite/client" />
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Home, DollarSign, Users, Key, Mail, Tag, Percent, 
+  Home, DollarSign, BarChart2, Users, Key, Mail, Tag, Percent, 
   MessageSquare, Server, FileText, Globe, Settings, Menu, X, CheckCircle, 
   AlertCircle, TrendingUp, CreditCard, Search, Filter, ArrowUpRight, 
   ArrowDownLeft, Activity, Calendar, Download, Loader, RefreshCcw, 
@@ -18,76 +17,51 @@ import {
 // 0. ENV & API HELPERS
 // ==========================================
 
-type EnvRecord = Record<string, string | undefined>;
+declare const importMeta: any | undefined;
 
-function readEnv(): EnvRecord {
-  const viteEnv = import.meta.env as EnvRecord;
-  const windowEnv =
-    typeof window !== 'undefined'
-      ? ((window as unknown as { __ENV__?: EnvRecord }).__ENV__ ?? {})
-      : {};
-  return { ...windowEnv, ...viteEnv };
-}
-
-const rawEnv = readEnv();
+// Унифицированный доступ к env для Vite/CRA/простого window.__ENV__
+const rawEnv: any =
+  (typeof importMeta !== 'undefined' && importMeta.env) ||
+  (typeof (window as any) !== 'undefined' && (window as any).__ENV__) ||
+  {};
 
 const API_BASE_URL: string = rawEnv.VITE_API_URL || rawEnv.REACT_APP_API_URL || '/api';
 const BOT_USERNAME: string = rawEnv.VITE_BOT_USERNAME || rawEnv.REACT_APP_BOT_USERNAME || 'blinvpn_bot';
 
-const PANEL_TOKEN_KEY = 'panel_token';
-
-function buildApiUrl(path: string): string {
-  const trimmed = path.trim();
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
-  if (trimmed.startsWith('/api/') || trimmed === '/api') return trimmed;
-  const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
-  const base = API_BASE_URL.replace(/\/$/, '');
-  return `${base}${cleanPath}`;
-}
-
 function getPanelToken(): string {
   if (typeof window !== 'undefined') {
-    return localStorage.getItem(PANEL_TOKEN_KEY) || '';
+    return localStorage.getItem('panel_token') || '';
   }
   return '';
 }
 
 function setPanelToken(token: string): void {
   if (typeof window !== 'undefined') {
-    localStorage.setItem(PANEL_TOKEN_KEY, token);
+    localStorage.setItem('panel_token', token);
   }
 }
 
 function clearPanelToken(): void {
   if (typeof window !== 'undefined') {
-    localStorage.removeItem(PANEL_TOKEN_KEY);
+    localStorage.removeItem('panel_token');
   }
 }
 
-async function panelAuthFetch(path: string, options: RequestInit = {}): Promise<Response> {
-  return fetch(buildApiUrl(path), {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...((options.headers as Record<string, string>) || {}),
-    },
-  });
-}
-
 async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
+  // Всегда используем относительный путь /api - nginx проксирует на backend
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
-  const url = buildApiUrl(cleanPath);
-
-  const headers: Record<string, string> = {
+  const url = `/api${cleanPath}`;
+  
+  const headers: any = {
     'Content-Type': 'application/json',
-    ...((options.headers as Record<string, string>) || {}),
+    ...(options.headers || {}),
   };
 
   // Все panel-* эндпоинты требуют Bearer
   if (cleanPath.startsWith('/panel')) {
     const token = getPanelToken();
     if (token) {
-      headers.Authorization = `Bearer ${token}`;
+      headers['Authorization'] = `Bearer ${token}`;
     }
   }
 
@@ -97,13 +71,10 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
   });
 
   if (!res.ok) {
-    // Если 401 - сбрасываем авторизацию только при наличии токена
+    // Если 401 - сбрасываем авторизацию
     if (res.status === 401) {
-      const hadToken = !!getPanelToken();
       clearPanelToken();
-      if (hadToken && typeof window !== 'undefined') {
-        window.location.reload();
-      }
+      window.location.reload();
     }
     const text = await res.text();
     throw new Error(text || `Request failed with status ${res.status}`);
@@ -200,16 +171,6 @@ interface Promo {
   expires: string;
 }
 
-interface Plan {
-  id: number;
-  name: string;
-  price: number;
-  oldPrice?: number;
-  duration: number;
-  isHit: boolean;
-  description: string;
-}
-
 // ==========================================
 // 2. TOAST SYSTEM
 // ==========================================
@@ -267,7 +228,7 @@ interface StatCardProps {
 function StatCard({ title, value, change, icon: Icon, color, subValue, className }: StatCardProps) {
   const isPositive = change && (change.startsWith('+') || !change.startsWith('-'));
   const colors = { 
-    blue: "bg-blue-500 text-blue-500", 
+    blue: "bg-orange-500 text-orange-500", 
     green: "bg-green-500 text-green-500", 
     indigo: "bg-indigo-500 text-indigo-500", 
     orange: "bg-orange-500 text-orange-500", 
@@ -493,7 +454,7 @@ const CombinedLinesChart: React.FC<{
             <div className="text-gray-400 mb-2">{active.label}</div>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1">
               <span className="text-purple-400 whitespace-nowrap">Ключи новые:</span><span className="font-semibold text-white text-right whitespace-nowrap">+{active.keysNew.toLocaleString('ru-RU')}</span>
-              <span className="text-blue-400 whitespace-nowrap">Подписки новые:</span><span className="font-semibold text-white text-right whitespace-nowrap">+{active.subsNew.toLocaleString('ru-RU')}</span>
+              <span className="text-orange-400 whitespace-nowrap">Подписки новые:</span><span className="font-semibold text-white text-right whitespace-nowrap">+{active.subsNew.toLocaleString('ru-RU')}</span>
             </div>
           </div>
         )}
@@ -505,8 +466,8 @@ const CombinedLinesChart: React.FC<{
               <stop offset="100%" stopColor="#a855f7" stopOpacity="0" />
             </linearGradient>
             <linearGradient id="subsAreaGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.36" />
-              <stop offset="100%" stopColor="#3b82f6" stopOpacity="0" />
+              <stop offset="0%" stopColor="#f97316" stopOpacity="0.36" />
+              <stop offset="100%" stopColor="#f97316" stopOpacity="0" />
             </linearGradient>
           </defs>
 
@@ -526,7 +487,7 @@ const CombinedLinesChart: React.FC<{
           <path
             d={subsPath}
             fill="none"
-            stroke="#3b82f6"
+            stroke="#f97316"
             strokeWidth="4"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -546,7 +507,7 @@ const CombinedLinesChart: React.FC<{
           <path
             d={subsPath}
             fill="none"
-            stroke="#3b82f6"
+            stroke="#f97316"
             strokeWidth="2.7"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -565,7 +526,7 @@ const CombinedLinesChart: React.FC<{
 
       <div className="flex gap-5 text-sm">
         <div className="flex items-center text-purple-300"><span className="w-4 h-0.5 bg-purple-400 mr-2" />Новые ключи</div>
-        <div className="flex items-center text-blue-300"><span className="w-4 h-0.5 bg-blue-400 mr-2" />Новые подписки</div>
+        <div className="flex items-center text-orange-300"><span className="w-4 h-0.5 bg-orange-400 mr-2" />Новые подписки</div>
       </div>
     </div>
   );
@@ -649,13 +610,13 @@ const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConf
   const config: ActionConfig = ({
       'ADD_BALANCE': { title: 'Начислить баланс', label: 'Сумма (₽)', icon: ArrowUpRight, color: 'text-green-400', type: 'number' },
       'SUB_BALANCE': { title: 'Списать баланс', label: 'Сумма (₽)', icon: ArrowDownLeft, color: 'text-red-400', type: 'number' },
-      'EXTEND_SUB': { title: 'Продлить подписку', label: 'Количество дней', icon: Clock, color: 'text-blue-400', type: 'number' },
+      'EXTEND_SUB': { title: 'Продлить подписку', label: 'Количество дней', icon: Clock, color: 'text-orange-400', type: 'number' },
       'REDUCE_SUB': { title: 'Уменьшить срок', label: 'Количество дней', icon: Clock, color: 'text-orange-400', type: 'number' },
       'SET_TRAFFIC': { title: 'Лимит трафика', label: 'Макс. трафик (GB)', icon: Database, color: 'text-purple-400', type: 'number' },
       'SET_DEVICES': { title: 'Лимит устройств', label: 'Кол-во устройств', icon: Smartphone, color: 'text-indigo-400', type: 'number' },
       'BAN': { title: 'Заблокировать', label: 'Причина бана', icon: Ban, color: 'text-red-400', type: 'text' },
       'UNBAN': { title: 'Разблокировать', label: '', icon: CheckCircle, color: 'text-green-400', type: 'text' },
-      'MASS_ADD_DAYS': { title: 'Всем добавить дни', label: 'Количество дней', icon: Calendar, color: 'text-blue-500', type: 'number' },
+      'MASS_ADD_DAYS': { title: 'Всем добавить дни', label: 'Количество дней', icon: Calendar, color: 'text-orange-500', type: 'number' },
       'MASS_ADD_BALANCE': { title: 'Всем начислить', label: 'Сумма (₽)', icon: DollarSign, color: 'text-green-500', type: 'number' },
       'MASS_BAN': { title: 'Забанить всех', label: 'Причина', icon: Ban, color: 'text-red-500', type: 'text' },
       'MASS_UNBAN': { title: 'Разбанить всех', label: '', icon: CheckCircle, color: 'text-green-500', type: 'text' },
@@ -676,18 +637,18 @@ const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConf
                         type={config.type} 
                         value={value} 
                         onChange={e => setValue(e.target.value)} 
-                        className="w-full bg-gray-950 border border-gray-700 text-white text-lg rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none font-mono" 
+                        className="w-full bg-gray-950 border border-gray-700 text-white text-lg rounded-xl px-4 py-3 focus:ring-2 focus:ring-orange-500 outline-none font-mono" 
                         placeholder="0" 
                         autoFocus 
                         min="0"
                       />
                   </div>
                   <label className="flex items-center cursor-pointer group bg-gray-950/50 p-3 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors">
-                      <div className="relative"><input type="checkbox" checked={notify} onChange={() => setNotify(!notify)} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full shadow-inner transition-colors ${notify ? 'bg-blue-600' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${notify ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="text-sm text-gray-200 font-medium">Уведомить пользователя</div><div className="text-xs text-gray-500">Отправить сообщение в бот</div></div>
+                      <div className="relative"><input type="checkbox" checked={notify} onChange={() => setNotify(!notify)} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full shadow-inner transition-colors ${notify ? 'bg-orange-600' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${notify ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="text-sm text-gray-200 font-medium">Уведомить пользователя</div><div className="text-xs text-gray-500">Отправить сообщение в бот</div></div>
                   </label>
                   <div className="flex gap-3 pt-2">
                       <button onClick={onClose} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl font-medium transition-colors">Отмена</button>
-                      <button onClick={() => onConfirm(value, notify)} className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg shadow-blue-900/20 transition-colors">Применить</button>
+                      <button onClick={() => onConfirm(value, notify)} className="flex-1 py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-bold shadow-lg shadow-orange-900/20 transition-colors">Применить</button>
                   </div>
               </div>
           </div>
@@ -713,9 +674,10 @@ const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, o
         setBlockLoading(true);
         try {
             const newStatus = !isBlocked;
-            await apiFetch(`/panel/keys/${keyItem.id}/block`, {
+            await fetch(`/api/panel/keys/${keyItem.id}/block`, {
                 method: 'POST',
-                body: JSON.stringify({ blocked: newStatus }),
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('panel_token') || ''}` },
+                body: JSON.stringify({ blocked: newStatus })
             });
             setIsBlocked(newStatus);
             if (onBlock) onBlock(keyItem.id, newStatus);
@@ -730,7 +692,7 @@ const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, o
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200" onClick={onClose}>
             <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-md p-6 shadow-2xl relative animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
                 <div className="flex justify-between items-start mb-6">
-                    <h3 className="text-xl font-bold text-white flex items-center"><Key size={22} className="mr-2 text-blue-500"/> Редактирование ключа</h3>
+                    <h3 className="text-xl font-bold text-white flex items-center"><Key size={22} className="mr-2 text-orange-500"/> Редактирование ключа</h3>
                     <button onClick={onClose} className="text-gray-400 hover:text-white"><X size={20}/></button>
                 </div>
 
@@ -752,7 +714,7 @@ const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, o
                                 <div 
                                     className={`h-2 rounded-full transition-all ${
                                         keyItem.trafficLimit > 0 && keyItem.trafficUsed/keyItem.trafficLimit > 0.9 ? 'bg-red-500' : 
-                                        keyItem.trafficLimit > 0 && keyItem.trafficUsed/keyItem.trafficLimit > 0.7 ? 'bg-yellow-500' : 'bg-blue-500'
+                                        keyItem.trafficLimit > 0 && keyItem.trafficUsed/keyItem.trafficLimit > 0.7 ? 'bg-yellow-500' : 'bg-orange-500'
                                     }`}
                                     style={{ width: `${keyItem.trafficLimit > 0 ? Math.min(100, (keyItem.trafficUsed/keyItem.trafficLimit)*100) : 0}%` }}
                                 ></div>
@@ -794,7 +756,7 @@ const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, o
                                     type="number" 
                                     value={expiryDays} 
                                     onChange={(e) => setExpiryDays(parseInt(e.target.value) || 0)}
-                                    className="flex-1 bg-gray-950 border border-gray-700 text-center text-white text-lg rounded-xl focus:border-blue-500 outline-none font-mono"
+                                    className="flex-1 bg-gray-950 border border-gray-700 text-center text-white text-lg rounded-xl focus:border-orange-500 outline-none font-mono"
                                 />
                                 <button onClick={() => setExpiryDays(Number(expiryDays) + 1)} className="p-3 bg-gray-800 rounded-xl hover:bg-gray-700 transition-colors"><ArrowUpRight size={18}/></button>
                             </div>
@@ -804,7 +766,7 @@ const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, o
                             <button onClick={() => setConfirmDelete(true)} className="flex-1 py-3 bg-red-600/10 hover:bg-red-600/20 text-red-500 border border-red-600/20 rounded-xl font-medium transition-colors flex items-center justify-center">
                                 <Trash2 size={18} className="mr-2"/> Удалить
                             </button>
-                            <button onClick={() => onSave(keyItem.id, expiryDays)} className="flex-[2] py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg shadow-blue-900/20 transition-colors flex items-center justify-center">
+                            <button onClick={() => onSave(keyItem.id, expiryDays)} className="flex-[2] py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-bold shadow-lg shadow-orange-900/20 transition-colors flex items-center justify-center">
                                 <Save size={18} className="mr-2"/> Сохранить
                             </button>
                         </div>
@@ -851,7 +813,7 @@ const TransactionModal: React.FC<TransactionModalProps> = ({ transaction, onClos
 
         <div className="space-y-4 mb-8">
             <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><Hash size={14} className="mr-2"/> ID</span><span className="text-white font-mono">#{transaction.id}</span></div>
-            <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><Users size={14} className="mr-2"/> Пользователь</span><span className="text-blue-400">{transaction.user}</span></div>
+            <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><Users size={14} className="mr-2"/> Пользователь</span><span className="text-orange-400">{transaction.user}</span></div>
             <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><DollarSign size={14} className="mr-2"/> Сумма</span><span className={`font-bold ${isIncome ? 'text-green-400' : 'text-red-400'}`}>{transaction.amount} ₽</span></div>
             <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><CreditCard size={14} className="mr-2"/> Метод</span><span className="text-white">{transaction.method}</span></div>
             <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><FileText size={14} className="mr-2"/> Hash</span><span className="text-xs text-gray-500 font-mono">{transaction.hash}</span></div>
@@ -906,7 +868,7 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
                 setLoadingSquads(false);
             }
         })();
-    }, [promos.length]);
+    }, []);
 
     const handleCreate = async () => { 
         if(!selectedUser) {
@@ -948,7 +910,7 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
     return (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200" onClick={onClose}>
             <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-lg shadow-2xl relative animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
-                <div className="p-5 border-b border-gray-800 flex justify-between items-center"><h3 className="text-xl font-bold text-white flex items-center"><Plus size={24} className="mr-2 text-blue-500"/> Создание ключа</h3><button onClick={onClose} className="text-gray-400 hover:text-white"><X size={24} /></button></div>
+                <div className="p-5 border-b border-gray-800 flex justify-between items-center"><h3 className="text-xl font-bold text-white flex items-center"><Plus size={24} className="mr-2 text-orange-500"/> Создание ключа</h3><button onClick={onClose} className="text-gray-400 hover:text-white"><X size={24} /></button></div>
                 <div className="p-6 overflow-y-auto space-y-6">
                     <div className="relative">
                         <label className="text-sm font-medium text-gray-400 mb-1.5 block">Пользователь</label>
@@ -962,7 +924,7 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
                                 }}
                                 className={`w-full bg-gray-950 border ${
                                     selectedUser ? 'border-green-500/50 text-green-400' : 'border-gray-700 text-white'
-                                } rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500`}
+                                } rounded-xl px-4 py-3 focus:outline-none focus:border-orange-500`}
                                 placeholder="Введите ID или Username"
                             />
                             {selectedUser && (
@@ -1006,7 +968,7 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
                                         <button 
                                             key={sq.uuid} 
                                             onClick={() => setSelectedSquads(prev => isSelected ? prev.filter(s => s !== sq.uuid) : [...prev, sq.uuid])} 
-                                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${isSelected ? 'bg-blue-600/20 border-blue-500 text-blue-400' : 'bg-gray-950 border-gray-800 text-gray-500 hover:border-gray-600'}`}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${isSelected ? 'bg-orange-600/20 border-orange-500 text-orange-400' : 'bg-gray-950 border-gray-800 text-gray-500 hover:border-gray-600'}`}
                                         >
                                             {sq.name}
                                         </button>
@@ -1016,7 +978,7 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
                         )}
                     </div>
                 </div>
-                <div className="p-5 border-t border-gray-800"><button onClick={handleCreate} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg shadow-blue-900/20 transition-colors">Создать ключ</button></div>
+                <div className="p-5 border-t border-gray-800"><button onClick={handleCreate} className="w-full py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-bold shadow-lg shadow-orange-900/20 transition-colors">Создать ключ</button></div>
             </div>
         </div>
     );
@@ -1243,7 +1205,7 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
                     </div>
                     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                          <h3 className="text-lg font-bold text-gray-200 flex items-center mb-4">
-                           <Zap size={18} className="mr-2 text-blue-400"/> Подписки ({subscriptions.length})
+                           <Zap size={18} className="mr-2 text-orange-400"/> Подписки ({subscriptions.length})
                          </h3>
                          {loadingSubs ? (
                            <div className="text-center py-4 text-gray-500">Загрузка...</div>
@@ -1255,7 +1217,7 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
                                <div key={sub.id} className="p-3 rounded-lg border bg-gray-950 border-gray-800">
                                  <div className="flex justify-between items-start mb-2">
                                    <div>
-                                     <div className="font-mono text-xs text-blue-400">#{sub.short_uuid || sub.key_uuid?.slice(0,8)}</div>
+                                     <div className="font-mono text-xs text-orange-400">#{sub.short_uuid || sub.key_uuid?.slice(0,8)}</div>
                                      <div className="text-xs text-gray-500 mt-0.5">Подписка</div>
                                    </div>
                                    <span className={`text-xs px-2 py-0.5 rounded ${
@@ -1335,7 +1297,7 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
                                    <div className="text-xs text-gray-500">ID: {r.telegram_id} {r.is_partner ? `· Партнер ${r.partner_rate}%` : ''}</div>
                                  </div>
                                  <div className="flex gap-2">
-                                   <button onClick={() => openReferralProfile(r.id)} className="px-2.5 py-1.5 bg-blue-600/10 hover:bg-blue-600/20 border border-blue-600/20 text-blue-400 rounded text-xs">Открыть</button>
+                                   <button onClick={() => openReferralProfile(r.id)} className="px-2.5 py-1.5 bg-orange-600/10 hover:bg-orange-600/20 border border-orange-600/20 text-orange-400 rounded text-xs">Открыть</button>
                                    <button onClick={() => unlinkReferral(r.id)} className="px-2.5 py-1.5 bg-red-600/10 hover:bg-red-600/20 border border-red-600/20 text-red-400 rounded text-xs">Отвязать</button>
                                  </div>
                                </div>
@@ -1383,7 +1345,7 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
 
   // Проверяем инициализацию при загрузке
   useEffect(() => {
-    panelAuthFetch('/panel/auth/init')
+    fetch('/api/panel/auth/init')
       .then(res => res.json())
       .then(data => {
         if (data.new_admin && data.password) {
@@ -1403,9 +1365,10 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
     setLoading(true);
 
     try {
-      const res = await panelAuthFetch('/panel/auth/login', {
+      const res = await fetch('/api/panel/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ username, password }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
       });
 
       const data = await res.json();
@@ -1429,9 +1392,10 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
     setError('');
     setLoading(true);
     try {
-      const res = await panelAuthFetch('/panel/auth/verify-code', {
+      const res = await fetch('/api/panel/auth/verify-code', {
         method: 'POST',
-        body: JSON.stringify({ temp_token: tempToken, code: verifyCode }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ temp_token: tempToken, code: verifyCode })
       });
       const data = await res.json();
       if (res.ok && data.session_token) {
@@ -1447,10 +1411,10 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-black flex items-center justify-center p-4">
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 w-full max-w-md shadow-2xl">
         <div className="text-center mb-8">
-          <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <div className="w-16 h-16 bg-orange-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
             <Lock size={32} className="text-white" />
           </div>
           <h1 className="text-2xl font-bold text-white">BlinVPN Panel</h1>
@@ -1475,7 +1439,7 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none transition-all"
                 placeholder="admin"
                 required
               />
@@ -1486,7 +1450,7 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none transition-all"
                 placeholder="••••••••"
                 required
               />
@@ -1501,7 +1465,7 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
             <button
               type="submit"
               disabled={loading || !username || !password}
-              className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-blue-900/30"
+              className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-orange-900/30"
             >
               {loading ? (
                 <span className="flex items-center justify-center">
@@ -1515,7 +1479,7 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
           </form>
         ) : (
           <form onSubmit={handleVerifyCodeSubmit} className="space-y-4">
-            <div className="bg-blue-500/10 border border-blue-500/30 text-blue-300 px-4 py-3 rounded-lg text-sm">
+            <div className="bg-orange-500/10 border border-orange-500/30 text-orange-300 px-4 py-3 rounded-lg text-sm">
               Код подтверждения отправлен администраторам в Telegram.
             </div>
             <div>
@@ -1524,13 +1488,13 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
                 type="text"
                 value={verifyCode}
                 onChange={(e) => setVerifyCode(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none transition-all"
                 placeholder="123456"
                 required
               />
             </div>
             {error && <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg text-sm">{error}</div>}
-            <button type="submit" disabled={loading || !verifyCode} className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-blue-900/30">
+            <button type="submit" disabled={loading || !verifyCode} className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-orange-900/30">
               {loading ? 'Проверка...' : 'Подтвердить вход'}
             </button>
           </form>
@@ -1557,10 +1521,11 @@ export default function App() {
     }
 
     // Verify the secret
-    panelAuthFetch('/panel/stats/summary', {
+    fetch('/api/panel/stats/summary', {
       headers: {
-        Authorization: `Bearer ${token}`,
-      },
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
     }).then(res => {
       if (res.ok) {
         setIsAuthenticated(true);
@@ -1585,8 +1550,8 @@ export default function App() {
   // Show loading while checking auth
   if (isAuthenticated === null) {
     return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <Loader size={40} className="animate-spin text-blue-500" />
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <Loader size={40} className="animate-spin text-orange-500" />
       </div>
     );
   }
@@ -1610,8 +1575,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   const [users, setUsers] = useState<User[]>([]);
   const [keys, setKeys] = useState<KeyItem[]>([]);
   const [promos, setPromos] = useState<Promo[]>([]);
-  const [plans, setPlans] = useState<Plan[]>([]);
-  const [totalRevenue, setTotalRevenue] = useState<number>(0);
   
   // UI States
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
@@ -1759,25 +1722,6 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
           }
         }
 
-        // Тарифы (единая подписка VPN + обход блокировок)
-        if (!cancelled) {
-          setPlans([
-            { id: 1, name: '1 месяц', price: 199, oldPrice: 250, duration: 30, isHit: false, description: 'Базовая подписка' },
-            { id: 2, name: '3 месяца', price: 499, oldPrice: 597, duration: 90, isHit: false, description: '-15% экономия' },
-            { id: 3, name: '6 месяцев', price: 899, oldPrice: 1194, duration: 180, isHit: true, description: '-25% экономия' },
-            { id: 4, name: '1 год', price: 1499, oldPrice: 2388, duration: 365, isHit: false, description: '-35% экономия' },
-          ]);
-        }
-        
-        // Загрузка общей выручки для хедера
-        try {
-          const summaryData = await apiFetch('/panel/stats/summary');
-          if (!cancelled && summaryData) {
-            setTotalRevenue(summaryData.total_revenue || summaryData.monthly_revenue || 0);
-          }
-        } catch (e) {
-          console.error('Failed to load revenue stats', e);
-        }
       } catch (e) {
         console.error('Initial panel data load failed', e);
         if (!cancelled) {
@@ -1805,7 +1749,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 font-sans selection:bg-blue-500 selection:text-white">
+    <div className="min-h-screen bg-black text-gray-100 font-sans selection:bg-orange-500 selection:text-white">
       <ToastContainer toasts={toasts} removeToast={(id) => setToasts(prev => prev.filter(t => t.id !== id))} />
       
       {selectedTransaction && (<TransactionModal transaction={selectedTransaction} onClose={() => setSelectedTransaction(null)} />)}
@@ -1825,58 +1769,28 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
         setMassActionType(null); 
       }} />}
 
-      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-gray-900 border-r border-gray-800 transform transition-transform duration-300 ease-in-out ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 overflow-y-auto custom-scrollbar`}>
-        <div className="p-6 border-b border-gray-800 hidden md:block"><h1 className="text-2xl font-bold text-blue-500 tracking-wider">BlinVPN</h1><p className="text-xs text-gray-500 mt-1">Панель управления v2.0</p></div>
+      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-black border-r border-gray-800 transform transition-transform duration-300 ease-in-out ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 overflow-y-auto custom-scrollbar`}>
+        <div className="p-6 border-b border-gray-800 hidden md:block"><h1 className="text-2xl font-bold text-orange-500 tracking-wider">BlinVPN</h1><p className="text-xs text-gray-500 mt-1">Панель управления v2.0</p></div>
         <nav className="p-4 space-y-6">
             {[
                 { category: "Главное", items: [{ name: "Главная страница", icon: Home }, { name: "Финансы", icon: DollarSign }] },
-                { category: "Пользователи", items: [{ name: "Пользователи", icon: Users }, { name: "Ключи", icon: Key }] },
-                { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Тарифы", icon: Tag }, { name: "Промокоды", icon: Gift }] },
+                { category: "Пользователи", items: [{ name: "Пользователи", icon: Users }, { name: "Подписки", icon: Key }] },
+                { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Промокоды", icon: Gift }] },
                 { category: "Другое", items: [{ name: "Настройки", icon: Settings }] }
             ].map((section, idx) => (
                 <div key={idx}>
                     <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">{section.category}</h3>
-                    <ul className="space-y-1">{section.items.map((item, itemIdx) => (<li key={itemIdx}><button onClick={() => { setActivePage(item.name); setIsMobileMenuOpen(false); }} className={`w-full flex items-center px-2 py-2 text-sm font-medium rounded-lg transition-colors ${activePage === item.name ? 'bg-blue-600/10 text-blue-400' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}><item.icon size={18} className={`mr-3 ${activePage === item.name ? 'text-blue-400' : 'text-gray-500'}`} />{item.name}</button></li>))}</ul>
+                    <ul className="space-y-1">{section.items.map((item, itemIdx) => (<li key={itemIdx}><button onClick={() => { setActivePage(item.name); setIsMobileMenuOpen(false); }} className={`w-full flex items-center px-2 py-2 text-sm font-medium rounded-lg transition-colors ${activePage === item.name ? 'bg-orange-600/10 text-orange-400' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}><item.icon size={18} className={`mr-3 ${activePage === item.name ? 'text-orange-400' : 'text-gray-500'}`} />{item.name}</button></li>))}</ul>
                 </div>
             ))}
         </nav>
       </aside>
 
       <main className="md:ml-64 min-h-screen transition-all duration-300">
-        <div className="bg-gray-900/50 backdrop-blur-md border-b border-gray-800 sticky top-0 z-30 px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3 md:gap-4"><button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="md:hidden text-gray-300 hover:text-white p-1">{isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}</button><div className="relative group cursor-pointer">
-              <div className="flex items-center space-x-2 bg-green-500/10 border border-green-500/20 px-3 py-1.5 rounded-full">
-                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                <span className="text-green-400 text-sm font-medium">Работает</span>
-              </div>
-              {/* Tooltip при наведении */}
-              <div className="absolute top-full left-0 mt-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
-                <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 shadow-xl min-w-[200px]">
-                  <div className="text-sm font-medium text-white mb-3">Статус системы</div>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-400">API</span>
-                      <div className="flex items-center"><div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div><span className="text-green-400">OK</span></div>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-400">Remnawave</span>
-                      <div className="flex items-center"><div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div><span className="text-green-400">OK</span></div>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-400">Telegram Bot</span>
-                      <div className="flex items-center"><div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div><span className="text-green-400">OK</span></div>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-gray-400">База данных</span>
-                      <div className="flex items-center"><div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div><span className="text-green-400">OK</span></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div></div>
+        <div className="bg-black/50 backdrop-blur-md border-b border-gray-800 sticky top-0 z-30 px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3 md:gap-4"><button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="md:hidden text-gray-300 hover:text-white p-1">{isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}</button></div>
           <div className="flex items-center gap-3">
-            <div className="flex items-center bg-blue-600/10 border border-blue-500/20 px-3 py-1.5 rounded-lg hover:bg-blue-600/20 transition-colors cursor-pointer"><DollarSign size={16} className="text-blue-400 mr-2" /><div className="text-lg font-bold text-blue-400 leading-none">{totalRevenue.toLocaleString('ru-RU')} ₽</div></div>
-            <button onClick={onLogout} className="flex items-center bg-red-600/10 border border-red-500/20 px-3 py-1.5 rounded-lg hover:bg-red-600/20 transition-colors text-red-400 text-sm font-medium"><Lock size={14} className="mr-1.5" />Выход</button>
+            <button onClick={onLogout} title="Выход" className="flex items-center justify-center w-9 h-9 bg-red-600/10 border border-red-500/20 rounded-lg hover:bg-red-600/20 transition-colors text-red-400"><Lock size={16} /></button>
           </div>
         </div>
 
@@ -1884,9 +1798,8 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             {activePage === 'Главная страница' && <Dashboard />}
             {activePage === 'Финансы' && <FinancePage transactions={transactions} onSelectTransaction={setSelectedTransaction} />}
             {activePage === 'Пользователи' && <UsersPage users={users} userSearch={userSearch} setUserSearch={setUserSearch} setSelectedUser={setSelectedUser} setMassActionType={setMassActionType} />}
-            {activePage === 'Ключи' && <KeysPage keys={keys} keySearch={keySearch} setKeySearch={setKeySearch} setIsCreateKeyOpen={setIsCreateKeyOpen} setEditingKey={setEditingKey} />}
+            {activePage === 'Подписки' && <KeysPage keys={keys} keySearch={keySearch} setKeySearch={setKeySearch} setIsCreateKeyOpen={setIsCreateKeyOpen} setEditingKey={setEditingKey} />}
             {activePage === 'Рассылка' && <MailingPage onToast={addToast} />}
-            {activePage === 'Тарифы' && <TariffsPage plans={plans} setPlans={setPlans} onToast={addToast} />}
             {activePage === 'Промокоды' && <PromocodesPage promos={promos} onToast={addToast} />}
             {activePage === 'Настройки' && <SettingsPage onToast={addToast} />}
         </div>
@@ -1906,8 +1819,9 @@ const Dashboard = () => {
         active_keys: number;
         monthly_revenue: number;
     } | null>(null);
+
     const [stats, setStats] = useState<any>(null);
-    const [statsLoading, setStatsLoading] = useState(true);
+    const [period, setPeriod] = useState<'week' | 'month' | 'year'>('month');
 
     useEffect(() => {
         (async () => {
@@ -1933,29 +1847,38 @@ const Dashboard = () => {
                 console.error('Failed to load dashboard summary', e);
             }
         })();
+    }, []);
 
+    useEffect(() => {
         (async () => {
-            setStatsLoading(true);
             try {
-                const data = await apiFetch('/panel/statistics/full');
+                const data = await apiFetch(`/panel/statistics/full?period=${period}`);
                 if (data) {
                     setStats(data);
                 }
             } catch (e) {
                 console.error('Failed to load statistics', e);
-            } finally {
-                setStatsLoading(false);
             }
         })();
-    }, []);
+    }, [period]);
+
+    // Кол-во точек графика для выбранного периода
+    const periodDays: Record<typeof period, number> = { week: 7, month: 30, year: 365 };
+    const periodLabel: Record<typeof period, string> = { week: 'Выручка по неделе', month: 'Выручка по дням', year: 'Выручка по году' };
+
+    // Обрезаем данные под период на клиенте — график меняется даже если бэкенд вернул полный массив
+    const sliceByPeriod = (arr: any[]) => {
+        const n = periodDays[period];
+        return Array.isArray(arr) && arr.length > n ? arr.slice(-n) : (arr || []);
+    };
 
     const fmtNumber = (v: number) =>
         v.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
 
     const fmtMoney = (v: number) =>
-        v >= 1000000
-            ? `${(v / 1000000).toFixed(1)}M ₽`
-            : `${v.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₽`;
+        `${v.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₽`;
+
+    const fmtMoneyStat = (v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M ₽` : `${v.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₽`;
 
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1982,8 +1905,7 @@ const Dashboard = () => {
             </div>
             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-sm">
                 <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-lg font-semibold text-gray-200 flex items-center"><TrendingUp className="w-5 h-5 mr-2 text-blue-500" />Динамика ключей и подписок</h3>
-                    <span className="text-xs font-medium text-green-400 bg-green-500/10 px-2 py-1 rounded">{labels.at(-1) || ''}</span>
+                    <h3 className="text-lg font-semibold text-gray-200 flex items-center"><TrendingUp className="w-5 h-5 mr-2 text-orange-500" />Динамика</h3>
                 </div>
                 <CombinedLinesChart
                   labels={labels}
@@ -1992,39 +1914,53 @@ const Dashboard = () => {
                 />
             </div>
 
-            {statsLoading ? (
-                <div className="flex items-center justify-center h-48"><Loader className="animate-spin text-blue-500" size={32} /></div>
-            ) : stats ? (
+            {/* --- Перенесено из Статистики --- */}
+            <div><h2 className="text-2xl font-bold text-white">Статистика</h2><p className="text-gray-400 mt-1">Детальная аналитика проекта</p></div>
+
+            {!stats ? (
+                <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-orange-500" size={32} /></div>
+            ) : (
                 <>
+                    {/* Core Metrics */}
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                         <StatCard title="Всего пользователей" value={fmtNumber(stats.totalUsers)} icon={Users} color="blue" />
                         <StatCard title="Активных подписок" value={fmtNumber(stats.activeSubscriptions)} icon={CheckCircle} color="green" />
                         <StatCard title="Платежей сегодня" value={fmtNumber(stats.paymentsToday)} icon={CreditCard} color="indigo" />
-                        <StatCard title="Баланс клиентов" value={fmtMoney(stats.clientsBalance)} icon={Wallet} color="gray" />
+                        <StatCard title="Баланс клиентов" value={fmtMoneyStat(stats.clientsBalance)} icon={Wallet} color="gray" />
                     </div>
 
+                    {/* Revenue & Quick Metrics */}
                     <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
                         <div className="lg:col-span-3 bg-gray-900 border border-gray-800 rounded-2xl p-6">
                             <div className="flex justify-between items-center mb-6">
-                                <h3 className="text-lg font-bold text-gray-200">Выручка по дням</h3>
-                                <select className="bg-gray-800 border-gray-700 text-gray-300 text-sm rounded-lg p-2 focus:ring-blue-500 focus:border-blue-500"><option>За 30 дней</option><option>За неделю</option><option>За год</option></select>
+                                <h3 className="text-lg font-bold text-gray-200">{periodLabel[period]}</h3>
+                                <select
+                                    value={period}
+                                    onChange={(e) => setPeriod(e.target.value as 'week' | 'month' | 'year')}
+                                    className="bg-gray-800 border-gray-700 text-gray-300 text-sm rounded-lg p-2 focus:ring-orange-500 focus:border-orange-500"
+                                >
+                                    <option value="month">За 30 дней</option>
+                                    <option value="week">За неделю</option>
+                                    <option value="year">За год</option>
+                                </select>
                             </div>
-                            <SmoothAreaChart color="#10b981" label="Выручка (₽)" data={stats.revenueData || []} height={250} id="revChart" labels={stats.revenueLabels || []} />
+                            <SmoothAreaChart color="#10b981" label="Выручка (₽)" data={sliceByPeriod(stats.revenueData)} height={250} id="revChart" labels={sliceByPeriod(stats.revenueLabels)} />
                         </div>
                         <div className="space-y-4">
                             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 flex flex-col justify-center h-[calc(50%-8px)]">
                                 <p className="text-gray-400 text-sm">В среднем в день</p>
-                                <div className="text-2xl font-bold text-white mt-1">{fmtMoney(stats.avgDaily || 0)}</div>
+                                <div className="text-2xl font-bold text-white mt-1">{fmtMoneyStat(stats.avgDaily || 0)}</div>
                                 <div className="text-green-400 text-xs mt-2 flex items-center"><ArrowUpRight size={12} className="mr-1" /> Растет</div>
                             </div>
                             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 flex flex-col justify-center h-[calc(50%-8px)]">
                                 <p className="text-gray-400 text-sm">Лучший день</p>
-                                <div className="text-2xl font-bold text-white mt-1">{fmtMoney(stats.bestDayValue || 0)}</div>
+                                <div className="text-2xl font-bold text-white mt-1">{fmtMoneyStat(stats.bestDayValue || 0)}</div>
                                 <div className="text-gray-500 text-xs mt-2">{stats.bestDayDate || ''}</div>
                             </div>
                         </div>
                     </div>
 
+                    {/* Distributions */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
                             <h3 className="text-lg font-bold text-gray-200 mb-6">Распределение пользователей</h3>
@@ -2036,13 +1972,14 @@ const Dashboard = () => {
                         </div>
                     </div>
 
+                    {/* Subscriptions & Conversion */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
                              <h3 className="text-lg font-bold text-gray-200 mb-4">Подписки</h3>
                              <div className="space-y-4">
                                  <div className="flex justify-between"><span className="text-gray-400">Всего подписок</span><span className="text-white font-bold">{fmtNumber(stats.totalSubscriptions)}</span></div>
                                  <div className="flex justify-between"><span className="text-gray-400">Платные</span><span className="text-green-400 font-bold">{fmtNumber(stats.paidSubscriptions)}</span></div>
-                                 <div className="flex justify-between"><span className="text-gray-400">Куплено за неделю</span><span className="text-blue-400 font-bold">+{fmtNumber(stats.boughtThisWeek)}</span></div>
+                                 <div className="flex justify-between"><span className="text-gray-400">Куплено за неделю</span><span className="text-orange-400 font-bold">+{fmtNumber(stats.boughtThisWeek)}</span></div>
                              </div>
                          </div>
                          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
@@ -2058,11 +1995,12 @@ const Dashboard = () => {
                              <div className="space-y-4">
                                  <div className="flex justify-between"><span className="text-gray-400">Всего приглашено</span><span className="text-white font-bold">{fmtNumber(stats.totalInvited)}</span></div>
                                  <div className="flex justify-between"><span className="text-gray-400">Партнеров</span><span className="text-white font-bold">{fmtNumber(stats.partners)}</span></div>
-                                 <div className="flex justify-between"><span className="text-gray-400">Выплачено</span><span className="text-white font-bold">{fmtMoney(stats.totalPaid)}</span></div>
+                                 <div className="flex justify-between"><span className="text-gray-400">Выплачено</span><span className="text-white font-bold">{fmtMoneyStat(stats.totalPaid)}</span></div>
                              </div>
                          </div>
                     </div>
 
+                    {/* Top Referrers */}
                     <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
                         <div className="p-5 border-b border-gray-800"><h3 className="text-lg font-bold text-gray-200">Топ рефералов</h3></div>
                         <table className="w-full text-left">
@@ -2079,7 +2017,7 @@ const Dashboard = () => {
                         </table>
                     </div>
                 </>
-            ) : null}
+            )}
         </div>
     );
 };
@@ -2118,21 +2056,13 @@ const FinancePage: React.FC<FinancePageProps> = ({ transactions, onSelectTransac
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4"><div><h2 className="text-2xl font-bold text-white">Финансы</h2><p className="text-gray-400 mt-1">Управление доходами</p></div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <StatCard 
                     title="Пополнения" 
                     value={stats ? fmtMoney(stats.deposits) : '—'} 
                     change={stats?.depositsChange} 
                     icon={ArrowUpRight} 
                     color="green" 
-                />
-                <StatCard 
-                    title="Списания" 
-                    value={stats ? fmtMoney(stats.withdrawals) : '—'} 
-                    subValue="(Расходы)" 
-                    change={stats?.withdrawalsChange} 
-                    icon={ArrowDownLeft} 
-                    color="red" 
                 />
                 <StatCard 
                     title="Успешные операции" 
@@ -2188,13 +2118,13 @@ const UsersPage: React.FC<UsersPageProps> = ({ users, userSearch, setUserSearch,
                 
                 {/* REPLACED BUTTONS WITH MASS ACTION DROPDOWN */}
                 <div className="relative" ref={menuRef}>
-                    <button onClick={() => setShowMassMenu(!showMassMenu)} className="flex items-center px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-900/20 transition-all">
+                    <button onClick={() => setShowMassMenu(!showMassMenu)} className="flex items-center px-4 py-2.5 bg-orange-600 hover:bg-orange-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-orange-900/20 transition-all">
                         <Layers size={18} className="mr-2" /> Массовые действия <ChevronDown size={16} className={`ml-2 transition-transform ${showMassMenu ? 'rotate-180' : ''}`} />
                     </button>
                     {showMassMenu && (
                         <div className="absolute right-0 mt-2 w-56 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-20 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
                             <button onClick={() => { setMassActionType('MASS_ADD_DAYS'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
-                                <Calendar size={16} className="mr-2 text-blue-400" /> Добавить дни всем
+                                <Calendar size={16} className="mr-2 text-orange-400" /> Добавить дни всем
                             </button>
                             <button onClick={() => { setMassActionType('MASS_ADD_BALANCE'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
                                 <DollarSign size={16} className="mr-2 text-green-400" /> Начислить баланс всем
@@ -2223,16 +2153,16 @@ const UsersPage: React.FC<UsersPageProps> = ({ users, userSearch, setUserSearch,
             </div>
 
             <div className="flex space-x-4">
-                <div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Поиск по имени, username или ID..." /></div>
+                <div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500" placeholder="Поиск по имени, username или ID..." /></div>
                 <div className="relative">
-                    <button onClick={() => setShowFilterMenu(!showFilterMenu)} className={`px-4 py-3 bg-gray-900 border rounded-xl text-gray-300 hover:bg-gray-800 transition-colors flex items-center ${statusFilter !== 'all' ? 'border-blue-500 text-blue-400' : 'border-gray-700'}`}>
+                    <button onClick={() => setShowFilterMenu(!showFilterMenu)} className={`px-4 py-3 bg-gray-900 border rounded-xl text-gray-300 hover:bg-gray-800 transition-colors flex items-center ${statusFilter !== 'all' ? 'border-orange-500 text-orange-400' : 'border-gray-700'}`}>
                         <Filter size={18} className="mr-2" /> 
                         {statusFilter === 'all' ? 'Фильтр' : statusFilter === 'Trial' ? 'Триал' : statusFilter === 'Active' ? 'Активные' : 'Забаненные'}
                     </button>
                     {showFilterMenu && (
                         <div className="absolute top-full right-0 mt-2 bg-gray-900 border border-gray-700 rounded-xl shadow-xl z-20 overflow-hidden min-w-[150px]">
                             {[{v: 'all', l: 'Все'}, {v: 'Trial', l: 'Триал'}, {v: 'Active', l: 'Активные'}, {v: 'Banned', l: 'Забаненные'}].map(opt => (
-                                <button key={opt.v} onClick={() => { setStatusFilter(opt.v as any); setShowFilterMenu(false); }} className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-800 transition-colors ${statusFilter === opt.v ? 'text-blue-400 bg-blue-600/10' : 'text-gray-300'}`}>{opt.l}</button>
+                                <button key={opt.v} onClick={() => { setStatusFilter(opt.v as any); setShowFilterMenu(false); }} className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-800 transition-colors ${statusFilter === opt.v ? 'text-orange-400 bg-orange-600/10' : 'text-gray-300'}`}>{opt.l}</button>
                             ))}
                         </div>
                     )}
@@ -2280,19 +2210,19 @@ const KeysPage: React.FC<KeysPageProps> = ({ keys, keySearch, setKeySearch, setI
     
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4"><div><h2 className="text-2xl font-bold text-white">Ключи</h2><p className="text-gray-400 mt-1">Управление подписками VLESS/Vmess</p></div><button onClick={() => setIsCreateKeyOpen(true)} className="flex items-center px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-900/20 transition-all"><Plus size={18} className="mr-2" />Создать</button></div>
+             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4"><div><h2 className="text-2xl font-bold text-white">Подписки</h2><p className="text-gray-400 mt-1">Управление подписками VLESS/Vmess</p></div><button onClick={() => setIsCreateKeyOpen(true)} className="flex items-center px-5 py-2.5 bg-orange-600 hover:bg-orange-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-orange-900/20 transition-all"><Plus size={18} className="mr-2" />Создать</button></div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6"><StatCard title="Всего ключей" value={keys.length} icon={Key} color="blue" /><StatCard title="Истёкшие" value={keys.filter(k => k.status === 'Expired').length} icon={Clock} color="orange" /><StatCard title="Заблокированные" value={keys.filter(k => k.status === 'Banned').length} icon={Ban} color="red" /></div>
             <div className="flex space-x-4">
-                <div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={keySearch} onChange={e => setKeySearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Поиск по ключу, пользователю..." /></div>
+                <div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={keySearch} onChange={e => setKeySearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500" placeholder="Поиск по ключу, пользователю..." /></div>
                 <div className="relative">
-                    <button onClick={() => setShowFilterMenu(!showFilterMenu)} className={`px-4 py-3 bg-gray-900 border rounded-xl text-gray-300 hover:bg-gray-800 transition-colors flex items-center ${statusFilter !== 'all' ? 'border-blue-500 text-blue-400' : 'border-gray-700'}`}>
+                    <button onClick={() => setShowFilterMenu(!showFilterMenu)} className={`px-4 py-3 bg-gray-900 border rounded-xl text-gray-300 hover:bg-gray-800 transition-colors flex items-center ${statusFilter !== 'all' ? 'border-orange-500 text-orange-400' : 'border-gray-700'}`}>
                         <Filter size={18} className="mr-2" /> 
                         {statusFilter === 'all' ? 'Фильтр' : statusFilter === 'Active' ? 'Активные' : statusFilter === 'Expired' ? 'Истёкшие' : 'Забаненные'}
                     </button>
                     {showFilterMenu && (
                         <div className="absolute top-full right-0 mt-2 bg-gray-900 border border-gray-700 rounded-xl shadow-xl z-20 overflow-hidden min-w-[150px]">
                             {[{v: 'all', l: 'Все'}, {v: 'Active', l: 'Активные'}, {v: 'Expired', l: 'Истёкшие'}, {v: 'Banned', l: 'Забаненные'}].map(opt => (
-                                <button key={opt.v} onClick={() => { setStatusFilter(opt.v as any); setShowFilterMenu(false); }} className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-800 transition-colors ${statusFilter === opt.v ? 'text-blue-400 bg-blue-600/10' : 'text-gray-300'}`}>{opt.l}</button>
+                                <button key={opt.v} onClick={() => { setStatusFilter(opt.v as any); setShowFilterMenu(false); }} className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-800 transition-colors ${statusFilter === opt.v ? 'text-orange-400 bg-orange-600/10' : 'text-gray-300'}`}>{opt.l}</button>
                             ))}
                         </div>
                     )}
@@ -2306,10 +2236,10 @@ const KeysPage: React.FC<KeysPageProps> = ({ keys, keySearch, setKeySearch, setI
                             {filteredKeys.map((k) => (
                                 <tr key={k.id} onClick={() => setEditingKey(k)} className="hover:bg-gray-800/30 transition-colors group cursor-pointer relative">
                                     <td className="px-6 py-4"><div className="text-sm font-mono text-white">#{k.id}</div><div className="text-xs text-gray-500 truncate w-32 font-mono mt-0.5 opacity-70">{k.key}</div></td>
-                                    <td className="px-6 py-4 text-sm text-blue-400 font-medium">{k.user}</td><td className="px-6 py-4"><span className={`px-2 py-1 rounded text-xs font-medium border ${k.status === 'Active' ? 'bg-green-500/10 text-green-400 border-green-500/20' : k.status === 'Expired' ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>{k.status}</span></td>
+                                    <td className="px-6 py-4 text-sm text-orange-400 font-medium">{k.user}</td><td className="px-6 py-4"><span className={`px-2 py-1 rounded text-xs font-medium border ${k.status === 'Active' ? 'bg-green-500/10 text-green-400 border-green-500/20' : k.status === 'Expired' ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>{k.status}</span></td>
                                     <td className="px-6 py-4 text-sm text-gray-300">{k.expiry > 0 ? `${k.expiry} дн.` : 'Истёк'}</td>
-                                    <td className="px-6 py-4"><div className="text-xs text-gray-400 mb-1">{(k.trafficUsed / (1024**3)).toFixed(1)} / {k.trafficLimit > 0 ? (k.trafficLimit / (1024**3)).toFixed(0) : '∞'} GB</div><div className="w-24 bg-gray-800 rounded-full h-1.5"><div className={`h-1.5 rounded-full ${k.trafficLimit > 0 && k.trafficUsed/k.trafficLimit > 0.9 ? 'bg-red-500' : k.trafficLimit > 0 && k.trafficUsed/k.trafficLimit > 0.7 ? 'bg-yellow-500' : 'bg-blue-500'}`} style={{ width: `${k.trafficLimit > 0 ? Math.min(100, (k.trafficUsed/k.trafficLimit)*100) : 0}%` }}></div></div></td><td className="px-6 py-4 text-sm text-gray-400 text-center">{k.devicesUsed}/{k.devicesLimit}</td>
-                                    <td className="px-6 py-4 text-right"><div className="p-2 bg-gray-800 rounded-lg text-gray-500 group-hover:bg-blue-600 group-hover:text-white transition-colors inline-block"><Edit2 size={16} /></div></td>
+                                    <td className="px-6 py-4"><div className="text-xs text-gray-400 mb-1">{(k.trafficUsed / (1024**3)).toFixed(1)} / {k.trafficLimit > 0 ? (k.trafficLimit / (1024**3)).toFixed(0) : '∞'} GB</div><div className="w-24 bg-gray-800 rounded-full h-1.5"><div className={`h-1.5 rounded-full ${k.trafficLimit > 0 && k.trafficUsed/k.trafficLimit > 0.9 ? 'bg-red-500' : k.trafficLimit > 0 && k.trafficUsed/k.trafficLimit > 0.7 ? 'bg-yellow-500' : 'bg-orange-500'}`} style={{ width: `${k.trafficLimit > 0 ? Math.min(100, (k.trafficUsed/k.trafficLimit)*100) : 0}%` }}></div></div></td><td className="px-6 py-4 text-sm text-gray-400 text-center">{k.devicesUsed}/{k.devicesLimit}</td>
+                                    <td className="px-6 py-4 text-right"><div className="p-2 bg-gray-800 rounded-lg text-gray-500 group-hover:bg-orange-600 group-hover:text-white transition-colors inline-block"><Edit2 size={16} /></div></td>
                                 </tr>
                             ))}
                         </tbody>
@@ -2420,14 +2350,14 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2 space-y-6">
                     <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                        <h3 className="text-lg font-bold text-gray-200 mb-4 flex items-center"><Plus size={20} className="mr-2 text-blue-500"/> Новая рассылка</h3>
+                        <h3 className="text-lg font-bold text-gray-200 mb-4 flex items-center"><Plus size={20} className="mr-2 text-orange-500"/> Новая рассылка</h3>
                         <div className="space-y-4">
                             <div>
                                 <label className="text-sm text-gray-400 mb-1.5 block">Текст сообщения</label>
                                 <textarea 
                                     value={message}
                                     onChange={(e) => setMessage(e.target.value)}
-                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl p-4 text-white focus:outline-none focus:border-blue-500 h-32 resize-none" 
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl p-4 text-white focus:outline-none focus:border-orange-500 h-32 resize-none" 
                                     placeholder="Введите текст рассылки... Поддерживается Markdown"
                                 />
                             </div>
@@ -2437,7 +2367,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                     <select 
                                         value={buttonType}
                                         onChange={(e) => setButtonType(e.target.value)}
-                                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-blue-500"
+                                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-orange-500"
                                     >
                                         {buttonTypes.map(bt => (
                                             <option key={bt.value} value={bt.value}>{bt.label}</option>
@@ -2450,7 +2380,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                         type="text" 
                                         value={buttonValue}
                                         onChange={(e) => setButtonValue(e.target.value)}
-                                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-blue-500" 
+                                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-orange-500" 
                                         placeholder={buttonType === 'external_link' ? 'https://example.com' : buttonType === 'activate_promo' ? 'PROMOCODE' : buttonType === 'add_balance' ? '100' : 'Введите значение...'}
                                         disabled={!buttonType}
                                     />
@@ -2462,7 +2392,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                     type="text"
                                     value={imageUrl}
                                     onChange={(e) => setImageUrl(e.target.value)}
-                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-blue-500"
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-orange-500"
                                     placeholder="https://.../image.jpg"
                                 />
                                 <div className="text-xs text-gray-500 mt-1">
@@ -2478,7 +2408,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                             onClick={() => setTargetUsers(filter)}
                                             className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
                                                 targetUsers === filter 
-                                                    ? 'bg-blue-600 text-white border-blue-500' 
+                                                    ? 'bg-orange-600 text-white border-orange-500' 
                                                     : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700'
                                             }`}
                                         >
@@ -2492,7 +2422,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                             <div className="pt-2 flex gap-4">
                                 <button 
                                     onClick={handleSend} 
-                                    className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg shadow-blue-900/20 transition-colors flex justify-center items-center"
+                                    className="flex-1 py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-bold shadow-lg shadow-orange-900/20 transition-colors flex justify-center items-center"
                                 >
                                     <Send size={18} className="mr-2" /> Отправить
                                 </button>
@@ -2525,7 +2455,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                         </span>
                                     </div>
                                     <div className="flex gap-2 mt-3">
-                                        <button onClick={() => setSelectedHistoryItem(item)} className="text-xs px-2 py-1 rounded bg-blue-600/20 text-blue-300 hover:bg-blue-600/30">Открыть</button>
+                                        <button onClick={() => setSelectedHistoryItem(item)} className="text-xs px-2 py-1 rounded bg-orange-600/20 text-orange-300 hover:bg-orange-600/30">Открыть</button>
                                         <button onClick={async () => {
                                             if (!confirm('Удалить рассылку и попытаться удалить сообщения у пользователей?')) return;
                                             try {
@@ -2557,23 +2487,6 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                     </div>
                 </div>
             )}
-        </div>
-    );
-};
-
-interface TariffsPageProps {
-  plans: Plan[];
-  setPlans: React.Dispatch<React.SetStateAction<Plan[]>>;
-  onToast: (title: string, msg: string, type: ToastType) => void;
-}
-
-const TariffsPage: React.FC<TariffsPageProps> = ({ onToast }) => {
-    return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div><h2 className="text-2xl font-bold text-white">Тарифы</h2><p className="text-gray-400 mt-1">Управление тарифными планами</p></div>
-            </div>
-            <TariffsPlansPage onToast={onToast} />
         </div>
     );
 };
@@ -2690,7 +2603,7 @@ const PromocodesPage: React.FC<{ promos: Promo[]; onToast: (title: string, msg: 
                     <input type="number" value={newPromo.limit} onChange={e => setNewPromo({ ...newPromo, limit: e.target.value })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Лимит" />
                     <input type="text" value={newPromo.expires} onChange={e => setNewPromo({ ...newPromo, expires: e.target.value })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="2026-12-31" />
                 </div>
-                <button onClick={handleCreatePromo} className="mt-4 px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg">Создать</button>
+                <button onClick={handleCreatePromo} className="mt-4 px-6 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg">Создать</button>
             </div>
 
             <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
@@ -2755,7 +2668,7 @@ const PromocodesPage: React.FC<{ promos: Promo[]; onToast: (title: string, msg: 
                         </div>
                         <div className="flex gap-3 mt-5">
                             <button onClick={() => setEditingPromo(null)} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Отмена</button>
-                            <button onClick={handleSavePromo} className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg">Сохранить</button>
+                            <button onClick={handleSavePromo} className="flex-1 px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg">Сохранить</button>
                         </div>
                     </div>
                 </div>
@@ -2767,162 +2680,6 @@ const PromocodesPage: React.FC<{ promos: Promo[]; onToast: (title: string, msg: 
 interface PublicPagesProps {
     onToast: (title: string, msg: string, type: ToastType) => void;
 }
-
-// Компонент для страницы тарифных планов (единая подписка)
-const TariffsPlansPage: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
-    const [plans, setPlans] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [editingPlan, setEditingPlan] = useState<any | null>(null);
-
-    useEffect(() => {
-        loadData();
-    }, []);
-
-    const loadData = async () => {
-        setLoading(true);
-        try {
-            const plansRes = await apiFetch('/panel/tariffs');
-            if (Array.isArray(plansRes)) setPlans(plansRes);
-        } catch (e) {
-            console.error('Failed to load tariffs', e);
-        }
-        setLoading(false);
-    };
-
-    const handleSavePlan = async (plan: any) => {
-        try {
-            if (plan.id) {
-                await apiFetch(`/panel/tariffs/${plan.id}`, {
-                    method: 'PUT',
-                    body: JSON.stringify(plan)
-                });
-            } else {
-                await apiFetch('/panel/tariffs', {
-                    method: 'POST',
-                    body: JSON.stringify(plan)
-                });
-            }
-            onToast('Успех', 'Тариф сохранен', 'success');
-            loadData();
-            setEditingPlan(null);
-        } catch (e) {
-            onToast('Ошибка', 'Не удалось сохранить тариф', 'error');
-        }
-    };
-
-    const handleDeletePlan = async (id: number) => {
-        if (!confirm('Удалить тариф?')) return;
-        try {
-            await apiFetch(`/panel/tariffs/${id}`, { method: 'DELETE' });
-            onToast('Успех', 'Тариф удален', 'success');
-            loadData();
-        } catch (e) {
-            onToast('Ошибка', 'Не удалось удалить тариф', 'error');
-        }
-    };
-
-    if (loading) {
-        return <div className="flex justify-center py-10"><Loader className="animate-spin text-blue-500" size={32} /></div>;
-    }
-
-    return (
-        <div className="space-y-6">
-            {/* Единые тарифы подписки */}
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <div className="flex justify-between items-center mb-6">
-                    <div>
-                        <h3 className="text-lg font-bold text-white flex items-center">
-                            <Zap size={20} className="mr-2 text-blue-500" /> Тарифы подписки
-                        </h3>
-                        <p className="text-sm text-gray-400 mt-1">VPN подписка. Чем больше срок — тем выгоднее: 3 мес -15%, 6 мес -25%, год -35%</p>
-                    </div>
-                    <button 
-                        onClick={() => setEditingPlan({ plan_type: 'vpn', name: '', price: 0, duration_days: 30 })}
-                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium flex items-center"
-                    >
-                        <Plus size={16} className="mr-1" /> Добавить
-                    </button>
-                </div>
-                <div className="grid gap-4">
-                    {plans.map(plan => {
-                        const d = plan.duration_days;
-                        const discountLabel = d === 90 ? '-15% выгода' : d === 180 ? '-25% выгода' : d === 365 ? '-35% выгода' : null;
-                        return (
-                        <div key={plan.id} className="bg-gray-800 border border-gray-700 rounded-xl p-4 flex justify-between items-center">
-                            <div>
-                                <div className="font-bold text-white">{plan.name}</div>
-                                <div className="text-sm text-gray-400">{plan.duration_days} дней {discountLabel && <span className="text-green-400 font-medium"> · {discountLabel}</span>}</div>
-                            </div>
-                            <div className="flex items-center gap-4">
-                                <div className="text-xl font-bold text-blue-400">{plan.price} ₽</div>
-                                <div className="flex gap-2">
-                                    <button onClick={() => setEditingPlan(plan)} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg"><Edit2 size={16} className="text-gray-300" /></button>
-                                    <button onClick={() => handleDeletePlan(plan.id)} className="p-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg"><Trash2 size={16} className="text-red-400" /></button>
-                                </div>
-                            </div>
-                        </div>
-                    );})}
-                    {plans.length === 0 && (
-                        <div className="text-center text-gray-500 py-8">Нет тарифов</div>
-                    )}
-                </div>
-            </div>
-
-            {/* Модальное окно редактирования */}
-            {editingPlan && (
-                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-                    <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md">
-                        <h3 className="text-xl font-bold text-white mb-6">{editingPlan.id ? 'Редактировать' : 'Новый'} тариф</h3>
-                        <div className="space-y-4">
-                            <div>
-                                <label className="text-sm text-gray-400 block mb-2">Название</label>
-                                <input
-                                    type="text"
-                                    value={editingPlan.name}
-                                    onChange={e => setEditingPlan({ ...editingPlan, name: e.target.value })}
-                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
-                                    placeholder="1 месяц"
-                                />
-                            </div>
-                            <div>
-                                <label className="text-sm text-gray-400 block mb-2">Цена (₽)</label>
-                                <input
-                                    type="number"
-                                    value={editingPlan.price}
-                                    onChange={e => setEditingPlan({ ...editingPlan, price: Number(e.target.value) })}
-                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
-                                />
-                            </div>
-                            <div>
-                                <label className="text-sm text-gray-400 block mb-2">Длительность (дней)</label>
-                                <input
-                                    type="number"
-                                    value={editingPlan.duration_days}
-                                    onChange={e => setEditingPlan({ ...editingPlan, duration_days: Number(e.target.value) })}
-                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
-                                />
-                            </div>
-                        </div>
-                        <div className="flex gap-3 mt-6">
-                            <button 
-                                onClick={() => setEditingPlan(null)}
-                                className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg"
-                            >
-                                Отмена
-                            </button>
-                            <button 
-                                onClick={() => handleSavePlan(editingPlan)}
-                                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg"
-                            >
-                                Сохранить
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-};
 
 const PromocodesStats: React.FC<{ promos: Promo[] }> = ({ promos }) => {
     const [stats, setStats] = useState<{ total: number; totalUses: number; activeCount: number } | null>(null);
@@ -3021,7 +2778,7 @@ const AutoDiscountsPage: React.FC<{ onToast: (title: string, msg: string, type: 
                     <h3 className="text-lg font-bold text-white">Автоматические правила</h3>
                     <button 
                         onClick={() => setShowCreateModal(true)}
-                        className="text-blue-400 text-sm hover:underline font-medium"
+                        className="text-orange-400 text-sm hover:underline font-medium"
                     >
                         + Добавить правило
                     </button>
@@ -3151,7 +2908,7 @@ const AutoDiscountsPage: React.FC<{ onToast: (title: string, msg: string, type: 
                             </div>
                         </div>
                         <div className="p-5 border-t border-gray-800">
-                            <button onClick={handleCreate} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold">
+                            <button onClick={handleCreate} className="w-full py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-bold">
                                 Создать правило
                             </button>
                         </div>
@@ -3214,7 +2971,7 @@ const PublicPages: React.FC<PublicPagesProps> = ({ onToast }) => {
     if (loading) {
         return (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-blue-500" size={32} /></div>
+                <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-orange-500" size={32} /></div>
             </div>
         );
     }
@@ -3231,7 +2988,7 @@ const PublicPages: React.FC<PublicPagesProps> = ({ onToast }) => {
             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 flex flex-col h-[calc(100vh-240px)]">
                 <div className="flex justify-between items-center mb-4">
                     <h3 className="text-lg font-bold text-gray-200 flex items-center">
-                        {activeTab === 'offer' ? <FileTextIcon size={20} className="mr-2 text-blue-500"/> : <Shield size={20} className="mr-2 text-green-500"/>}
+                        {activeTab === 'offer' ? <FileTextIcon size={20} className="mr-2 text-orange-500"/> : <Shield size={20} className="mr-2 text-green-500"/>}
                         {activeTab === 'offer' ? 'Редактор оферты' : 'Редактор политики'}
                     </h3>
                     <div className="text-xs text-gray-500 flex items-center">
@@ -3242,11 +2999,11 @@ const PublicPages: React.FC<PublicPagesProps> = ({ onToast }) => {
                 <textarea 
                     value={content}
                     onChange={e => setContent(e.target.value)}
-                    className="flex-1 w-full bg-gray-950 border border-gray-700 rounded-xl p-6 text-gray-300 font-mono text-sm leading-relaxed focus:outline-none focus:border-blue-500 resize-none mb-4" 
+                    className="flex-1 w-full bg-gray-950 border border-gray-700 rounded-xl p-6 text-gray-300 font-mono text-sm leading-relaxed focus:outline-none focus:border-orange-500 resize-none mb-4" 
                     placeholder={activeTab === 'offer' ? "# Договор оферты\n\n1. Общие положения..." : "# Политика конфиденциальности\n\n1. Сбор данных..."} 
                 />
                 <div className="flex justify-end">
-                    <button onClick={handleSave} className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-900/20 transition-all flex items-center">
+                    <button onClick={handleSave} className="px-6 py-2.5 bg-orange-600 hover:bg-orange-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-orange-900/20 transition-all flex items-center">
                         <FileCheck size={18} className="mr-2" /> Сохранить изменения
                     </button>
                 </div>
@@ -3339,7 +3096,7 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
             <p className="text-sm text-gray-400 mb-4">{description}</p>
             {loading ? (
                 <div className="flex items-center justify-center py-4">
-                    <Loader className="animate-spin text-blue-500" size={20} />
+                    <Loader className="animate-spin text-orange-500" size={20} />
                     <span className="ml-2 text-gray-400">Загрузка...</span>
                 </div>
             ) : squads.length === 0 ? (
@@ -3353,12 +3110,12 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
                             key={sq.uuid} 
                             className={`flex items-center space-x-3 px-3 py-2 rounded-xl border cursor-pointer transition-all ${
                                 selectedSquads.includes(sq.uuid) 
-                                    ? 'bg-blue-600/20 border-blue-500 shadow-lg shadow-blue-900/20' 
+                                    ? 'bg-orange-600/20 border-orange-500 shadow-lg shadow-orange-900/20' 
                                     : 'bg-gray-950 border-gray-700 hover:border-gray-600'
                             }`}
                             style={selectedSquads.includes(sq.uuid) ? {
-                                backgroundColor: 'rgba(37, 99, 235, 0.2)',
-                                borderColor: '#3b82f6'
+                                backgroundColor: 'rgba(249, 115, 22, 0.2)',
+                                borderColor: '#f97316'
                             } : {}}
                             onClick={() => toggleSquad(sq.uuid)}
                         >
@@ -3386,7 +3143,7 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
                 <div className="space-y-6">
                     <div className="flex justify-between items-center p-4 bg-gray-950 rounded-xl border border-gray-800">
                         <span className="text-gray-300 font-medium">Включить пробный период</span>
-                        <button onClick={() => setTrialEnabled(!trialEnabled)} className={`w-12 h-6 rounded-full p-1 transition-colors relative ${trialEnabled ? 'bg-blue-600' : 'bg-gray-700'}`}>
+                        <button onClick={() => setTrialEnabled(!trialEnabled)} className={`w-12 h-6 rounded-full p-1 transition-colors relative ${trialEnabled ? 'bg-orange-600' : 'bg-gray-700'}`}>
                             <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${trialEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
                         </button>
                     </div>
@@ -3396,7 +3153,7 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
                             type="number" 
                             value={trialHours}
                             onChange={e => setTrialHours(e.target.value)}
-                            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500 transition-colors" 
+                            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-orange-500 transition-colors" 
                             placeholder="24" 
                         />
                     </div>
@@ -3408,7 +3165,7 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
                 <button 
                     onClick={saveSquads}
                     disabled={saving}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center"
+                    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center"
                 >
                     {saving && <Loader className="animate-spin mr-2" size={14} />}
                     Сохранить
@@ -3416,11 +3173,11 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
             </div>
 
             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <div className="flex items-start gap-3 p-4 bg-blue-900/20 border border-blue-500/30 rounded-xl mb-4">
-                    <Zap className="text-blue-400 shrink-0 mt-0.5" size={20} />
+                <div className="flex items-start gap-3 p-4 bg-orange-900/20 border border-orange-500/30 rounded-xl mb-4">
+                    <Zap className="text-orange-400 shrink-0 mt-0.5" size={20} />
                     <div>
-                        <div className="text-blue-400 font-bold mb-1">Автоматический балансировщик</div>
-                        <div className="text-blue-300 text-sm">
+                        <div className="text-orange-400 font-bold mb-1">Автоматический балансировщик</div>
+                        <div className="text-orange-300 text-sm">
                             При создании ключа система автоматически выберет сквад с наименьшим количеством пользователей из выбранных ниже. 
                             Если сквады не выбраны — будет использован сквад с минимальной нагрузкой из всех доступных.
                         </div>
@@ -3510,7 +3267,7 @@ const BackupSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: 
                         <span className="text-gray-300 font-medium">Автоматическое резервное копирование</span>
                         <p className="text-xs text-gray-500 mt-1">Бекапы будут создаваться автоматически и отправляться администратору</p>
                     </div>
-                    <button onClick={() => setBackupEnabled(!backupEnabled)} className={`w-12 h-6 rounded-full p-1 transition-colors relative ${backupEnabled ? 'bg-blue-600' : 'bg-gray-700'}`}>
+                    <button onClick={() => setBackupEnabled(!backupEnabled)} className={`w-12 h-6 rounded-full p-1 transition-colors relative ${backupEnabled ? 'bg-orange-600' : 'bg-gray-700'}`}>
                         <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${backupEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
                     </button>
                 </div>
@@ -3521,7 +3278,7 @@ const BackupSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: 
                         type="number" 
                         value={backupInterval}
                         onChange={e => setBackupInterval(e.target.value)}
-                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500 transition-colors" 
+                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-orange-500 transition-colors" 
                         placeholder="12" 
                     />
                 </div>
@@ -3533,11 +3290,11 @@ const BackupSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: 
                     </div>
                 )}
 
-                <div className="p-4 bg-blue-900/20 border border-blue-500/30 rounded-xl flex items-start">
-                    <Cloud className="text-blue-400 mr-3 mt-0.5" size={20} />
+                <div className="p-4 bg-orange-900/20 border border-orange-500/30 rounded-xl flex items-start">
+                    <Cloud className="text-orange-400 mr-3 mt-0.5" size={20} />
                     <div>
-                        <h4 className="text-blue-400 font-bold text-sm">Важно</h4>
-                        <p className="text-blue-300/80 text-xs mt-1">Бэкапы будут отправляться в личные сообщения администратору в виде архива базы данных.</p>
+                        <h4 className="text-orange-400 font-bold text-sm">Важно</h4>
+                        <p className="text-orange-300/80 text-xs mt-1">Бэкапы будут отправляться в личные сообщения администратору в виде архива базы данных.</p>
                     </div>
                 </div>
 
@@ -3552,7 +3309,7 @@ const BackupSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: 
                     </button>
                     <button 
                         onClick={handleSaveSettings}
-                        className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-colors flex items-center justify-center"
+                        className="flex-1 px-4 py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-medium transition-colors flex items-center justify-center"
                     >
                         <Save size={18} className="mr-2" />
                         Сохранить настройки
@@ -3671,14 +3428,14 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
 
     const getSquadTypeColor = (type: string) => {
         switch(type) {
-            case 'vpn': return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
+            case 'vpn': return 'bg-orange-500/20 text-orange-400 border-orange-500/30';
             case 'trial': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
             default: return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
         }
     };
 
     if (loading) {
-        return <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-blue-500" size={32} /></div>;
+        return <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-orange-500" size={32} /></div>;
     }
 
     return (
@@ -3692,7 +3449,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                 <button
                     onClick={handleSync}
                     disabled={syncing}
-                    className="flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
+                    className="flex items-center px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
                 >
                     {syncing ? <Loader className="animate-spin mr-2" size={18} /> : <RefreshCw size={18} className="mr-2" />}
                     Синхронизировать с Remnawave
@@ -3735,7 +3492,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                             {squad.max_users > 0 && (
                                 <div className="w-full bg-gray-800 rounded-full h-2 mt-2">
                                     <div 
-                                        className="bg-blue-500 h-2 rounded-full transition-all"
+                                        className="bg-orange-500 h-2 rounded-full transition-all"
                                         style={{ width: `${Math.min(100, (squad.current_users / squad.max_users) * 100)}%` }}
                                     />
                                 </div>
@@ -3750,7 +3507,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                     <Zap size={48} className="mx-auto text-gray-600 mb-4" />
                     <h3 className="text-lg font-bold text-white mb-2">Нет сквадов</h3>
                     <p className="text-gray-400 mb-4">Синхронизируйте сквады с Remnawave</p>
-                    <button onClick={handleSync} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium">
+                    <button onClick={handleSync} className="px-4 py-2 bg-orange-600 text-white rounded-lg font-medium">
                         Синхронизировать
                     </button>
                 </div>
@@ -3770,7 +3527,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                             <div key={type}>
                                 <h3 className="font-medium text-white mb-3 flex items-center">
                                     <span className={`w-3 h-3 rounded-full mr-2 ${
-                                        type === 'vpn' ? 'bg-blue-500' : 'bg-yellow-500'
+                                        type === 'vpn' ? 'bg-orange-500' : 'bg-yellow-500'
                                     }`} />
                                     {type === 'vpn' ? 'Подписка (VPN + обход блокировок)' : 'Пробный период'}
                                 </h3>
@@ -3781,7 +3538,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                                             onClick={() => toggleSquadMapping(type, squad.squad_uuid)}
                                             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${
                                                 mapping[type]?.includes(squad.squad_uuid)
-                                                    ? 'bg-blue-600 border-blue-500 text-white'
+                                                    ? 'bg-orange-600 border-orange-500 text-white'
                                                     : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600'
                                             }`}
                                         >
@@ -3795,7 +3552,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
 
                     <button 
                         onClick={handleSaveMapping}
-                        className="mt-6 px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium transition-colors"
+                        className="mt-6 px-6 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg font-medium transition-colors"
                     >
                         Сохранить привязки
                     </button>
@@ -3867,7 +3624,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                             </button>
                             <button
                                 onClick={() => handleSaveSquad(editingSquad)}
-                                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-500 transition-colors"
+                                className="flex-1 px-4 py-2 bg-orange-600 text-white rounded-lg font-medium hover:bg-orange-500 transition-colors"
                             >
                                 Сохранить
                             </button>
@@ -3958,8 +3715,8 @@ const ToolsPage: React.FC<ToolsPageProps> = ({ onToast }) => {
                 {/* Экспорт данных */}
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
                     <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 rounded-xl bg-blue-600/20 flex items-center justify-center">
-                            <Download size={20} className="text-blue-400" />
+                        <div className="w-10 h-10 rounded-xl bg-orange-600/20 flex items-center justify-center">
+                            <Download size={20} className="text-orange-400" />
                         </div>
                         <div>
                             <h3 className="text-white font-bold">Экспорт данных</h3>
@@ -4083,7 +3840,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
                     <div className="p-4 border-b border-gray-800"><h2 className="font-bold text-white">Категории</h2></div>
                     <nav className="p-2 space-y-1">
                         {[{id: 'squads', icon: Zap, label: 'Сквады'}, {id: 'backups', icon: Cloud, label: 'Резервные копии'}].map(tab => (
-                            <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`w-full flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-colors ${activeTab === tab.id ? 'bg-blue-600/10 text-blue-400' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+                            <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`w-full flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-colors ${activeTab === tab.id ? 'bg-orange-600/10 text-orange-400' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
                                 <tab.icon size={18} className="mr-3"/> {tab.label}
                             </button>
                         ))}

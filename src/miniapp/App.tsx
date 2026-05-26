@@ -1,4 +1,3 @@
-/// <reference types="vite/client" />
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Smartphone, Monitor, Tv, CreditCard, History, 
@@ -13,91 +12,30 @@ import {
 // 0. ENV & API HELPERS
 // ==========================================
 
-type EnvRecord = Record<string, string | undefined>;
+declare const importMetaMini: any | undefined;
 
-function readEnv(): EnvRecord {
-  const viteEnv = import.meta.env as EnvRecord;
-  const windowEnv =
-    typeof window !== 'undefined'
-      ? ((window as unknown as { __ENV__?: EnvRecord }).__ENV__ ?? {})
-      : {};
-  return { ...windowEnv, ...viteEnv };
-}
+const rawEnvMini: any =
+  (typeof importMetaMini !== 'undefined' && importMetaMini.env) ||
+  (typeof (window as any) !== 'undefined' && (window as any).__ENV__) ||
+  {};
 
-const rawEnvMini = readEnv();
-
-const API_BASE_URL_MINI: string =
-  rawEnvMini.VITE_API_URL || rawEnvMini.REACT_APP_API_URL || '/api';
-const SUPPORT_URL: string =
-  rawEnvMini.VITE_SUPPORT_URL || rawEnvMini.REACT_APP_SUPPORT_URL || 'https://t.me/blinteambot';
-const BOT_USERNAME_MINI: string =
-  rawEnvMini.VITE_BOT_USERNAME || rawEnvMini.REACT_APP_BOT_USERNAME || 'blinvpn_bot';
-
-const IS_DEV = import.meta.env.DEV;
-
-function buildApiUrl(path: string): string {
-  const trimmed = path.trim();
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
-  if (trimmed.startsWith('/api/') || trimmed === '/api') return trimmed;
-  const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
-  const base = API_BASE_URL_MINI.replace(/\/$/, '');
-  return `${base}${cleanPath}`;
-}
-
-function getTelegramInitData(): string {
-  if (typeof window === 'undefined') return '';
-  const win = window as unknown as { Telegram?: { WebApp?: { initData?: string } } };
-  return win.Telegram?.WebApp?.initData || '';
-}
-
-function withTelegramInitHeaders(headers: Record<string, string>): Record<string, string> {
-  const initData = getTelegramInitData();
-  if (initData) headers['X-Telegram-Init-Data'] = initData;
-  return headers;
-}
-
-function safeHttpUrl(url: string | undefined | null, fallback: string): string {
-  if (!url || typeof url !== 'string') return fallback;
-  try {
-    const parsed = new URL(url.trim());
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return fallback;
-    return parsed.href;
-  } catch {
-    return fallback;
-  }
-}
-
-function isAllowedExternalUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol === 'happ:') return true;
-    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
-  } catch {
-    return false;
-  }
-}
-
-function openExternalUrl(url: string | undefined | null): void {
-  if (!url || !isAllowedExternalUrl(url)) return;
-  const win = window as unknown as { Telegram?: { WebApp?: { openLink?: (u: string) => void } } };
-  if (win.Telegram?.WebApp?.openLink) {
-    win.Telegram.WebApp.openLink(url);
-  } else {
-    window.open(url, '_blank', 'noopener,noreferrer');
-  }
-}
+const API_BASE_URL_MINI: string = rawEnvMini.VITE_API_URL || rawEnvMini.REACT_APP_API_URL || '/api';
+const SUPPORT_URL: string = rawEnvMini.VITE_SUPPORT_URL || rawEnvMini.REACT_APP_SUPPORT_URL || 'https://t.me/blinteambot';
+const BOT_USERNAME_MINI: string = rawEnvMini.VITE_BOT_USERNAME || rawEnvMini.REACT_APP_BOT_USERNAME || 'blinvpn_bot';
 
 async function miniApiFetch(path: string, options: RequestInit = {}): Promise<any> {
-  const url = buildApiUrl(path);
-
+  // Всегда используем относительный путь /api - nginx проксирует на backend
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  const url = `/api${cleanPath}`;
+  
   const res = await fetch(url, {
     ...options,
-    headers: withTelegramInitHeaders({
+    headers: {
       'Content-Type': 'application/json',
-      ...((options.headers as Record<string, string>) || {}),
-    }),
+      ...(options.headers || {}),
+    },
   });
-
+  
   // Обработка бана (статус 403)
   if (res.status === 403) {
     try {
@@ -105,19 +43,17 @@ async function miniApiFetch(path: string, options: RequestInit = {}): Promise<an
       if (data.required_subscription) {
         return {
           _needsSubscription: true,
-          channel_link: safeHttpUrl(data.channel_link, 'https://t.me'),
-          channel_id: data.channel_id,
+          channel_link: data.channel_link || 'https://t.me',
+          channel_id: data.channel_id
         };
       }
       if (data.banned) {
         return { _banned: true, reason: data.reason || 'Аккаунт заблокирован' };
       }
-    } catch {
-      /* ignore malformed 403 body */
-    }
+    } catch {}
     throw new Error('Access denied');
   }
-
+  
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `Request failed with status ${res.status}`);
@@ -145,8 +81,7 @@ type ViewState =
   | 'history' 
   | 'referral' 
   | 'referral_detail' 
-  | 'promo'
-  | 'extend_subscription';
+  | 'promo';
 
 type PlatformId = 'android' | 'ios' | 'windows' | 'macos' | 'linux' | 'androidtv';
 
@@ -472,27 +407,27 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
   {
     id: 'rollypay_sbp',
     name: 'СБП',
-    icon: '⚡',
+    icon: <img src="https://i.imgur.com/pu9w7tE.png" className="w-8 h-8 object-contain" alt="СБП" />,
     feePercent: 7
   },
-  { id: 'platega_card_ru', name: 'Российские карты', icon: '💳', feePercent: 8 },
-  { id: 'platega_card_intl', name: 'Иностранные карты', icon: '💳', feePercent: 15 },
+  { id: 'platega_card_ru', name: 'Российские карты', icon: <img src="https://i.imgur.com/CE6Q9yJ.png" className="w-8 h-8 object-contain" alt="МИР" />, feePercent: 8 },
+  { id: 'platega_card_intl', name: 'Иностранные карты', icon: <img src="https://upload.wikimedia.org/wikipedia/commons/2/2a/Mastercard-logo.svg" className="w-8 h-8 object-contain" alt="Card" />, feePercent: 15 },
   {
     id: 'tg_stars',
     name: 'Telegram Stars',
-    icon: '⭐',
+    icon: <img src="https://i.imgur.com/Yu8PZ7N.png" className="w-8 h-8 object-contain" alt="Telegram Stars" />,
     feePercent: 0
   },
   {
     id: 'heleket',
     name: 'Криптовалюта',
-    icon: '🪙',
+    icon: <img src="https://i.imgur.com/bdC3E81.png" className="w-8 h-8 object-contain rounded-md" alt="Heleket" />,
     feePercent: 1
   },
   {
     id: 'cryptopay',
     name: 'CryptoBot',
-    icon: '🧾',
+    icon: <img src="https://i.imgur.com/gmtauym.png" className="w-8 h-8 object-contain rounded-md" alt="CryptoBot" />,
     feePercent: 3
   },
 ];
@@ -733,7 +668,7 @@ function getInstructionSteps(platformId: PlatformId, plainSecondDevice: boolean)
 // ==========================================
 
 const AnimatedBackground: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="max-w-md mx-auto min-h-screen w-full relative text-zinc-200 font-sans selection:bg-blue-500/30 tg-safe-padding overflow-x-clip" style={{ background: '#000', isolation: 'isolate', paddingTop: '56px' }}>
+  <div className="max-w-md mx-auto min-h-screen w-full relative text-zinc-200 font-sans selection:bg-orange-500/30 tg-safe-padding overflow-x-clip" style={{ background: '#000', isolation: 'isolate', paddingTop: '56px' }}>
     <style>{`
       @keyframes drift1 {
         0%   { transform: translate(0px, 0px); }
@@ -758,8 +693,8 @@ const AnimatedBackground: React.FC<{ children: React.ReactNode }> = ({ children 
         width: 380px; height: 380px;
         top: -120px; left: -100px;
         background: radial-gradient(circle at 50% 50%,
-          rgba(37,99,235,0.13) 0%,
-          rgba(29,78,216,0.06) 45%,
+          rgba(234,88,12,0.13) 0%,
+          rgba(194,65,12,0.06) 45%,
           transparent 70%);
         filter: blur(40px);
         animation: drift1 35s ease-in-out infinite;
@@ -768,8 +703,8 @@ const AnimatedBackground: React.FC<{ children: React.ReactNode }> = ({ children 
         width: 420px; height: 420px;
         bottom: -80px; right: -140px;
         background: radial-gradient(circle at 50% 50%,
-          rgba(59,130,246,0.10) 0%,
-          rgba(37,99,235,0.04) 45%,
+          rgba(249,115,22,0.10) 0%,
+          rgba(234,88,12,0.04) 45%,
           transparent 70%);
         filter: blur(50px);
         animation: drift2 45s ease-in-out infinite;
@@ -800,12 +735,12 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 const Button: React.FC<ButtonProps> = ({ children, onClick, variant = 'primary', className = '', disabled = false }) => {
   const baseStyle = "w-full py-3.5 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 active:scale-[0.97] disabled:opacity-50 disabled:active:scale-100 disabled:cursor-not-allowed ripple";
   const variants = {
-    primary: "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-black/60",
+    primary: "bg-orange-600 hover:bg-orange-500 text-white shadow-lg shadow-black/60",
     secondary: "bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800",
-    outline: "border-2 border-blue-500/40 text-blue-400 hover:bg-blue-500/10",
+    outline: "border-2 border-orange-500/40 text-orange-400 hover:bg-orange-500/10",
     danger: "bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20",
     ghost: "text-zinc-400 hover:text-white hover:bg-zinc-900/80",
-    trial: "bg-gradient-to-r from-purple-600 to-blue-600 text-white shadow-lg shadow-purple-900/40 hover:brightness-110",
+    trial: "bg-gradient-to-r from-purple-600 to-orange-500 text-white shadow-lg shadow-purple-900/40 hover:brightness-110",
     gold: "bg-gradient-to-r from-amber-500 to-yellow-600 text-white shadow-lg shadow-amber-900/40"
   };
 
@@ -838,7 +773,7 @@ const Modal: React.FC<{ title: string, isOpen: boolean, onClose: () => void, chi
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/80 backdrop-blur-sm transition-opacity" onClick={onClose}></div>
-      <div className={`relative bg-black border border-zinc-900 w-full max-w-sm rounded-2xl p-6 shadow-2xl shadow-blue-950/20 transform transition-all scale-100 flex flex-col ${fullHeight ? 'h-[85vh]' : 'max-h-[90vh]'}`}>
+      <div className={`relative bg-black border border-zinc-900 w-full max-w-sm rounded-2xl p-6 shadow-2xl shadow-orange-950/20 transform transition-all scale-100 flex flex-col ${fullHeight ? 'h-[85vh]' : 'max-h-[90vh]'}`}>
         <div className="flex justify-between items-center mb-4 shrink-0">
           <h3 className="text-xl font-bold text-white">{title}</h3>
           <button type="button" onClick={onClose} className="text-zinc-400 hover:text-white">
@@ -873,7 +808,7 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
            const parts = cleanLine.split('**');
            return (
              <div key={idx} className="flex gap-2 pl-2">
-                <span className="text-blue-500 mt-1.5">•</span>
+                <span className="text-orange-500 mt-1.5">•</span>
                 <span>
                     {parts.map((part, pIdx) => (pIdx % 2 === 1 ? <strong key={pIdx} className="text-zinc-200">{part}</strong> : part))}
                 </span>
@@ -906,10 +841,9 @@ export default function App() {
   const [isTrialUsed, setIsTrialUsed] = useState<boolean>(false);
   const [userId, setUserId] = useState<number | null>(null);
   const [telegramId, setTelegramId] = useState<number | null>(null);
-  const [username, setUsername] = useState<string>('User');
-  const [displayName, setDisplayName] = useState<string>('User'); // first_name для отображения
+  const [username, setUsername] = useState<string>('???');
+  const [displayName, setDisplayName] = useState<string>('???'); // first_name для отображения
   const [userPhotoUrl, setUserPhotoUrl] = useState<string | null>(null);
-  const userPhotoObjectUrlRef = useRef<string | null>(null);
   
   // Data
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -997,15 +931,6 @@ export default function App() {
   const [instructionPlainLinkMode, setInstructionPlainLinkMode] = useState(false);
   const [instructionSourceDeviceId, setInstructionSourceDeviceId] = useState<number | null>(null);
 
-  useEffect(() => {
-    return () => {
-      if (userPhotoObjectUrlRef.current) {
-        URL.revokeObjectURL(userPhotoObjectUrlRef.current);
-        userPhotoObjectUrlRef.current = null;
-      }
-    };
-  }, []);
-
   // Detect Platform & load user on Mount
   useEffect(() => {
     const win: any = window as any;
@@ -1070,13 +995,13 @@ export default function App() {
           win.Telegram.WebApp.disableVerticalSwipes();
         }
       } catch {}
-    } else if (IS_DEV) {
-      // Только для локальной разработки — в production вход только через Telegram WebApp
+    } else {
       const params = new URLSearchParams(window.location.search);
       const fromQuery = params.get('telegram_id');
       if (fromQuery) tgId = Number(fromQuery);
       tgUsername = params.get('username') || '';
       tgFirstName = params.get('first_name') || '';
+      // Также проверяем ref параметр из URL
       const refParam = params.get('ref');
       if (refParam) {
         referralId = parseInt(refParam, 10);
@@ -1095,23 +1020,18 @@ export default function App() {
     setTelegramId(tgId);
     if (tgUsername) setUsername(tgUsername);
     // Устанавливаем displayName: приоритет first_name, затем username
-    setDisplayName(tgFirstName || tgUsername || 'User');
+    setDisplayName(tgFirstName || tgUsername || '???');
 
     // Аватар через наш API (Telegram CDN в РФ часто недоступен)
     (async () => {
       try {
-        const res = await fetch(
-          buildApiUrl(`/user/avatar?telegram_id=${tgId}`),
-          { headers: withTelegramInitHeaders({}) },
-        );
+        const initData = win.Telegram?.WebApp?.initData || '';
+        const headers: Record<string, string> = {};
+        if (initData) headers['X-Telegram-Init-Data'] = initData;
+        const res = await fetch(`/api/user/avatar?telegram_id=${tgId}`, { headers });
         if (res.ok) {
           const blob = await res.blob();
-          if (userPhotoObjectUrlRef.current) {
-            URL.revokeObjectURL(userPhotoObjectUrlRef.current);
-          }
-          const objectUrl = URL.createObjectURL(blob);
-          userPhotoObjectUrlRef.current = objectUrl;
-          setUserPhotoUrl(objectUrl);
+          setUserPhotoUrl(URL.createObjectURL(blob));
         }
       } catch {
         /* fallback: буква в круге */
@@ -1138,7 +1058,7 @@ export default function App() {
 
       if (userData && userData._needsSubscription) {
         setNeedsChannelSubscription(true);
-        setRequiredChannelLink(safeHttpUrl(userData.channel_link, 'https://t.me/blinvpn'));
+        setRequiredChannelLink(userData.channel_link || 'https://t.me');
         return;
       }
 
@@ -1406,10 +1326,10 @@ export default function App() {
   // Получить Happ зашифрованную ссылку через наш бэкенд (который проксирует на crypto.happ.su)
   const getHappEncryptedLink = async (subscriptionUrl: string): Promise<string | null> => {
     try {
-      const response = await fetch(buildApiUrl('/encrypt-link'), {
+      const response = await fetch('/api/encrypt-link', {
         method: 'POST',
-        headers: withTelegramInitHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ url: subscriptionUrl }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: subscriptionUrl })
       });
       
       if (response.ok) {
@@ -1480,10 +1400,18 @@ export default function App() {
     
     // Telegram не позволяет открывать не-HTTPS ссылки напрямую,
     // поэтому используем редирект через API
-    const redirectUrl = `${window.location.origin}${buildApiUrl('/redirect')}?url=${encodeURIComponent(encryptedLink)}`;
+    const redirectUrl = `${window.location.origin}/api/redirect?url=${encodeURIComponent(encryptedLink)}`;
     console.log('Opening redirect URL:', redirectUrl);
     
-    openExternalUrl(redirectUrl);
+    // Открываем редирект-страницу
+    const win = window as any;
+    if (win.Telegram?.WebApp?.openLink) {
+      // openLink открывает во внешнем браузере - там сработает редирект на happ://
+      win.Telegram.WebApp.openLink(redirectUrl);
+    } else {
+      // Fallback - открываем в новом окне
+      window.open(redirectUrl, '_blank');
+    }
   };
 
   const handleCopy = (text: string, deviceId?: number) => {
@@ -1800,12 +1728,12 @@ export default function App() {
             <img 
               src={userPhotoUrl} 
               alt={displayName} 
-              className="w-10 h-10 rounded-full object-cover shadow-lg shadow-blue-500/20"
+              className="w-10 h-10 rounded-full object-cover shadow-lg shadow-orange-500/20"
               onError={() => setUserPhotoUrl(null)}
             />
           ) : (
-            <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-full flex items-center justify-center font-bold text-lg text-white shadow-lg shadow-blue-500/20">
-              {displayName.charAt(0).toUpperCase()}
+            <div className="w-10 h-10 bg-zinc-900 border border-zinc-700 rounded-full flex items-center justify-center font-bold text-lg text-zinc-600 shadow-lg">
+              {displayName === '???' ? '?' : displayName.charAt(0).toUpperCase()}
             </div>
           )}
           <div>
@@ -1815,7 +1743,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="relative overflow-hidden bg-gradient-to-br from-zinc-900 via-zinc-950 to-black rounded-3xl p-6 border border-zinc-700/70 shadow-2xl shadow-blue-950/30">
+      <div className="relative overflow-hidden bg-gradient-to-br from-zinc-900 via-zinc-950 to-black rounded-3xl p-6 border border-zinc-700/70 shadow-2xl shadow-orange-950/30">
         <div className="relative z-10">
           <div className="flex justify-between items-start mb-2">
             <span className="text-zinc-400 text-sm font-medium flex items-center gap-2">
@@ -1844,7 +1772,7 @@ export default function App() {
             
             {!isTrialUsed && (
                 <div className="text-center">
-                    <span className="text-xs text-blue-300 font-medium bg-blue-500/10 px-3 py-1 rounded-full border border-blue-500/20">
+                    <span className="text-xs text-orange-300 font-medium bg-orange-500/10 px-3 py-1 rounded-full border border-orange-500/20">
                         🎁 Первые 3 дня бесплатно
                     </span>
                 </div>
@@ -1854,8 +1782,8 @@ export default function App() {
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <Card onClick={() => setView('devices')} className="cursor-pointer hover:border-blue-500/50 transition-colors group">
-          <div className="w-10 h-10 rounded-full bg-blue-600/10 text-blue-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+        <Card onClick={() => setView('devices')} className="cursor-pointer hover:border-orange-500/50 transition-colors group">
+          <div className="w-10 h-10 rounded-full bg-orange-600/10 text-orange-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
             <Monitor size={20} />
           </div>
           <div className="font-bold text-zinc-200">Устройства</div>
@@ -1887,9 +1815,9 @@ export default function App() {
       <Card className="mt-3 !py-3 px-4 flex flex-col items-center justify-center gap-2 min-h-[80px]">
          <div className="text-zinc-500 text-[10px] font-bold uppercase tracking-widest">О проекте</div>
          <div className="flex flex-wrap justify-center gap-x-5 gap-y-2 text-xs font-medium text-zinc-400">
-            <button onClick={() => window.open('https://t.me/blinvpn', '_blank')} className="hover:text-blue-400 transition-colors">Наш канал</button>
-            <button onClick={() => openDoc("Договор оферты", publicPages.offer)} className="hover:text-blue-400 transition-colors">Договор оферты</button>
-            <button onClick={() => openDoc("Политика конфиденциальности", publicPages.privacy)} className="hover:text-blue-400 transition-colors">Политика конфиденциальности</button>
+            <button onClick={() => window.open('https://t.me/blinvpn', '_blank')} className="hover:text-orange-400 transition-colors">Наш канал</button>
+            <button onClick={() => openDoc("Договор оферты", publicPages.offer)} className="hover:text-orange-400 transition-colors">Договор оферты</button>
+            <button onClick={() => openDoc("Политика конфиденциальности", publicPages.privacy)} className="hover:text-orange-400 transition-colors">Политика конфиденциальности</button>
          </div>
       </Card>
     </div>
@@ -1920,9 +1848,9 @@ export default function App() {
                 className="w-full mb-4 py-3 px-4 bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 rounded-xl flex items-center justify-between transition-colors"
               >
                 <div className="flex items-center gap-3">
-                  <Smartphone size={20} className="text-blue-400" />
+                  <Smartphone size={20} className="text-orange-400" />
                   <span className="text-white font-medium">Мои устройства</span>
-                  <span className="bg-blue-600 text-white text-xs px-2 py-0.5 rounded-full">{devices.length}</span>
+                  <span className="bg-orange-600 text-white text-xs px-2 py-0.5 rounded-full">{devices.length}</span>
                 </div>
                 <ChevronRight size={20} className="text-zinc-400" />
               </button>
@@ -1934,17 +1862,17 @@ export default function App() {
                 <div className="flex items-center justify-between gap-3">
                   <button
                     type="button"
-                    className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-blue-600/80 transition-colors disabled:opacity-40"
+                    className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-orange-600/80 transition-colors disabled:opacity-40"
                     disabled={wizardDeviceCount <= 2}
                     onClick={() => setWizardDeviceCount(c => Math.max(2, c - 1))}
                   >−</button>
                   <div className="text-center flex-1">
                     <div className="text-3xl font-black text-white">{wizardDeviceCount}</div>
-                    <div className="text-[11px] text-zinc-500 mt-1">мин. 2, макс. 20</div>
+                    
                   </div>
                   <button
                     type="button"
-                    className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-blue-600/80 transition-colors"
+                    className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-orange-600/80 transition-colors"
                     onClick={() => setWizardDeviceCount(c => Math.min(20, c + 1))}
                   >+</button>
                 </div>
@@ -1968,8 +1896,8 @@ export default function App() {
                         key={plan.id}
                         onClick={() => { setWizardPlan(plan); setWizardStep(2); }}
                         className={`relative p-3 rounded-xl border transition-all cursor-pointer flex justify-between items-center card-hover ${
-                            plan.isTrial ? 'border-purple-500/60 bg-purple-950/40' :
-                            (plan.highlight ? 'border-amber-500/50 bg-gradient-to-r from-amber-950/35 to-transparent' : 'border-zinc-900 bg-zinc-950/70 hover:border-blue-600/35')
+                            plan.isTrial ? 'border-orange-500/60 bg-orange-950/20' :
+                            (plan.highlight ? 'border-amber-500/50 bg-zinc-950/70 hover:border-amber-500/70' : 'border-zinc-900 bg-zinc-950/70 hover:border-orange-600/35')
                         }`}
                     >
                         <div>
@@ -1977,19 +1905,15 @@ export default function App() {
                                 {plan.duration}
                                 {plan.highlight && <Crown size={18} fill="currentColor" />}
                             </div>
-                            {plan.isTrial && <div className="text-xs text-purple-300">Попробуйте бесплатно</div>}
                             {discountText && <div className={`text-xs font-medium ${days === 180 ? 'text-amber-400' : 'text-green-400'}`}>{discountText}</div>}
                         </div>
                         <div className="text-right">
                             {plan.isTrial ? (
-                              <div className={`font-bold text-xl ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>0 ₽</div>
+                              <div className="font-bold text-xl text-white">0 ₽</div>
                             ) : prePromo != null && prePromo !== shown ? (
-                              <div className="flex flex-col items-end gap-0.5">
-                                <div className="flex items-baseline gap-2">
-                                  <span className="text-sm font-semibold text-zinc-500 line-through decoration-zinc-500/70 decoration-2 tabular-nums">{prePromo} ₽</span>
-                                  <span className={`font-bold text-xl tabular-nums ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>{shown} ₽</span>
-                                </div>
-                                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400/85">промо −{nextDiscountPercent}%</span>
+                              <div className="flex items-baseline gap-2">
+                                <span className="text-sm font-semibold text-zinc-500 line-through decoration-zinc-500/70 decoration-2 tabular-nums">{prePromo} ₽</span>
+                                <span className={`font-bold text-xl tabular-nums ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>{shown} ₽</span>
                               </div>
                             ) : (
                               <div className={`font-bold text-xl ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>{shown} ₽</div>
@@ -1998,22 +1922,6 @@ export default function App() {
                         </div>
                     </div>
                 );})}
-            </div>
-
-            <div className="bg-zinc-950/80 p-4 rounded-xl border border-zinc-900 mt-6 space-y-2">
-                <div className="text-white font-semibold text-sm mb-2">Что включено:</div>
-                <div className="flex items-center gap-2">
-                    <CheckCircle className="text-green-400 shrink-0" size={16} />
-                    <span className="text-zinc-300 text-xs">Безлимитный трафик</span>
-                </div>
-                <div className="flex items-center gap-2">
-                    <CheckCircle className="text-green-400 shrink-0" size={16} />
-                    <span className="text-zinc-300 text-xs">Обход блокировок операторов</span>
-                </div>
-                <div className="flex items-center gap-2">
-                    <CheckCircle className="text-green-400 shrink-0" size={16} />
-                    <span className="text-zinc-300 text-xs">Работает при «Беспилотной опасности»</span>
-                </div>
             </div>
         </div>
       )}
@@ -2026,7 +1934,7 @@ export default function App() {
                     {wizardPlan.duration}
                 </div>
                 {!wizardPlan.isTrial && (
-                  <div className="text-sm text-zinc-500 mb-4">Устройств в подписке: <span className="text-blue-400 font-semibold">{wizardDeviceCount}</span></div>
+                  <div className="text-sm text-zinc-500 mb-4">Устройств в подписке: <span className="text-orange-400 font-semibold">{wizardDeviceCount}</span></div>
                 )}
                 <div className="border-t border-zinc-800 pt-4 flex justify-between items-center">
                     <span className="text-zinc-400">Итого:</span>
@@ -2120,7 +2028,7 @@ export default function App() {
                     }
                     setSuccessInstructionPlatform(v);
                   }}
-                  className="w-full appearance-none bg-black border border-zinc-800 text-white py-3 pl-4 pr-10 rounded-xl focus:outline-none focus:border-blue-500"
+                  className="w-full appearance-none bg-black border border-zinc-800 text-white py-3 pl-4 pr-10 rounded-xl focus:outline-none focus:border-orange-500"
                 >
                   {(wizardSuccessPlainDevice ? PLATFORMS.filter((p) => p.id !== 'androidtv') : PLATFORMS).map((p) => (
                     <option key={p.id} value={p.id}>{p.name}</option>
@@ -2138,7 +2046,7 @@ export default function App() {
                 onClick={() => setWizardSuccessPlainDevice((v) => !v)}
                 className={`w-full mb-3 py-2.5 px-3 rounded-xl text-xs font-semibold border transition-colors ${
                   wizardSuccessPlainDevice
-                    ? 'border-blue-500/40 bg-blue-600/10 text-blue-200'
+                    ? 'border-orange-500/40 bg-orange-600/10 text-orange-200'
                     : 'border-zinc-800 bg-zinc-900/40 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'
                 }`}
               >
@@ -2151,7 +2059,7 @@ export default function App() {
             <div className="flex-1 overflow-y-auto bg-zinc-950/70 rounded-2xl p-4 border border-zinc-900 min-h-[200px]">
                 {getInstructionSteps(successInstructionPlatform, wizardSuccessPlainDevice).map((step, idx) => (
                     <div key={idx} className="relative pl-6 border-l-2 border-zinc-800 pb-6 last:border-0 last:pb-0">
-                        <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-black border-2 border-blue-600"></div>
+                        <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-black border-2 border-orange-600"></div>
                         <h3 className="font-bold text-white text-md mb-1 leading-none">{step.title}</h3>
                         <p className="text-zinc-400 text-xs mb-3 leading-relaxed">{step.desc}</p>
 
@@ -2184,13 +2092,18 @@ export default function App() {
                                       const plain = getPlainSubscriptionUrl();
                                       if (plain) handleCopy(plain);
                                       else alert('Ссылка ещё не загружена. Попробуйте через несколько секунд или откройте «Мои устройства».');
-                                    } else if (action.url && isAllowedExternalUrl(action.url)) {
-                                        openExternalUrl(action.url);
+                                    } else if (action.url) {
+                                        const w = window as any;
+                                        if (action.url.startsWith('happ://') && w.Telegram?.WebApp?.openLink) {
+                                          w.Telegram.WebApp.openLink(action.url);
+                                        } else {
+                                          window.open(action.url, '_blank');
+                                        }
                                     }
                                 }}
                                 className={`py-2 px-3 rounded-lg text-xs font-semibold text-center transition-colors ${
                                     action.primary 
-                                    ? 'bg-blue-600 text-white hover:bg-blue-500' 
+                                    ? 'bg-orange-600 text-white hover:bg-orange-500' 
                                     : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800 border border-zinc-800'
                                 }`}
                                 >
@@ -2293,7 +2206,7 @@ export default function App() {
                       setActivePlatform(device.type as PlatformId);
                       setView('instruction_view');
                     }}
-                    className="bg-zinc-700/50 hover:bg-zinc-700 py-2.5 rounded-lg text-xs text-blue-400 flex items-center justify-center gap-1.5 transition-colors border border-zinc-600/50 font-medium"
+                    className="bg-zinc-700/50 hover:bg-zinc-700 py-2.5 rounded-lg text-xs text-orange-400 flex items-center justify-center gap-1.5 transition-colors border border-zinc-600/50 font-medium"
                   >
                     <BookOpen size={15} /> Инструкция
                   </button>
@@ -2316,7 +2229,7 @@ export default function App() {
                     setActivePlatform(device.type as PlatformId);
                     setView('instruction_view');
                   }}
-                  className="w-full bg-zinc-700/50 hover:bg-zinc-700 py-2 rounded-lg text-sm text-blue-400 flex items-center justify-center gap-2 transition-colors border border-zinc-600/50"
+                  className="w-full bg-zinc-700/50 hover:bg-zinc-700 py-2 rounded-lg text-sm text-orange-400 flex items-center justify-center gap-2 transition-colors border border-zinc-600/50"
                 >
                   <BookOpen size={16} /> Инструкция по подключению
                 </button>
@@ -2370,7 +2283,7 @@ export default function App() {
             <div className="flex items-center justify-between gap-3">
               <button
                 type="button"
-                className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-blue-600/80 transition-colors disabled:opacity-40"
+                className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-orange-600/80 transition-colors disabled:opacity-40"
                 disabled={!extendingDevice || extendDeviceCount <= extMinCnt}
                 onClick={() => setExtendDeviceCount(c => Math.max(extMinCnt, c - 1))}
               >−</button>
@@ -2380,13 +2293,13 @@ export default function App() {
               </div>
               <button
                 type="button"
-                className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-blue-600/80 transition-colors"
+                className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-orange-600/80 transition-colors"
                 onClick={() => setExtendDeviceCount(c => Math.min(20, c + 1))}
               >+</button>
             </div>
           </div>
           <div className="text-xs text-zinc-500 mb-2">
-            Цена продления считается по выбранному числу устройств (<span className="text-blue-400 font-semibold">{extPricingCnt}</span>).
+            Цена продления считается по выбранному числу устройств (<span className="text-orange-400 font-semibold">{extPricingCnt}</span>).
           </div>
           <div className="text-zinc-400 text-sm mb-4">Выберите период продления:</div>
           <div className="grid gap-3">
@@ -2399,18 +2312,18 @@ export default function App() {
                 onClick={() => setExtendPlan(plan)}
                 className={`p-4 rounded-xl text-left transition-all border ${
                   extendPlan?.id === plan.id
-                    ? 'bg-blue-600/20 border-blue-500 ring-1 ring-blue-500'
+                    ? 'bg-orange-600/20 border-orange-500 ring-1 ring-orange-500'
                     : 'bg-zinc-800 border-zinc-700 hover:bg-zinc-750'
                 }`}
               >
                 <div className="flex justify-between items-center">
                   <div>
-                    <div className={`font-bold ${extendPlan?.id === plan.id ? 'text-blue-400' : 'text-white'}`}>
+                    <div className={`font-bold ${extendPlan?.id === plan.id ? 'text-orange-400' : 'text-white'}`}>
                       {plan.duration}
                     </div>
                     <div className="text-zinc-500 text-sm">{plan.days} дней</div>
                   </div>
-                  <div className={`text-right ${extendPlan?.id === plan.id ? 'text-blue-400' : 'text-zinc-300'}`}>
+                  <div className={`text-right ${extendPlan?.id === plan.id ? 'text-orange-400' : 'text-zinc-300'}`}>
                     {pre != null && pre !== fin ? (
                       <div className="flex flex-col items-end gap-0.5">
                         <div className="flex items-baseline gap-2">
@@ -2472,7 +2385,7 @@ export default function App() {
                   onClick={() => setTopupAmount(amount)}
                   className={`py-4 rounded-xl text-sm font-bold transition-all border ${
                     topupAmount === amount 
-                    ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/40 transform scale-105' 
+                    ? 'bg-orange-600 text-white border-orange-500 shadow-lg shadow-orange-900/40 transform scale-105' 
                     : 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'
                   }`}
                 >
@@ -2532,7 +2445,7 @@ export default function App() {
                 )}
                 <div className="flex justify-between items-center pt-2 border-t border-zinc-700 font-bold text-lg">
                    <span className="text-white">Итого к оплате:</span>
-                   <span className="text-blue-400">{getPaymentTotal()} ₽</span>
+                   <span className="text-orange-400">{getPaymentTotal()} ₽</span>
                 </div>
              </div>
 
@@ -2549,12 +2462,12 @@ export default function App() {
                     }}
                     className={`w-full p-4 rounded-xl flex items-center justify-between transition-all border ${
                       selectedMethod === method.id
-                      ? 'bg-blue-600/10 border-blue-600 text-white'
+                      ? 'bg-orange-600/10 border-orange-600 text-white'
                       : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-750'
                     }`}
                   >
                     <div className="flex items-center gap-3">
-                      <span className="text-2xl">{method.icon}</span>
+                      <div className="w-8 h-8 flex items-center justify-center shrink-0">{method.icon}</div>
                       <span className="font-medium text-left">
                         <div className="leading-tight">{method.name}</div>
                         <div className="text-xs text-zinc-500 font-normal mt-0.5">
@@ -2562,7 +2475,7 @@ export default function App() {
                         </div>
                       </span>
                     </div>
-                    {selectedMethod === method.id && <CheckCircle size={22} className="text-blue-500 fill-blue-500/20" />}
+                    {selectedMethod === method.id && <CheckCircle size={22} className="text-orange-500 fill-orange-500/20" />}
                   </button>
                   
                   {selectedMethod === method.id && method.variants && (
@@ -2570,7 +2483,7 @@ export default function App() {
                           <select 
                             value={selectedVariant || ''}
                             onChange={(e) => setSelectedVariant(e.target.value)}
-                            className="w-full bg-zinc-900 border border-zinc-600 rounded-lg p-2 text-sm text-white focus:border-blue-500 outline-none"
+                            className="w-full bg-zinc-900 border border-zinc-600 rounded-lg p-2 text-sm text-white focus:border-orange-500 outline-none"
                             onClick={(e) => e.stopPropagation()}
                           >
                               {method.variants.map(v => (
@@ -2614,7 +2527,7 @@ export default function App() {
                   });
 
                   const payUrl = res.confirmation_url || res.payment_url;
-                  if (payUrl && isAllowedExternalUrl(payUrl)) {
+                  if (payUrl) {
                     setPaymentUrl(payUrl);
                     // Открываем оплату в Telegram. Для Stars используем openInvoice.
                     try {
@@ -2626,11 +2539,13 @@ export default function App() {
                           }
                           // status === 'paid' — баланс проверится на экране ожидания оплаты
                         });
+                      } else if (typeof tg?.openLink === 'function') {
+                        tg.openLink(payUrl);
                       } else {
-                        openExternalUrl(payUrl);
+                        window.open(payUrl, '_blank');
                       }
                     } catch {
-                      openExternalUrl(payUrl);
+                      window.open(payUrl, '_blank');
                     }
                   }
                   setView('wait_payment');
@@ -2653,8 +2568,8 @@ export default function App() {
       <Header title="Новое подключение" onBack={() => setView('devices')} />
       
       <div className="flex-1 flex flex-col items-center justify-center text-center py-10">
-        <div className="w-20 h-20 bg-blue-600/20 rounded-full flex items-center justify-center mb-6">
-          <Shield size={40} className="text-blue-500" />
+        <div className="w-20 h-20 bg-orange-600/20 rounded-full flex items-center justify-center mb-6">
+          <Shield size={40} className="text-orange-500" />
         </div>
         <h2 className="text-xl font-bold text-white mb-2">Подключите защиту</h2>
         <p className="text-zinc-400 mb-6 max-w-xs">
@@ -2790,8 +2705,16 @@ export default function App() {
     }, []);
     
     const openPayment = () => {
-      if (!paymentUrl || !isAllowedExternalUrl(paymentUrl)) return;
-      openExternalUrl(paymentUrl);
+      if (!paymentUrl) return;
+      try {
+        if (window.Telegram?.WebApp?.openLink) {
+          window.Telegram.WebApp.openLink(paymentUrl);
+        } else {
+          window.open(paymentUrl, '_blank');
+        }
+      } catch {
+        window.open(paymentUrl, '_blank');
+      }
     };
 
     return (
@@ -2814,7 +2737,7 @@ export default function App() {
           {/* Спиннер */}
           <div className="relative w-16 h-16 mb-5">
             <div className="absolute inset-0 rounded-full border-2 border-zinc-700" />
-            <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-blue-500 animate-spin" />
+            <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-orange-500 animate-spin" />
             <div className="absolute inset-0 flex items-center justify-center">
               <CreditCard size={22} className="text-zinc-400" />
             </div>
@@ -2829,7 +2752,7 @@ export default function App() {
 
           {checking && (
             <div className="flex items-center gap-2 mt-4">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+              <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse" />
               <span className="text-xs text-zinc-500">Проверяем...</span>
             </div>
           )}
@@ -2897,7 +2820,7 @@ export default function App() {
                 }
                 setActivePlatform(v);
               }}
-              className="w-full appearance-none bg-zinc-800/80 border border-zinc-700 text-white py-3 pl-4 pr-10 rounded-2xl focus:outline-none focus:border-blue-500 transition-colors"
+              className="w-full appearance-none bg-zinc-800/80 border border-zinc-700 text-white py-3 pl-4 pr-10 rounded-2xl focus:outline-none focus:border-orange-500 transition-colors"
             >
               {platformEntries.map(([key, data]) => (
                 <option key={key} value={key}>{data.title}</option>
@@ -2917,45 +2840,41 @@ export default function App() {
                 onClick={() => setInstructionPlainLinkMode(false)}
                 className="w-full py-2.5 px-3 rounded-xl text-sm font-semibold border border-zinc-700 bg-zinc-800/70 text-zinc-200 hover:bg-zinc-800 transition-colors"
               >
-                Обычная установка — кнопка «Добавить подписку» в Happ
+                Установка на это устройство
               </button>
             ) : (
               <button
                 type="button"
                 onClick={() => setInstructionPlainLinkMode(true)}
-                className="w-full py-2.5 px-3 rounded-xl text-sm font-semibold border border-blue-500/35 bg-blue-600/12 text-blue-100 hover:bg-blue-600/20 transition-colors flex items-center justify-center gap-2"
+                className="w-full py-2.5 px-3 rounded-xl text-sm font-semibold border border-orange-500/35 bg-orange-600/12 text-orange-100 hover:bg-orange-600/20 transition-colors flex items-center justify-center gap-2"
               >
-                <Monitor size={18} className="text-blue-400 shrink-0" />
-                Другое устройство — по ссылке
+                <Monitor size={18} className="text-orange-400 shrink-0" />
+                Установить на другое устройство
               </button>
             )}
           </div>
         )}
 
-        {instructionPlainLinkMode && (
-          <div className="mb-4 rounded-2xl border border-sky-500/20 bg-gradient-to-r from-sky-950/30 to-transparent px-4 py-3 text-xs text-sky-100/85 leading-relaxed">
-            Ссылка ниже — как есть, для ручной вставки в Happ на другом устройстве. На этом телефоне вы уже могли настроить VPN раньше.
+        {/* Ready badge — only after purchase, not when opening from devices */}
+        {!instructionSourceDeviceId && (
+          <div className="flex items-center gap-3 bg-orange-500/10 border border-orange-500/20 rounded-2xl px-4 py-3 mb-6">
+            <div className="w-8 h-8 rounded-full bg-orange-500/20 flex items-center justify-center flex-shrink-0">
+              <CheckCircle size={16} className="text-orange-400" />
+            </div>
+            <div>
+              <div className="text-orange-300 font-semibold text-sm leading-tight">Устройство готово</div>
+              <div className="text-orange-400/60 text-xs mt-0.5">Следуйте инструкции ниже для подключения.</div>
+            </div>
           </div>
         )}
-
-        {/* Ready badge */}
-        <div className="flex items-center gap-3 bg-blue-500/10 border border-blue-500/20 rounded-2xl px-4 py-3 mb-6">
-          <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center flex-shrink-0">
-            <CheckCircle size={16} className="text-blue-400" />
-          </div>
-          <div>
-            <div className="text-blue-300 font-semibold text-sm leading-tight">Устройство готово</div>
-            <div className="text-blue-400/60 text-xs mt-0.5">Следуйте инструкции ниже для подключения.</div>
-          </div>
-        </div>
 
         {/* Steps */}
         <div className="flex-1 overflow-y-auto pb-8 space-y-3">
           {steps.map((step, idx) => (
-            <div key={idx} className="bg-zinc-800/40 border border-zinc-700/50 rounded-2xl p-4">
+            <div key={`${instructionPlainLinkMode ? 'plain' : 'normal'}-${activePlatform}-${idx}-${step.title}`} className="bg-zinc-800/40 border border-zinc-700/50 rounded-2xl p-4">
               <div className="flex items-center gap-3 mb-3">
-                <div className="w-7 h-7 rounded-full bg-blue-600/20 border border-blue-500/30 flex items-center justify-center flex-shrink-0">
-                  <span className="text-blue-400 text-xs font-bold">{idx + 1}</span>
+                <div className="w-7 h-7 rounded-full bg-orange-600/20 border border-orange-500/30 flex items-center justify-center flex-shrink-0">
+                  <span className="text-orange-400 text-xs font-bold">{idx + 1}</span>
                 </div>
                 <h3 className="font-bold text-white text-base leading-tight">{step.title}</h3>
               </div>
@@ -2995,13 +2914,18 @@ export default function App() {
                           setActivePlatform('android');
                         } else if (action.type === 'nav_ios') {
                           setActivePlatform('ios');
-                        } else if (action.url && isAllowedExternalUrl(action.url)) {
-                          openExternalUrl(action.url);
+                        } else if (action.url) {
+                          const w = window as any;
+                          if (action.url.startsWith('happ://') && w.Telegram?.WebApp?.openLink) {
+                            w.Telegram.WebApp.openLink(action.url);
+                          } else {
+                            window.open(action.url, '_blank');
+                          }
                         }
                       }}
                       className={`py-2.5 px-4 rounded-xl text-sm font-semibold text-center transition-all active:scale-[0.98] ${
                         action.primary 
-                        ? 'bg-blue-600/20 text-blue-300 hover:bg-blue-600/30 border border-blue-500/30' 
+                        ? 'bg-orange-600/20 text-orange-300 hover:bg-orange-600/30 border border-orange-500/30' 
                         : 'bg-zinc-700/60 text-zinc-300 hover:bg-zinc-700 border border-zinc-600/40'
                       }`}
                     >
@@ -3135,7 +3059,7 @@ export default function App() {
                 handleCopy(`https://t.me/${BOT_USERNAME_MINI}?start=ref${telegramId}`);
               }
             }}
-            className="bg-blue-600 px-4 rounded-lg text-white hover:bg-blue-500"
+            className="bg-orange-600 px-4 rounded-lg text-white hover:bg-orange-500"
           >
             <Copy size={18} />
           </button>
@@ -3267,13 +3191,13 @@ export default function App() {
     return (
       <AnimatedBackground>
         <div className="p-4 min-h-screen flex flex-col items-center justify-center">
-          <div className="w-full max-w-sm rounded-3xl border border-zinc-800 bg-gradient-to-b from-zinc-950/90 to-black/90 p-6 shadow-2xl shadow-blue-950/25 animate-scale-in overflow-hidden relative">
-            <div className="absolute -top-24 -right-24 w-72 h-72 bg-blue-600/20 blur-3xl rounded-full" />
+          <div className="w-full max-w-sm rounded-3xl border border-zinc-800 bg-gradient-to-b from-zinc-950/90 to-black/90 p-6 shadow-2xl shadow-orange-950/25 animate-scale-in overflow-hidden relative">
+            <div className="absolute -top-24 -right-24 w-72 h-72 bg-orange-600/20 blur-3xl rounded-full" />
             <div className="absolute -bottom-24 -left-24 w-72 h-72 bg-green-600/10 blur-3xl rounded-full" />
 
             <div className="relative">
-              <div className="w-16 h-16 rounded-2xl bg-blue-600/15 border border-blue-500/20 flex items-center justify-center mb-4">
-                <MessageCircle size={28} className="text-blue-400" />
+              <div className="w-16 h-16 rounded-2xl bg-orange-600/15 border border-orange-500/20 flex items-center justify-center mb-4">
+                <MessageCircle size={28} className="text-orange-400" />
               </div>
 
               <h1 className="text-2xl font-extrabold text-white mb-2 leading-tight">
@@ -3294,7 +3218,7 @@ export default function App() {
                   href={requiredChannelLink}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center justify-center w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-2xl text-white font-bold transition-all hover:scale-[1.01]"
+                  className="flex items-center justify-center w-full py-4 bg-orange-600 hover:bg-orange-500 rounded-2xl text-white font-bold transition-all hover:scale-[1.01]"
                 >
                   Подписаться
                 </a>
@@ -3410,7 +3334,7 @@ export default function App() {
         {view === 'devices' && <DevicesView />}
         {view === 'extend_subscription' && <ExtendSubscriptionView />}
         {view === 'buy_device' && <BuyDeviceView />}
-        {view === 'instruction_view' && <InstructionView />}
+        {view === 'instruction_view' && <InstructionView key="instruction" />}
         {view === 'history' && <HistoryView />}
         {view === 'referral' && <ReferralView />}
         {view === 'referral_detail' && <ReferralDetailView />}
@@ -3419,12 +3343,10 @@ export default function App() {
       
       {/* USER LOAD FAILED BANNER */}
       {userLoadFailed && (
-        <div className="fixed inset-x-0 bottom-0 z-[200] pointer-events-auto">
-          {/* Backdrop blur overlay */}
-          <div className="absolute inset-x-0 bottom-0 h-[55vh] bg-gradient-to-t from-black/90 via-black/60 to-transparent pointer-events-none" />
-          <div className="relative bg-zinc-900 border-t border-zinc-700/60 rounded-t-3xl px-6 pt-6 pb-10 shadow-2xl">
-            {/* Handle */}
-            <div className="w-10 h-1 bg-zinc-700 rounded-full mx-auto mb-6" />
+        <div className="fixed inset-0 z-[200] pointer-events-auto flex items-center justify-center p-6">
+          {/* Heavy backdrop blur */}
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-xl" />
+          <div className="relative bg-zinc-900/90 border border-zinc-700/60 rounded-3xl px-6 pt-8 pb-8 shadow-2xl w-full max-w-sm">
             {/* Icon */}
             <div className="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mx-auto mb-5">
               <AlertTriangle size={30} className="text-red-400" />
@@ -3441,7 +3363,7 @@ export default function App() {
               href={SUPPORT_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center justify-center gap-2 w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-all"
+              className="flex items-center justify-center gap-2 w-full py-4 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded-2xl transition-all"
             >
               <MessageCircle size={20} />
               Поддержка
@@ -3499,7 +3421,7 @@ export default function App() {
               placeholder="Сумма вывода"
               value={withdrawState.amount}
               onChange={(e) => setWithdrawState({ ...withdrawState, amount: e.target.value })}
-              className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white focus:border-blue-500 outline-none"
+              className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white focus:border-orange-500 outline-none"
             />
             <Button onClick={handleWithdrawNext}>Далее</Button>
           </div>
@@ -3515,7 +3437,7 @@ export default function App() {
                 disabled={Number(withdrawState.amount) < method.min && method.min > 0}
                 className={`w-full p-4 rounded-xl flex items-center justify-between transition-all border ${
                   withdrawState.method === method.id
-                  ? 'bg-blue-600/10 border-blue-600 text-white'
+                  ? 'bg-orange-600/10 border-orange-600 text-white'
                   : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-750 disabled:opacity-50 disabled:cursor-not-allowed'
                 }`}
               >
@@ -3530,7 +3452,7 @@ export default function App() {
                     )}
                   </div>
                 </div>
-                {withdrawState.method === method.id && <CheckCircle size={20} className="text-blue-500" />}
+                {withdrawState.method === method.id && <CheckCircle size={20} className="text-orange-500" />}
               </button>
             ))}
             <div className="pt-4 flex gap-3">
@@ -3556,7 +3478,7 @@ export default function App() {
                   placeholder="Номер карты"
                   value={withdrawState.cardNumber}
                   onChange={(e) => setWithdrawState({ ...withdrawState, cardNumber: e.target.value })}
-                  className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white mb-2 focus:border-blue-500 outline-none"
+                  className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white mb-2 focus:border-orange-500 outline-none"
                 />
               </>
             )}
@@ -3573,7 +3495,7 @@ export default function App() {
                 <select
                   value={withdrawState.cryptoNet}
                   onChange={(e) => setWithdrawState({ ...withdrawState, cryptoNet: e.target.value })}
-                  className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white mb-2 focus:border-blue-500 outline-none"
+                  className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white mb-2 focus:border-orange-500 outline-none"
                 >
                   <option value="">Выберите сеть</option>
                   <option value="TON">TON</option>
@@ -3584,7 +3506,7 @@ export default function App() {
                   placeholder="Адрес кошелька"
                   value={withdrawState.cryptoAddr}
                   onChange={(e) => setWithdrawState({ ...withdrawState, cryptoAddr: e.target.value })}
-                  className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white focus:border-blue-500 outline-none font-mono text-sm"
+                  className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white focus:border-orange-500 outline-none font-mono text-sm"
                 />
               </>
             )}
@@ -3622,7 +3544,7 @@ export default function App() {
             {[0, 1, 2].map(i => (
               <div 
                 key={i} 
-                className={`w-2 h-2 rounded-full transition-all ${i === onboardingStep ? 'bg-blue-500 w-6' : 'bg-zinc-700'}`}
+                className={`w-2 h-2 rounded-full transition-all ${i === onboardingStep ? 'bg-orange-500 w-6' : 'bg-zinc-700'}`}
               />
             ))}
           </div>
@@ -3674,7 +3596,7 @@ export default function App() {
               <>
                 <button 
                   onClick={() => setOnboardingStep(prev => prev + 1)}
-                  className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold transition-all hover:scale-[1.01]"
+                  className="w-full py-4 bg-orange-600 hover:bg-orange-500 text-white rounded-2xl font-bold transition-all hover:scale-[1.01]"
                 >
                   Начнем
                 </button>
@@ -3694,7 +3616,7 @@ export default function App() {
                   setShowOnboarding(false);
                   localStorage.setItem(`onboarding_${telegramId}`, 'true');
                 }}
-                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold transition-all hover:scale-[1.01]"
+                className="w-full py-4 bg-orange-600 hover:bg-orange-500 text-white rounded-2xl font-bold transition-all hover:scale-[1.01]"
               >
                 Начать пользоваться
               </button>
@@ -3704,9 +3626,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-}
-
-/** Обёртка для main.tsx — контекст вынесен в App, провайдер без состояния */
-export function MiniAppProvider({ children }: { children: React.ReactNode }) {
-  return <>{children}</>;
 }
