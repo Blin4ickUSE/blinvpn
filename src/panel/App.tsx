@@ -2262,7 +2262,9 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
     const [selectedHistoryItem, setSelectedHistoryItem] = useState<any | null>(null);
     const [message, setMessage] = useState('');
     const [buttonType, setButtonType] = useState<string>('');
-    const [buttonValue, setButtonValue] = useState('');
+    const [buttonLabel, setButtonLabel] = useState('');
+    const [buttonUrl, setButtonUrl] = useState('');
+    const [promoCode, setPromoCode] = useState('');
     const [imageUrl, setImageUrl] = useState('');
     const [targetUsers, setTargetUsers] = useState('all');
 
@@ -2295,6 +2297,15 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
             onToast('Ошибка', 'Введите текст сообщения', 'error');
             return;
         }
+        if (buttonType === 'external_link' || buttonType === 'open_miniapp') {
+            if (!buttonLabel.trim() || !buttonUrl.trim()) {
+                onToast('Ошибка', 'Укажите текст кнопки и ссылку', 'error');
+                return;
+            }
+        } else if (buttonType === 'activate_promo' && !promoCode.trim()) {
+            onToast('Ошибка', 'Укажите промокод', 'error');
+            return;
+        }
         if (!confirm('Подтвердить отправку рассылки?')) return;
         try {
             const payload: any = {
@@ -2302,9 +2313,12 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                 target_users: targetUsers,
                 title: message.substring(0, 50)
             };
-            if (buttonType && buttonValue) {
+            if (buttonType === 'external_link' || buttonType === 'open_miniapp') {
                 payload.button_type = buttonType;
-                payload.button_value = buttonValue;
+                payload.button_value = `${buttonLabel.trim()}|${buttonUrl.trim()}`;
+            } else if (buttonType === 'activate_promo') {
+                payload.button_type = buttonType;
+                payload.button_value = promoCode.trim();
             }
             if (imageUrl.trim()) {
                 payload.image_url = imageUrl.trim();
@@ -2316,7 +2330,9 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
             onToast('Рассылка', 'Сообщения поставлены в очередь', 'success');
             setMessage('');
             setButtonType('');
-            setButtonValue('');
+            setButtonLabel('');
+            setButtonUrl('');
+            setPromoCode('');
             setImageUrl('');
             // Обновляем статистику и историю
             const statsData = await apiFetch('/panel/mailing/stats');
@@ -2333,8 +2349,14 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
         { value: 'external_link', label: 'Сторонняя ссылка' },
         { value: 'open_miniapp', label: 'Открыть мини-приложение' },
         { value: 'activate_promo', label: 'Активировать промокод' },
-        { value: 'add_balance', label: 'Добавить баланс' },
     ];
+
+    const handleButtonTypeChange = (value: string) => {
+        setButtonType(value);
+        setButtonLabel('');
+        setButtonUrl('');
+        setPromoCode('');
+    };
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -2361,31 +2383,56 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                     placeholder="Введите текст рассылки... Поддерживается Markdown"
                                 />
                             </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <label className="text-sm text-gray-400 mb-1.5 block">Тип кнопки</label>
-                                    <select 
-                                        value={buttonType}
-                                        onChange={(e) => setButtonType(e.target.value)}
-                                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-orange-500"
-                                    >
-                                        {buttonTypes.map(bt => (
-                                            <option key={bt.value} value={bt.value}>{bt.label}</option>
-                                        ))}
-                                    </select>
+                            <div>
+                                <label className="text-sm text-gray-400 mb-1.5 block">Тип кнопки</label>
+                                <select 
+                                    value={buttonType}
+                                    onChange={(e) => handleButtonTypeChange(e.target.value)}
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-orange-500"
+                                >
+                                    {buttonTypes.map(bt => (
+                                        <option key={bt.value} value={bt.value}>{bt.label}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            {(buttonType === 'external_link' || buttonType === 'open_miniapp') && (
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="text-sm text-gray-400 mb-1.5 block">Текст на кнопке</label>
+                                        <input 
+                                            type="text" 
+                                            value={buttonLabel}
+                                            onChange={(e) => setButtonLabel(e.target.value)}
+                                            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-orange-500" 
+                                            placeholder={buttonType === 'open_miniapp' ? 'Открыть приложение' : 'Перейти'}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-sm text-gray-400 mb-1.5 block">
+                                            {buttonType === 'open_miniapp' ? 'Ссылка мини-приложения' : 'Ссылка'}
+                                        </label>
+                                        <input 
+                                            type="text" 
+                                            value={buttonUrl}
+                                            onChange={(e) => setButtonUrl(e.target.value)}
+                                            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-orange-500" 
+                                            placeholder={buttonType === 'open_miniapp' ? 'https://app.example.com' : 'https://example.com'}
+                                        />
+                                    </div>
                                 </div>
+                            )}
+                            {buttonType === 'activate_promo' && (
                                 <div>
-                                    <label className="text-sm text-gray-400 mb-1.5 block">Значение</label>
+                                    <label className="text-sm text-gray-400 mb-1.5 block">Промокод</label>
                                     <input 
                                         type="text" 
-                                        value={buttonValue}
-                                        onChange={(e) => setButtonValue(e.target.value)}
+                                        value={promoCode}
+                                        onChange={(e) => setPromoCode(e.target.value)}
                                         className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-orange-500" 
-                                        placeholder={buttonType === 'external_link' ? 'https://example.com' : buttonType === 'activate_promo' ? 'PROMOCODE' : buttonType === 'add_balance' ? '100' : 'Введите значение...'}
-                                        disabled={!buttonType}
+                                        placeholder="PROMOCODE"
                                     />
                                 </div>
-                            </div>
+                            )}
                             <div>
                                 <label className="text-sm text-gray-400 mb-1.5 block">Картинка (URL, опционально)</label>
                                 <input

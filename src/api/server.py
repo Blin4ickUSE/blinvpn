@@ -2183,17 +2183,25 @@ def send_mailing():
                 # Внешняя ссылка: значение может быть "Текст|URL" или просто URL
                 if '|' in button_value:
                     btn_text, btn_url = button_value.split('|', 1)
+                    btn_text = (btn_text or '').strip() or 'Перейти'
+                    btn_url = (btn_url or '').strip()
                 else:
                     btn_text = 'Перейти'
-                    btn_url = button_value
+                    btn_url = button_value.strip()
                 reply_markup = {
                     'inline_keyboard': [[{'text': btn_text, 'url': btn_url}]]
                 }
             elif button_type == 'open_miniapp' or button_type == 'webapp':
-                # Открытие мини-приложения
-                btn_text = button_value if button_value else 'Открыть приложение'
+                # Мини-приложение: значение «Текст|URL» или только URL
+                if '|' in button_value:
+                    btn_text, btn_url = button_value.split('|', 1)
+                    btn_text = btn_text.strip() or 'Открыть приложение'
+                    btn_url = btn_url.strip() or miniapp_url
+                else:
+                    btn_text = 'Открыть приложение'
+                    btn_url = button_value.strip() or miniapp_url
                 reply_markup = {
-                    'inline_keyboard': [[{'text': btn_text, 'web_app': {'url': miniapp_url}}]]
+                    'inline_keyboard': [[{'text': btn_text, 'web_app': {'url': btn_url}}]]
                 }
             elif button_type == 'activate_promo':
                 # Кнопка с промокодом - добавляет промокод в deep link
