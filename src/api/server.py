@@ -23,6 +23,7 @@ from src.core import core
 from src.core import messages as notify_msgs
 from src.core.blacklist import start_blacklist_updater, update_blacklist
 from src.api import remnawave, heleket, platega, rollypay, cryptopay
+from src.core import payment_wait
 
 app = Flask(__name__)
 
@@ -255,6 +256,9 @@ def reconcile_pending_cryptopay_for_user(user_id: int) -> None:
                     )
                 )
             logger.info("CryptoPay reconciled pending payment %s for user_id=%s amount=%s", payment_id, user_id, amount)
+            from src.core import payment_wait
+
+            payment_wait.notify_payment_completed(int(user_id))
     except Exception as e:
         logger.warning("CryptoPay reconcile failed for user_id=%s: %s", user_id, e)
         try:
@@ -1168,6 +1172,85 @@ def create_payment():
         logger.error(f"Payment creation error for method {method}: {e}")
     
     return jsonify({'error': 'Payment creation failed'}), 500
+
+
+def _payment_status_response(user_id: int, payment_id: str | None, baseline_balance: float):
+    completed = payment_wait.is_payment_completed(
+        user_id, payment_id or None, baseline_balance
+    )
+    user = database.get_user_by_id(int(user_id))
+    balance = float(user.get('balance') or 0) if user else 0.0
+    return {
+        'completed': completed,
+        'balance': balance,
+    }
+
+
+@app.route('/api/payment/status', methods=['GET'])
+def payment_status():
+    """Проверить, зачислен ли платёж (после webhook или reconcile)."""
+    user_id = request.args.get('user_id', type=int)
+    payment_id = (request.args.get('payment_id') or '').strip() or None
+    baseline_balance = request.args.get('baseline_balance', type=float, default=0.0)
+
+    if not user_id:
+        return jsonify({'error': 'user_id required'}), 400
+
+    user = database.get_user_by_id(user_id)
+    auth_err = enforce_user_id_auth(user_id, user)
+    if auth_err:
+        return auth_err
+
+    return jsonify(_payment_status_response(user_id, payment_id, baseline_balance))
+
+
+@app.route('/api/payment/wait', methods=['GET'])
+def payment_wait_long_poll():
+    """
+    Long-poll: ждёт webhook-уведомление или проверяет БД до timeout секунд.
+    Miniapp вызывает в цикле для мгновенного UX после оплаты.
+    """
+    user_id = request.args.get('user_id', type=int)
+    payment_id = (request.args.get('payment_id') or '').strip() or None
+    baseline_balance = request.args.get('baseline_balance', type=float, default=0.0)
+    timeout = request.args.get('timeout', type=int, default=55)
+    timeout = max(1, min(int(timeout or 55), 90))
+
+    if not user_id:
+        return jsonify({'error': 'user_id required'}), 400
+
+    user = database.get_user_by_id(user_id)
+    auth_err = enforce_user_id_auth(user_id, user)
+    if auth_err:
+        return auth_err
+
+    def _check() -> bool:
+        return payment_wait.is_payment_completed(
+            user_id, payment_id, baseline_balance
+        )
+
+    if not _check():
+        payment_wait.wait_for_user_payment(user_id, float(timeout), _check)
+
+    return jsonify(_payment_status_response(user_id, payment_id, baseline_balance))
+
+
+@app.route('/api/internal/payment-completed', methods=['POST'])
+def internal_payment_completed():
+    """Вызов из webhook-контейнера после зачисления (INTERNAL_API_SECRET)."""
+    secret = (os.getenv('INTERNAL_API_SECRET') or '').strip()
+    if not secret:
+        return jsonify({'error': 'Not configured'}), 404
+    got = (request.headers.get('X-Internal-Secret') or '').strip()
+    if not got or not hmac.compare_digest(got, secret):
+        return jsonify({'error': 'Forbidden'}), 403
+    data = request.json if request.is_json else {}
+    user_id = data.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'user_id required'}), 400
+    payment_wait.wake_payment_waiters(int(user_id))
+    return jsonify({'ok': True})
+
 
 @app.route('/api/promocode/apply', methods=['POST'])
 def apply_promocode():

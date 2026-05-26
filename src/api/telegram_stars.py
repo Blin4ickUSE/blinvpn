@@ -214,6 +214,9 @@ def process_successful_payment(successful: Dict[str, Any]) -> bool:
             logger.warning("Stars payment notifications failed: %s", e)
 
     logger.info("Stars payment credited: user_id=%s amount=%s payload=%s", user_id, total_amount, payload)
+    from src.core import payment_wait
+
+    payment_wait.notify_payment_completed(int(user_id))
     return True
 
 

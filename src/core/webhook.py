@@ -10,6 +10,7 @@ from src.api import heleket, platega, rollypay, cryptopay
 from src.database import database
 from src.core import core
 from src.core import messages as notify_msgs
+from src.core import payment_wait
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,7 @@ def credit_deposit_from_payment(
         amount,
         user_id,
     )
+    payment_wait.notify_payment_completed(int(user_id))
     return True
 
 @app.route('/heleket', methods=['POST'])
@@ -197,6 +199,7 @@ def heleket_webhook():
                     notify_admin_about_deposit(user, amount, 'Криптовалюта', 'Heleket')
                 
                 logger.info(f"Heleket платеж {uuid or order_id} успешно обработан: {amount}₽ для user {user_id}")
+                payment_wait.notify_payment_completed(user_id)
             else:
                 logger.error(f"Heleket webhook: некорректный order_id {order_id}")
         
@@ -353,6 +356,7 @@ def platega_webhook():
                 notify_admin_about_deposit(user, amount, method_name, 'Platega')
             
             logger.info(f"Platega платеж {transaction_id} успешно обработан: {amount}₽ для user {user_id}")
+            payment_wait.notify_payment_completed(user_id)
         
         return jsonify({'status': 'ok'}), 200
     except Exception as e:
@@ -559,6 +563,7 @@ def handle_cryptopay_webhook():
             )
             notify_admin_about_deposit(user, float(amount or 0), "CryptoPay", "CryptoPay")
 
+        payment_wait.notify_payment_completed(int(user_id))
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         logger.error("CryptoPay webhook error: %s", e)

@@ -27,13 +27,16 @@ async function miniApiFetch(path: string, options: RequestInit = {}): Promise<an
   // Всегда используем относительный путь /api - nginx проксирует на backend
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   const url = `/api${cleanPath}`;
-  
+  const initData = (window as any).Telegram?.WebApp?.initData || '';
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string> | undefined),
+  };
+  if (initData) headers['X-Telegram-Init-Data'] = initData;
+
   const res = await fetch(url, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
+    headers,
   });
   
   // Обработка бана (статус 403)
@@ -895,6 +898,9 @@ export default function App() {
   const [selectedVariant, setSelectedVariant] = useState<string | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>(PAYMENT_METHODS_DEFAULT);
   const [paymentUrl, setPaymentUrl] = useState<string | null>(null); // URL для оплаты
+  const [pendingPaymentId, setPendingPaymentId] = useState<string | null>(null);
+  const [paymentBaselineBalance, setPaymentBaselineBalance] = useState(0);
+  const [paymentInstantCheck, setPaymentInstantCheck] = useState(0);
   
   // Pending Purchase
   const [pendingAction, setPendingAction] = useState<{ type: string, payload: any } | null>(null);
@@ -2517,6 +2523,9 @@ export default function App() {
                     methodKey = selectedVariant;
                   }
                   
+                  setPaymentBaselineBalance(balance);
+                  setPendingPaymentId(null);
+
                   const res = await miniApiFetch('/payment/create', {
                     method: 'POST',
                     body: JSON.stringify({
@@ -2527,6 +2536,9 @@ export default function App() {
                   });
 
                   const payUrl = res.confirmation_url || res.payment_url;
+                  const paymentId = res.payment_id ? String(res.payment_id) : null;
+                  if (paymentId) setPendingPaymentId(paymentId);
+
                   if (payUrl) {
                     setPaymentUrl(payUrl);
                     // Открываем оплату в Telegram. Для Stars используем openInvoice.
@@ -2536,8 +2548,9 @@ export default function App() {
                         tg.openInvoice(payUrl, (status: string) => {
                           if (status === 'failed') {
                             alert('Оплата не прошла. Попробуйте ещё раз или выберите другой способ.');
+                          } else if (status === 'paid') {
+                            setPaymentInstantCheck((n) => n + 1);
                           }
-                          // status === 'paid' — баланс проверится на экране ожидания оплаты
                         });
                       } else if (typeof tg?.openLink === 'function') {
                         tg.openLink(payUrl);
@@ -2583,126 +2596,169 @@ export default function App() {
   );
   
   const PaymentWaitView = () => {
-    const [checking, setChecking] = useState(false);
-    const [pollingActive, setPollingActive] = useState(false);
-    const checkingRef = useRef(false);
-    
-    const doPaymentCheck = async () => {
-      if (checkingRef.current) return;
-      checkingRef.current = true;
-      setChecking(true);
-      
-      try {
-        const oldBalance = balance;
-        const result = await refreshUserData();
-        const newBalance = result?.balance ?? oldBalance;
-        
-        if (newBalance > oldBalance) {
-          const depositAmount = newBalance - oldBalance;
-          addHistoryItem('deposit', 'Пополнение баланса', depositAmount);
-          setPollingActive(false);
-          
-          // Если была отложенная покупка - выполняем её
-          if (pendingAction) {
-            const action = pendingAction;
-            const payload = action.payload;
-            
-            // Проверяем, достаточно ли средств теперь
-            if (newBalance >= payload.price) {
-              try {
-                const currentUserId = await ensureUserId();
-                if (currentUserId) {
-                  // Если это продление существующей подписки
-                  if (action.type === 'extend' && payload.device && payload.plan) {
-                    const extDevices = payload.devices ?? normalizedDevicesCount(payload.device.devices_limit || 2);
-                    const res = await miniApiFetch('/subscription/extend', {
-                      method: 'POST',
-                      body: JSON.stringify({
-                        user_id: currentUserId,
-                        key_id: payload.device.id,
-                        days: payload.plan.days,
-                        price: payload.price,
-                        devices: extDevices,
-                      }),
-                    });
-                    
-                    if (res && res.success) {
-                      addHistoryItem('extend', `Продление подписки (${payload.plan.duration})`, -payload.price);
-                      setPendingAction(null);
-                      setPaymentUrl(null);
-                      setExtendingDevice(null);
-                      setExtendPlan(null);
-                      await refreshAll();
-                      setView('devices');
-                      return;
-                    }
-                  } else {
-                    // Создаём новую подписку
-                    const res = await miniApiFetch('/subscription/create', {
-                      method: 'POST',
-                      body: JSON.stringify({
-                        user_id: currentUserId,
-                        days: payload.wizardPlan?.days || 30,
-                        type: 'vpn',
-                        price: payload.price,
-                        devices: payload.wizardDeviceCount ?? 2,
-                      }),
-                    });
-                    
-                    if (res && res.success) {
-                      addHistoryItem('buy_dev', `Подключение: ${payload.name}`, -payload.price);
-                      setPendingAction(null);
-                      setPaymentUrl(null);
-                      await refreshAll();
-                      setInstructionSourceDeviceId(null);
-                      setWizardSuccessPlainDevice(false);
-                      setWizardStep(4);
-                      setView('wizard');
-                      return;
-                    }
-                  }
+    const PAYMENT_FALLBACK_MS = 10 * 60 * 1000;
+    const PAYMENT_MAX_WAIT_MS = 2 * 60 * 60 * 1000;
+    const handlingRef = useRef(false);
+    const completedRef = useRef(false);
+    const cancelledRef = useRef(false);
+
+    const paymentStatusQuery = () => {
+      const pid = pendingPaymentId ? encodeURIComponent(pendingPaymentId) : '';
+      const pidPart = pid ? `&payment_id=${pid}` : '';
+      return `/payment/status?user_id=${userId}&baseline_balance=${paymentBaselineBalance}${pidPart}`;
+    };
+
+    const paymentWaitQuery = () => {
+      const pid = pendingPaymentId ? encodeURIComponent(pendingPaymentId) : '';
+      const pidPart = pid ? `&payment_id=${pid}` : '';
+      return `/payment/wait?user_id=${userId}&baseline_balance=${paymentBaselineBalance}${pidPart}&timeout=55`;
+    };
+
+    const finalizePaymentSuccess = async (newBalance: number) => {
+      const depositAmount = Math.max(0, newBalance - paymentBaselineBalance);
+      if (depositAmount > 0) {
+        addHistoryItem('deposit', 'Пополнение баланса', depositAmount);
+      }
+      setPendingPaymentId(null);
+
+      if (pendingAction) {
+        const action = pendingAction;
+        const payload = action.payload;
+
+        if (newBalance >= payload.price) {
+          try {
+            const currentUserId = await ensureUserId();
+            if (currentUserId) {
+              if (action.type === 'extend' && payload.device && payload.plan) {
+                const extDevices = payload.devices ?? normalizedDevicesCount(payload.device.devices_limit || 2);
+                const res = await miniApiFetch('/subscription/extend', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    user_id: currentUserId,
+                    key_id: payload.device.id,
+                    days: payload.plan.days,
+                    price: payload.price,
+                    devices: extDevices,
+                  }),
+                });
+
+                if (res && res.success) {
+                  addHistoryItem('extend', `Продление подписки (${payload.plan.duration})`, -payload.price);
+                  setPendingAction(null);
+                  setPaymentUrl(null);
+                  setExtendingDevice(null);
+                  setExtendPlan(null);
+                  await refreshAll();
+                  setView('devices');
+                  return;
                 }
-              } catch (e) {
-                console.error('Failed to process pending action after payment', e);
+              } else {
+                const res = await miniApiFetch('/subscription/create', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    user_id: currentUserId,
+                    days: payload.wizardPlan?.days || 30,
+                    type: 'vpn',
+                    price: payload.price,
+                    devices: payload.wizardDeviceCount ?? 2,
+                  }),
+                });
+
+                if (res && res.success) {
+                  addHistoryItem('buy_dev', `Подключение: ${payload.name}`, -payload.price);
+                  setPendingAction(null);
+                  setPaymentUrl(null);
+                  await refreshAll();
+                  setInstructionSourceDeviceId(null);
+                  setWizardSuccessPlainDevice(false);
+                  setWizardStep(4);
+                  setView('wizard');
+                  return;
+                }
               }
             }
-            
-            // Если не удалось выполнить действие - просто переходим к инструкциям
-            setPendingAction(null);
-            setPaymentUrl(null);
-            setInstructionPlainLinkMode(false);
-            setActivePlatform(successInstructionPlatform);
-            await refreshDevices();
-            setView('instruction_view');
-          } else {
-            // Просто пополнение баланса - на главную
-            setPaymentUrl(null);
-            await refreshAll();
-            setView('home');
+          } catch (e) {
+            console.error('Failed to process pending action after payment', e);
           }
         }
-      } finally {
-        checkingRef.current = false;
-        setChecking(false);
+
+        setPendingAction(null);
+        setPaymentUrl(null);
+        setInstructionPlainLinkMode(false);
+        setActivePlatform(successInstructionPlatform);
+        await refreshDevices();
+        setView('instruction_view');
+      } else {
+        setPaymentUrl(null);
+        await refreshAll();
+        setView('home');
       }
     };
-    
-    // Автоматическая проверка баланса каждые 3 секунды
+
+    const tryCompletePayment = async (): Promise<boolean> => {
+      if (!userId || completedRef.current || handlingRef.current || cancelledRef.current) return false;
+      handlingRef.current = true;
+      try {
+        const status = await miniApiFetch(paymentStatusQuery());
+        if (!status?.completed) return false;
+        if (completedRef.current) return true;
+        completedRef.current = true;
+
+        const refreshed = await refreshUserData();
+        const newBalance = refreshed?.balance ?? status.balance ?? balance;
+        await finalizePaymentSuccess(newBalance);
+        return true;
+      } catch (e) {
+        console.error('Payment status check failed', e);
+        return false;
+      } finally {
+        handlingRef.current = false;
+      }
+    };
+
     useEffect(() => {
-      if (!pollingActive) return;
-      
-      const interval = setInterval(() => {
-        doPaymentCheck();
-      }, 3000);
-      
-      return () => clearInterval(interval);
-    }, [pollingActive]);
-    
-    // Запускаем polling при открытии страницы
-    useEffect(() => {
-      setPollingActive(true);
-      return () => setPollingActive(false);
-    }, []);
+      if (!userId) return;
+
+      cancelledRef.current = false;
+      const startedAt = Date.now();
+
+      const runLongPollLoop = async () => {
+        while (!cancelledRef.current && Date.now() - startedAt < PAYMENT_MAX_WAIT_MS) {
+          try {
+            const waitRes = await miniApiFetch(paymentWaitQuery());
+            if (cancelledRef.current) return;
+            if (waitRes?.completed) {
+              if (completedRef.current) return;
+              completedRef.current = true;
+              const refreshed = await refreshUserData();
+              const newBalance = refreshed?.balance ?? waitRes.balance ?? balance;
+              await finalizePaymentSuccess(newBalance);
+              return;
+            }
+          } catch (e) {
+            if (cancelledRef.current) return;
+            console.error('Payment wait long-poll failed', e);
+            await new Promise((r) => setTimeout(r, 3000));
+          }
+        }
+      };
+
+      tryCompletePayment();
+      runLongPollLoop();
+
+      const fallbackTimer = setInterval(() => {
+        if (cancelledRef.current || Date.now() - startedAt >= PAYMENT_MAX_WAIT_MS) {
+          clearInterval(fallbackTimer);
+          return;
+        }
+        tryCompletePayment();
+      }, PAYMENT_FALLBACK_MS);
+
+      return () => {
+        cancelledRef.current = true;
+        clearInterval(fallbackTimer);
+      };
+    }, [userId, pendingPaymentId, paymentBaselineBalance, paymentInstantCheck]);
     
     const openPayment = () => {
       if (!paymentUrl) return;
@@ -2723,7 +2779,7 @@ export default function App() {
         {/* Шапка с крестиком — как Header в других экранах */}
         <div className="flex items-center gap-3 mb-6">
           <button
-            onClick={() => { setPaymentUrl(null); setPendingAction(null); setPollingActive(false); setView('home'); }}
+            onClick={() => { setPaymentUrl(null); setPendingAction(null); setPendingPaymentId(null); setView('home'); }}
             className="w-10 h-10 rounded-full bg-zinc-900 flex items-center justify-center text-zinc-300 hover:text-white transition-colors"
           >
             <X size={20} />
@@ -2750,12 +2806,6 @@ export default function App() {
               : 'Завершите оплату в открывшемся окне'}
           </p>
 
-          {checking && (
-            <div className="flex items-center gap-2 mt-4">
-              <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse" />
-              <span className="text-xs text-zinc-500">Проверяем...</span>
-            </div>
-          )}
         </div>
 
         {/* Кнопки — стандартный Button из приложения */}
