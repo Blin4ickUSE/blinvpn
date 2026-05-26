@@ -1,0 +1,15 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY src/miniapp/package*.json ./
+RUN npm install
+
+COPY src/miniapp/ ./
+
+# dist — только бандл; sdk кладём в dist/sdk один раз при сборке образа (не в git)
+RUN npm run build && cp -r sdk dist/sdk
+
+EXPOSE 3000
+
+CMD ["npx", "serve", "-s", "dist", "-l", "3000", "--cors", "-L"]

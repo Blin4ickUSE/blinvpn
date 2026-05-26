@@ -3,7 +3,7 @@ services:
   bot:
     build:
       context: .
-      dockerfile: Dockerfile.bot
+      dockerfile: deploy/docker/Dockerfile.bot
     container_name: blinvpn_bot
     restart: unless-stopped
     env_file:
@@ -17,7 +17,7 @@ services:
   webhook:
     build:
       context: .
-      dockerfile: Dockerfile.webhook
+      dockerfile: deploy/docker/Dockerfile.webhook
     container_name: blinvpn_webhook
     restart: unless-stopped
     ports:
@@ -31,7 +31,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile.api
+      dockerfile: deploy/docker/Dockerfile.api
     container_name: blinvpn_api
     restart: unless-stopped
     env_file:
@@ -45,7 +45,7 @@ services:
   miniapp:
     build:
       context: .
-      dockerfile: Dockerfile.miniapp
+      dockerfile: deploy/docker/Dockerfile.miniapp
     container_name: blinvpn_miniapp
     restart: unless-stopped
     ports:
@@ -59,7 +59,7 @@ services:
   panel:
     build:
       context: .
-      dockerfile: Dockerfile.panel
+      dockerfile: deploy/docker/Dockerfile.panel
     container_name: blinvpn_panel
     restart: unless-stopped
     ports:
@@ -68,6 +68,22 @@ services:
       - .env
     depends_on:
       - api
+
+  # Добавь этот сервис в docker-compose.yml (в секцию services:)
+
+  # Бот поддержки
+  support_bot:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.support_bot
+    container_name: blinvpn_support_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - webhook
 
   # Certbot для SSL сертификатов (запускается только при необходимости)
   # certbot:

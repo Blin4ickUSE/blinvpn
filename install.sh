@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-RED='\033[0;31m'
-NC='\033[0m'
-BOLD='\033[1m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+CYAN=$'\033[0;36m'
+RED=$'\033[0;31m'
+NC=$'\033[0m'
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
 
 log_info() { echo -e "${CYAN}$1${NC}"; }
 log_warn() { echo -e "${YELLOW}$1${NC}"; }
@@ -88,7 +89,7 @@ resolve_domain_ip() {
 }
 
 ensure_packages() {
-    log_info "\nШаг 1: проверка и установка системных зависимостей"
+    log_info "\nшаг 1: установка системных зависимостей"
     declare -A packages=(
         [git]='git'
         [docker]='docker.io'
@@ -101,7 +102,7 @@ ensure_packages() {
     local missing=()
     for cmd in "${!packages[@]}"; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
-            log_warn "Утилита '$cmd' не найдена. Будет установлен пакет '${packages[$cmd]}'."
+            log_warn "❗'$cmd' не найдена. установливаем пакет '${packages[$cmd]}'..."
             missing+=("${packages[$cmd]}")
         else
             log_success "✔ $cmd уже установлен."
@@ -115,24 +116,24 @@ ensure_packages() {
         unset DEBIAN_FRONTEND
         unset DEBCONF_NONINTERACTIVE_SEEN
     else
-        log_info "Все необходимые пакеты уже присутствуют."
+        log_info "все необходимые пакеты уже присутствуют."
     fi
 }
 
 ensure_services() {
     for service in docker nginx; do
         if ! sudo systemctl is-active --quiet "$service"; then
-            log_warn "Сервис $service не запущен. Включаем и запускаем..."
+            log_warn "сервис $service не запущен. запускаем..."
             sudo systemctl enable "$service"
             sudo systemctl start "$service"
         else
-            log_success "✔ Сервис $service активен."
+            log_success "✔ сервис $service активен."
         fi
     done
 }
 
 ensure_certbot_nginx() {
-    log_info "\nПроверка плагина Certbot для Nginx"
+    log_info "\nпроверка плагина Certbot"
 
     local has_nginx_plugin=0
     if command -v certbot >/dev/null 2>&1; then
@@ -142,18 +143,18 @@ ensure_certbot_nginx() {
     fi
 
     if [[ $has_nginx_plugin -eq 1 ]]; then
-        log_success "✔ Плагин nginx для Certbot найден."
+        log_success "✔ плагин nginx для Certbot найден."
         return
     fi
 
     if command -v apt-get >/dev/null 2>&1; then
-        log_info "Устанавливаю плагин python3-certbot-nginx (apt)..."
+        log_info "устанавливаю плагин python3-certbot-nginx..."
         export DEBIAN_FRONTEND=noninteractive
         export DEBCONF_NONINTERACTIVE_SEEN=true
         sudo apt-get update
         if sudo apt-get install -y --no-install-recommends python3-certbot-nginx; then
             if certbot plugins 2>/dev/null | grep -qi 'nginx'; then
-                log_success "✔ Плагин nginx для Certbot установлен (apt)."
+                log_success "✔ плагин nginx для Certbot установлен (apt)."
                 unset DEBIAN_FRONTEND
                 unset DEBCONF_NONINTERACTIVE_SEEN
                 return
@@ -163,7 +164,7 @@ ensure_certbot_nginx() {
         unset DEBCONF_NONINTERACTIVE_SEEN
     fi
 
-    log_warn "Пробую установить Certbot (snap) с поддержкой nginx."
+    log_warn "пробую установить Certbot (snap) с поддержкой nginx."
     if ! command -v snap >/dev/null 2>&1; then
         export DEBIAN_FRONTEND=noninteractive
         sudo apt-get update
@@ -176,11 +177,11 @@ ensure_certbot_nginx() {
     sudo ln -sf /snap/bin/certbot /usr/bin/certbot
 
     if certbot plugins 2>/dev/null | grep -qi 'nginx'; then
-        log_success "✔ Плагин nginx для Certbot доступен (snap)."
+        log_success "✔ плагин nginx для Certbot доступен (snap)."
         return
     fi
 
-    log_error "Плагин nginx для Certbot недоступен."
+    log_error "❗ плагин nginx для Certbot недоступен."
     exit 1
 }
 
@@ -191,7 +192,7 @@ configure_nginx() {
     local nginx_conf="$4"
     local nginx_link="$5"
 
-    log_info "\nНастройка Nginx с SSL на порту ${ssl_port}"
+    log_info "\nнастройка Nginx с SSL на порту ${ssl_port}"
     sudo rm -f /etc/nginx/sites-enabled/default
     
     sudo tee "$nginx_conf" >/dev/null <<EOF
@@ -210,18 +211,18 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 60s;
+        proxy_connect_timeout 15s;
+    }
+
+    location ~* \\.(js|css|woff2?|png|jpg|svg|ico)$ {
+        proxy_pass http://127.0.0.1:9741;
+        proxy_set_header Host \$host;
+        add_header Cache-Control "public, max-age=86400";
     }
 
     location /api {
         proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-
-    location /yookassa {
-        proxy_pass http://127.0.0.1:5000;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -237,6 +238,22 @@ server {
     }
 
     location /platega {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location /rollypay {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location /cryptopay {
         proxy_pass http://127.0.0.1:5000;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -276,7 +293,29 @@ EOF
     sudo ln -s "$nginx_conf" "$nginx_link"
     sudo nginx -t
     sudo systemctl reload nginx
-    log_success "✔ Конфигурация Nginx обновлена."
+    log_success "✔ конфигурация Nginx обновлена."
+}
+
+# Рамка-заголовок секции
+section() {
+    local title="$1"
+    local width=62
+    local pad=$(( (width - ${#title} - 2) / 2 ))
+    printf '\n'
+    printf "${CYAN}╭%s╮${NC}\n" "$(printf '─%.0s' $(seq 1 $width))"
+    printf "${CYAN}│${NC}%*s${BOLD}%s${NC}%*s${CYAN}│${NC}\n" \
+        $((pad + 1)) "" "$title" $((width - pad - ${#title} - 1)) ""
+    printf "${CYAN}╰%s╯${NC}\n" "$(printf '─%.0s' $(seq 1 $width))"
+}
+
+# Пронумерованный шаг внутри секции
+step() {
+    printf "  ${GREEN}%s${NC}  %s\n" "$1" "$2"
+}
+
+# Подсказка-сноска (приглушённая)
+hint() {
+    printf "     ${DIM}↳ %s${NC}\n" "$1"
 }
 
 create_env_file() {
@@ -284,22 +323,26 @@ create_env_file() {
     local panel_domain="$2"
     local email="$3"
     local ssl_port="$4"
-    
-    log_info "\nЗаполнение переменных окружения:"
-    
-    # Telegram боты (обязательно)
-    prompt "Telegram Bot Token (основной бот): " TELEGRAM_BOT_TOKEN
-    prompt "Telegram Admin ID: " TELEGRAM_ADMIN_ID
-    
-    # Remnawave (панель управления VPN)
-    log_info "\n${CYAN}Remnawave - панель управления VPN:${NC}"
-    prompt "URL панели Remnawave (например https://panel.example.com): " REMWAVE_PANEL_URL_INPUT
+
+    section "Настройка переменных окружения"
+
+    # ── Основной бот ────────────────────────────────────────
+    section "Основной Telegram-бот"
+    prompt "  ${BOLD}Токен бота${NC}  (основной бот): " TELEGRAM_BOT_TOKEN
+    prompt "  ${BOLD}ID админа${NC}   (ваш Telegram ID): " TELEGRAM_ADMIN_ID
+
+    # ── Бот поддержки ───────────────────────────────────────
+    section "Бот поддержки"
+    prompt "  ${BOLD}Токен бота поддержки${NC}: " SUPPORT_BOT_TOKEN
+    prompt "  ${BOLD}ID группы поддержки${NC}  (например -1001234567890): " SUPPORT_GROUP_ID
+    prompt "  ${BOLD}Юзернеймы админов${NC}    (без @, по умолч. blin4icks): " SUPPORT_ADMIN_USERNAME_INPUT
+    SUPPORT_ADMIN_USERNAME="${SUPPORT_ADMIN_USERNAME_INPUT:-blin4icks}"
+
+    # ── Remnawave ───────────────────────────────────────────
+    section "Remnawave · панель управления VPN"
+    prompt "  ${BOLD}Panel URL${NC}  (по умолч. http://localhost:3000): " REMWAVE_PANEL_URL_INPUT
     REMWAVE_PANEL_URL="${REMWAVE_PANEL_URL_INPUT:-http://localhost:3000}"
-    prompt "API Token из панели Remnawave: " REMWAVE_API_KEY
-    
-    # Panel Secret - генерируем автоматически
-    PANEL_SECRET=$(openssl rand -hex 32)
-    log_info "Секретный ключ панели сгенерирован автоматически."
+    prompt "  ${BOLD}API Token${NC}  (из панели Remnawave): " REMWAVE_API_KEY
     
     # Формируем URL с портом если не 443
     local port_suffix=""
@@ -308,42 +351,46 @@ create_env_file() {
     fi
     
     cat > .env <<EOF
-# ===== Telegram =====
+# ===== телеграм =====
+# оснонвой бот
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
 TELEGRAM_ADMIN_ID=${TELEGRAM_ADMIN_ID}
+BOT_USERNAME=blinvpn_bot
+VITE_BOT_USERNAME=blinvpn_bot
 
-# ===== Remnawave (панель управления VPN) =====
-# URL и API токен вашей Remnawave панели
+# бот поддержки
+SUPPORT_BOT_TOKEN=${SUPPORT_BOT_TOKEN}
+SUPPORT_GROUP_ID=${SUPPORT_GROUP_ID}
+SUPPORT_ADMIN_USERNAME=${SUPPORT_ADMIN_USERNAME}
+SUPPORT_URL=https://t.me/blinteambot
+VITE_SUPPORT_URL=https://t.me/blinteambot
+
+# ===== remnawave =====
 REMWAVE_PANEL_URL=${REMWAVE_PANEL_URL}
 REMWAVE_API_KEY=${REMWAVE_API_KEY}
 
 # ===== Платежные системы =====
-# Настраиваются в панели управления BlinVPN (${panel_domain}${port_suffix})
-# YooKassa
-YOOKASSA_SHOP_ID=
-YOOKASSA_SECRET_KEY=
-
-# Heleket (криптоплатежи)
+# Heleket
 HELEKET_API_URL=https://api.heleket.com
 HELEKET_MERCHANT=
 HELEKET_API_KEY=
 
-# Platega (альтернативные платежи)
+# Platega
 PLATEGA_API_URL=https://app.platega.io
 PLATEGA_MERCHANT_ID=
 PLATEGA_SECRET_KEY=
 
-# Мой Налог (автоматические чеки для самозанятых)
-NALOG_ENABLED=false
-NALOG_INN=
-NALOG_PASSWORD=
-NALOG_TOKEN_PATH=data/nalog_token.json
-NALOG_SERVICE_NAME=Приобретение услуги в RSecktor Pay
+# RollyPay
+ROLLYPAY_API_URL=https://rollypay.io/api/v1
+ROLLYPAY_API_KEY=
+ROLLYPAY_SIGNING_SECRET=
+ROLLYPAY_TERMINAL_ID=
 
-# ===== Системные настройки =====
-PANEL_SECRET=${PANEL_SECRET}
+# CryptoBot
+CRYPTOPAY_API_URL=https://pay.crypt.bot/api
+CRYPTOPAY_API_TOKEN=
 
-# URLs
+# ===== URLs =====
 MINIAPP_URL=https://${domain}${port_suffix}
 PANEL_URL=https://${panel_domain}${port_suffix}
 WEBHOOK_URL=https://${domain}${port_suffix}
@@ -367,11 +414,77 @@ WEBHOOK_DOMAIN=${domain}
 EOF
 
     log_success "✔ Файл .env создан."
-    log_warn "\n⚠️  Платежные системы (YooKassa, Heleket, Platega) настраиваются"
+    log_warn "\n⚠️  Платежные системы (Heleket, Platega, CryptoBot) настраиваются"
     log_warn "   в панели управления: https://${panel_domain}${port_suffix}"
 }
 
+register_telegram_webhook() {
+    local bot_token="$1"
+    local domain="$2"
+    local ssl_port="$3"
+
+    # По умолчанию Stars обрабатывает контейнер bot через polling (pre_checkout_query).
+    # Webhook на API конфликтует: при рестарте bot вызывает deleteWebhook и оплата зависает.
+    if [[ "${TELEGRAM_STARS_DELIVERY:-bot}" == "bot" ]]; then
+        log_info "\nTelegram Stars: режим bot (polling), webhook на API не регистрируется."
+        log_info "  Для webhook-режима задайте TELEGRAM_STARS_DELIVERY=webhook в .env"
+        return 0
+    fi
+
+    if [[ -z "$bot_token" ]]; then
+        log_warn "⚠️  TELEGRAM_BOT_TOKEN не задан — регистрация Telegram webhook пропущена."
+        return 0
+    fi
+
+    local port_suffix=""
+    if [[ "$ssl_port" != "443" ]]; then
+        port_suffix=":${ssl_port}"
+    fi
+
+    local webhook_url="https://${domain}${port_suffix}/api/telegram/webhook"
+    local allowed_updates='["message","callback_query","pre_checkout_query","shipping_query"]'
+
+    log_info "\nРегистрация Telegram webhook (Telegram Stars)..."
+    log_info "  URL: ${webhook_url}"
+
+    local response http_code body
+    response=$(curl -s -w "\n%{http_code}" -X POST \
+        "https://api.telegram.org/bot${bot_token}/setWebhook" \
+        -H "Content-Type: application/json" \
+        -d "{\"url\":\"${webhook_url}\",\"allowed_updates\":${allowed_updates}}" \
+        --max-time 15 2>/dev/null || true)
+
+    body=$(echo "$response" | head -n -1)
+    http_code=$(echo "$response" | tail -n1)
+
+    if echo "$body" | grep -q '"ok":true'; then
+        log_success "✔ Telegram webhook успешно зарегистрирован."
+    else
+        log_warn "⚠️  Не удалось зарегистрировать Telegram webhook (HTTP ${http_code})."
+        log_warn "   Ответ: ${body}"
+        log_warn "   Зарегистрируйте вручную:"
+        log_warn "   https://api.telegram.org/bot<TOKEN>/setWebhook?url=${webhook_url}&allowed_updates=%5B%22message%22%2C%22pre_checkout_query%22%5D"
+    fi
+}
+
+register_cryptopay_webhook() {
+    local domain="$1"
+    local ssl_port="$2"
+
+    local port_suffix=""
+    if [[ "$ssl_port" != "443" ]]; then
+        port_suffix=":${ssl_port}"
+    fi
+
+    local webhook_url="https://${domain}${port_suffix}/cryptopay"
+
+    log_info "\n${BOLD}CryptoBot (CryptoPay) webhook:${NC}"
+    log_info "  Зарегистрируйте вручную в @CryptoBot → My Apps → ваше приложение → Webhooks:"
+    log_info "  ${YELLOW}${webhook_url}${NC}"
+}
+
 REPO_URL="https://github.com/Blin4ickUSE/blinvpn.git"
+REPO_BRANCH="${BLINVPN_BRANCH:-2.0}"
 PROJECT_DIR="blinvpn"
 NGINX_CONF="/etc/nginx/sites-available/${PROJECT_DIR}.conf"
 NGINX_LINK="/etc/nginx/sites-enabled/${PROJECT_DIR}.conf"
@@ -390,7 +503,10 @@ if [[ -f "$NGINX_CONF" ]]; then
     fi
     cd "$PROJECT_DIR"
     log_info "\nШаг 1: обновление исходного кода"
-    git pull --ff-only
+    git fetch origin
+    git reset --hard origin/"$REPO_BRANCH"
+    git checkout "$REPO_BRANCH" 2>/dev/null || git checkout -b "$REPO_BRANCH" --track origin/"$REPO_BRANCH"
+    git reset --hard origin/"$REPO_BRANCH"
     log_success "✔ Репозиторий обновлён."
     log_info "\nШаг 2: пересборка и перезапуск контейнеров"
     sudo docker-compose down --remove-orphans
@@ -408,7 +524,7 @@ ensure_certbot_nginx
 
 log_info "\nШаг 2: клонирование репозитория"
 if [[ ! -d "$PROJECT_DIR/.git" ]]; then
-    git clone "$REPO_URL" "$PROJECT_DIR"
+    git clone --branch "$REPO_BRANCH" "$REPO_URL" "$PROJECT_DIR"
 else
     log_warn "Каталог $PROJECT_DIR уже существует. Будет использована текущая версия."
 fi
@@ -559,40 +675,47 @@ if [[ -n "$(sudo docker-compose ps -q 2>/dev/null)" ]]; then
 fi
 sudo docker-compose up -d --build
 
+log_info "\nШаг 7: регистрация Telegram webhook (Telegram Stars)"
+register_telegram_webhook "$TELEGRAM_BOT_TOKEN" "$DOMAIN" "$SSL_PORT"
+
+register_cryptopay_webhook "$DOMAIN" "$SSL_PORT"
+
 # Формируем URL с портом для вывода
 PORT_SUFFIX=""
 if [[ "$SSL_PORT" != "443" ]]; then
     PORT_SUFFIX=":${SSL_PORT}"
 fi
 
-cat <<SUMMARY
-
-${GREEN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}
-${GREEN}┃${NC}  🎉 ${BOLD}Установка BlinVPN завершена!${NC} 🎉                        ${GREEN}┃${NC}
-${GREEN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}
-
-${BOLD}Мини-приложение:${NC}
-  ${YELLOW}https://${DOMAIN}${PORT_SUFFIX}${NC}
-
-${BOLD}Веб‑панель:${NC}
-  ${YELLOW}https://${PANEL_DOMAIN}${PORT_SUFFIX}${NC}
-
-${BOLD}API:${NC}
-  ${YELLOW}https://${DOMAIN}${PORT_SUFFIX}/api${NC}
-
-${BOLD}Webhooks:${NC}
-  YooKassa: ${YELLOW}https://${DOMAIN}${PORT_SUFFIX}/yookassa${NC}
-  Heleket:  ${YELLOW}https://${DOMAIN}${PORT_SUFFIX}/heleket${NC}
-  Platega:  ${YELLOW}https://${DOMAIN}${PORT_SUFFIX}/platega${NC}
-
-${BOLD}Авторизация в панели:${NC}
-  ${CYAN}При первом входе в панель будут автоматически созданы${NC}
-  ${CYAN}логин и пароль администратора. Сохраните их!${NC}
-  ${CYAN}Также можно войти через PANEL_SECRET из .env файла.${NC}
-
-${YELLOW}⚠️  Не забудьте обновить Web App URL в BotFather:${NC}
-${CYAN}   https://${DOMAIN}${PORT_SUFFIX}${NC}
-
-${YELLOW}⚠️  Проверьте настройки в файле .env${NC}
-
-SUMMARY
+printf "\n"
+printf "\e[0;32m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\e[0m\n"
+printf "\e[0;32m┃\e[0m  🎉 \e[1mУстановка BlinVPN завершена!\e[0m 🎉                        \e[0;32m┃\e[0m\n"
+printf "\e[0;32m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\e[0m\n"
+printf "\n"
+printf "\e[1mМини-приложение:\e[0m\n"
+printf "  \e[1;33mhttps://%s%s\e[0m\n" "${DOMAIN}" "${PORT_SUFFIX}"
+printf "\n"
+printf "\e[1mВеб‑панель:\e[0m\n"
+printf "  \e[1;33mhttps://%s%s\e[0m\n" "${PANEL_DOMAIN}" "${PORT_SUFFIX}"
+printf "\n"
+printf "\e[1mAPI:\e[0m\n"
+printf "  \e[1;33mhttps://%s%s/api\e[0m\n" "${DOMAIN}" "${PORT_SUFFIX}"
+printf "\n"
+printf "\e[1mWebhooks:\e[0m\n"
+printf "  Heleket:        \e[1;33mhttps://%s%s/heleket\e[0m\n"  "${DOMAIN}" "${PORT_SUFFIX}"
+printf "  Platega:        \e[1;33mhttps://%s%s/platega\e[0m\n"  "${DOMAIN}" "${PORT_SUFFIX}"
+printf "  RollyPay (СБП): \e[1;33mhttps://%s%s/rollypay\e[0m \e[0;33m(callback_url в кабинете RollyPay)\e[0m\n" "${DOMAIN}" "${PORT_SUFFIX}"
+printf "  Telegram Stars: \e[1;33mhttps://%s%s/api/telegram/webhook\e[0m \e[0;32m(зарегистрирован автоматически)\e[0m\n" "${DOMAIN}" "${PORT_SUFFIX}"
+printf "\n"
+printf "\e[1mCryptoBot webhook \e[0;33m(зарегистрировать вручную)\e[0m\e[1m:\e[0m\n"
+printf "  Откройте @CryptoBot → My Apps → ваше приложение → Webhooks\n"
+printf "  \e[1;33mhttps://%s%s/cryptopay\e[0m\n" "${DOMAIN}" "${PORT_SUFFIX}"
+printf "\n"
+printf "\e[1mАвторизация в панели:\e[0m\n"
+printf "  \e[0;36mПри первом входе в панель будут автоматически созданы\e[0m\n"
+printf "  \e[0;36mлогин и пароль администратора. Сохраните их!\e[0m\n"
+printf "\n"
+printf "\e[1;33m⚠️  Не забудьте обновить Web App URL в BotFather:\e[0m\n"
+printf "  \e[0;36mhttps://%s%s\e[0m\n" "${DOMAIN}" "${PORT_SUFFIX}"
+printf "\n"
+printf "\e[1;33m⚠️  Проверьте настройки в файле .env\e[0m\n"
+printf "\n"

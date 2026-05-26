@@ -6,16 +6,26 @@ import logging
 import os
 import sys
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import CommandStart
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, CallbackQuery
-from aiogram.enums import ParseMode
+from aiogram.filters import CommandStart, Command
+from aiogram.types import (
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    WebAppInfo,
+    CallbackQuery,
+    PreCheckoutQuery,
+    Message,
+)
+from aiogram.enums import ParseMode, ButtonStyle
 
 # Добавляем путь к backend
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 
-from backend.database import database
-from backend.core import core, abuse_detected
-from backend.core.blacklist_updater import start_blacklist_updater
+from src.database import database
+from src.core import core
+from src.core import messages as notify_msgs
+from src.core.blacklist import start_blacklist_updater
+from src.api import telegram_stars
+from src.api import remnawave
 import re
 
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +49,145 @@ if BOT_TOKEN == SUPPORT_BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+_GRACE_PERIOD_DAYS = 7
+_AUTO_RENEWAL_DAYS = 30
+# Проверка каждые 5 мин; догон пропущенных уведомлений до _NOTIF_CATCHUP_SEC
+_NOTIF_TICK_SEC = 300
+_NOTIF_WINDOW_SEC = 150
+_NOTIF_CATCHUP_SEC = 6 * 3600  # до 6 ч после целевого момента (тик 5 мин не пропустит)
+_NO_SUB_INTERVAL_SEC = 3 * 86400
+_NO_SUB_AFTER_START_SEC = 30 * 60
+_NO_SUB_MAX_DAYS = 30
+_COMEBACK_INTERVAL_SEC = 7 * 86400
+
+
+def _parse_expiry_utc(expiry_str: str):
+    from datetime import datetime, timedelta
+    dt = datetime.fromisoformat(str(expiry_str).replace('Z', '+00:00').replace('+00:00', ''))
+    if getattr(dt, 'tzinfo', None):
+        off = dt.utcoffset()
+        dt = dt.replace(tzinfo=None) - (timedelta(seconds=off.total_seconds()) if off else timedelta(0))
+    return dt
+
+
+def _parse_dt_utc(dt_str: str):
+    if not dt_str:
+        return None
+    return _parse_expiry_utc(dt_str)
+
+
+def _seconds_until_expiry(expiry_str: str, now_utc) -> float:
+    return (_parse_expiry_utc(expiry_str) - now_utc).total_seconds()
+
+
+def _days_until_expiry(expiry_str: str, now_utc) -> float:
+    return _seconds_until_expiry(expiry_str, now_utc) / 86400.0
+
+
+def _in_notif_window(actual_seconds: float, target_seconds: float) -> bool:
+    """Целевой момент наступил: в окне ±2.5 мин или догон до 6 ч после него."""
+    if abs(actual_seconds - target_seconds) <= _NOTIF_WINDOW_SEC:
+        return True
+    return target_seconds - _NOTIF_CATCHUP_SEC <= actual_seconds < target_seconds - _NOTIF_WINDOW_SEC
+
+
+def _get_renewal_price(devices_limit: int) -> float:
+    devices = max(1, int(devices_limit or 1))
+    price = database.compute_vpn_subscription_price(_AUTO_RENEWAL_DAYS, devices)
+    return float(price if price is not None else 99)
+
+
+def _expiry_notification_sent(cursor, key_id: int, notif_type: str) -> bool:
+    cursor.execute(
+        """
+        SELECT COUNT(*) as cnt FROM transactions
+        WHERE type = ? AND description LIKE ?
+        """,
+        (notif_type, f'key_id={key_id}|%'),
+    )
+    return cursor.fetchone()['cnt'] > 0
+
+
+def _mark_expiry_notification_sent(cursor, user_id: int, key_id: int, notif_type: str) -> None:
+    cursor.execute(
+        """
+        INSERT INTO transactions (user_id, type, amount, status, description)
+        VALUES (?, ?, 0, 'Info', ?)
+        """,
+        (user_id, notif_type, f'key_id={key_id}|sent'),
+    )
+
+
+def _delete_subscription_fully(
+    cursor, key_id: int, key_uuid: str, user_id: int, telegram_id: int, expiry_date: str
+) -> None:
+    """Удалить подписку из Remnawave и БД, уведомить пользователя."""
+    if not _expiry_notification_sent(cursor, key_id, 'subscription_deleted'):
+        msg = notify_msgs.build_subscription_deleted_message(key_id)
+        if telegram_id and core.send_notification_to_user(telegram_id, msg):
+            _mark_expiry_notification_sent(cursor, user_id, key_id, 'subscription_deleted')
+
+    if key_uuid:
+        try:
+            remnawave.remnawave_api.delete_user_sync(key_uuid)
+            logger.info(f"Deleted key {key_uuid} from Remnawave")
+        except Exception as e:
+            logger.error(f"Failed to delete key {key_uuid} from Remnawave: {e}")
+
+    cursor.execute("DELETE FROM vpn_keys WHERE id = ?", (key_id,))
+    expiry_part = f"|expiry={expiry_date}" if expiry_date else ""
+    cursor.execute(
+        """
+        INSERT INTO transactions (user_id, type, amount, status, description)
+        VALUES (?, 'key_deleted_unpaid', 0, 'Info', ?)
+        """,
+        (user_id, f"key_id={key_id}{expiry_part}|deleted"),
+    )
+
+
+def _user_notification_sent(cursor, user_id: int, notif_type: str) -> bool:
+    cursor.execute(
+        "SELECT COUNT(*) as cnt FROM transactions WHERE user_id = ? AND type = ?",
+        (user_id, notif_type),
+    )
+    return cursor.fetchone()['cnt'] > 0
+
+
+def _mark_user_notification_sent(cursor, user_id: int, notif_type: str) -> None:
+    cursor.execute(
+        """
+        INSERT INTO transactions (user_id, type, amount, status, description)
+        VALUES (?, ?, 0, 'Info', 'sent')
+        """,
+        (user_id, notif_type),
+    )
+
+
+def _last_user_notification_at(cursor, user_id: int, notif_type: str):
+    cursor.execute(
+        """
+        SELECT created_at FROM transactions
+        WHERE user_id = ? AND type = ?
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (user_id, notif_type),
+    )
+    row = cursor.fetchone()
+    return _parse_dt_utc(row['created_at']) if row and row['created_at'] else None
+
+
+def _should_send_expiry_warning(row, now_utc, target_seconds: float, notif_type: str, cursor) -> bool:
+    key_id = row['id']
+    secs_left = _seconds_until_expiry(row['expiry_date'], now_utc)
+    if not _in_notif_window(secs_left, target_seconds):
+        return False
+    if _expiry_notification_sent(cursor, key_id, notif_type):
+        return False
+    renewal_price = _get_renewal_price(row['devices_limit'])
+    balance = float(row['balance'] or 0)
+    return balance < renewal_price
+
+
 def extract_referral_id(text: str) -> int:
     """Извлечь referral ID из команды /start
     
@@ -54,6 +203,17 @@ def extract_referral_id(text: str) -> int:
     match = re.search(r'ref=(\d+)', text)
     return int(match.group(1)) if match else None
 
+
+def extract_promo_code(text: str) -> str | None:
+    # /start promo_CODE
+    m = re.search(r'promo_([A-Za-z0-9_-]+)', text or '')
+    return m.group(1).upper() if m else None
+
+
+def extract_tracking_code(text: str) -> str | None:
+    m = re.search(r'trk_([A-Za-z0-9_-]+)', text or '')
+    return m.group(1) if m else None
+
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     """Обработчик команды /start"""
@@ -61,13 +221,22 @@ async def cmd_start(message: types.Message):
     
     # Проверка черного списка
     if core.check_blacklist(telegram_id):
-        await message.answer("❌ Ваш аккаунт заблокирован.")
+        await message.answer(
+            notify_msgs.build_ban_message(),
+            parse_mode=ParseMode.HTML,
+        )
         return
     
-    # Извлекаем referral ID
+    # Извлекаем referral ID / promo из start payload
     referral_id = None
+    promo_code = None
     if message.text and 'ref' in message.text:
         referral_id = extract_referral_id(message.text)
+    tracking_code = None
+    if message.text and 'promo_' in message.text:
+        promo_code = extract_promo_code(message.text)
+    if message.text and 'trk_' in message.text:
+        tracking_code = extract_tracking_code(message.text)
     
     # Нельзя быть своим собственным рефералом
     if referral_id == telegram_id:
@@ -75,6 +244,7 @@ async def cmd_start(message: types.Message):
     
     # Получаем или создаем пользователя
     user = database.get_user_by_telegram_id(telegram_id)
+    database.ensure_first_start_at(user['id']) if user else None
     if not user:
         # Создаем нового пользователя
         username = message.from_user.username
@@ -94,6 +264,7 @@ async def cmd_start(message: types.Message):
         
         user_id = database.create_user(telegram_id, username, full_name, referred_by)
         user = database.get_user_by_id(user_id)
+        database.ensure_first_start_at(user_id)
     else:
         # Пользователь уже существует - попробуем установить реферера, если его нет
         if referral_id and user.get('referred_by') is None:
@@ -107,39 +278,144 @@ async def cmd_start(message: types.Message):
                         user = database.get_user_by_telegram_id(telegram_id)
                 else:
                     logger.warning(f"Referral rate limit exceeded for referrer {referral_id}")
+        database.ensure_first_start_at(user['id'])
     
     # Проверяем статус бана
-    ban_status = abuse_detected.check_user_ban_status(user['id'])
-    if ban_status.get('banned'):
+    if user.get('is_banned'):
+        ban_reason = (user.get('ban_reason') or '').strip()
+        if ban_reason in ('', 'Аккаунт заблокирован'):
+            ban_reason = None
         await message.answer(
-            "❌ Ваш аккаунт заблокирован.\n\n"
-            "Если вы считаете, что это ошибка, свяжитесь со службой поддержки.",
+            notify_msgs.build_ban_message(ban_reason),
+            parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Служба поддержки", url="https://t.me/your_support_bot")
+                InlineKeyboardButton(text="Служба поддержки", url=os.getenv("SUPPORT_URL", "https://t.me/blinteambot"))
             ]])
         )
         return
     
-    # Формируем сообщение
+    # Формируем сообщение (/start) с HTML и premium emoji
     text = (
-        "*👋 Добро пожаловать!*\n\n"
-        "Это *BlinVPN* — лучший сервис для обхода блокировок и защиты данных. "
-        "Просто запусти мини-приложение кнопкой ниже!\n\n"
-        "*🎁 Дарим 24 часа бесплатно!*\n"
-        "*🇷🇺 Оплата по СБП и Криптовалюте.*\n"
-        "*⚡️ Высокая скорость и стабильная работа*\n"
-        "*🤝 Служба поддержки поможет с любым вопросом или решит проблему.*"
+        '<tg-emoji emoji-id="5456561606592866295">🔥</tg-emoji> <b>Добро пожаловать в БлинВПН!</b>\n\n'
+        'Мы — безопасный VPN, который использует <b>лучшие протоколы</b> для ускорения интернета и защиты ваших данных.\n'
+        '<b>Не верите?</b> Дарим 3 дня бесплатного тестирования!\n\n'
+        '<b>Нажми на кнопку ниже, чтобы открыть мини-приложение</b> <tg-emoji emoji-id="5305522282695768654">👇</tg-emoji>'
     )
-    
+
     # Кнопка Mini App
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
-            text="📱 Открыть приложение",
-            web_app=WebAppInfo(url=WEB_APP_URL)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="Открыть мини-приложение",
+                icon_custom_emoji_id="6008258140108231117",
+                web_app=WebAppInfo(url=WEB_APP_URL)
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="Подключить прокси",
+                url="tg://proxy?server=proxy.blann.ru&port=443&secret=ee79612e7275c47de70bcd8b628abeb8",
+                icon_custom_emoji_id="5875465628285931233",
+                style=ButtonStyle.PRIMARY
+            )
+        ]
+    ])
+
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+
+    if tracking_code:
+        try:
+            conn = database.get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE tracking_links SET clicks = clicks + 1 WHERE code = ?", (tracking_code,))
+            cursor.execute("SELECT promocode FROM tracking_links WHERE code = ?", (tracking_code,))
+            tr = cursor.fetchone()
+            conn.commit()
+            conn.close()
+            if tr and tr['promocode'] and not promo_code:
+                promo_code = tr['promocode']
+        except Exception as e:
+            logger.warning(f"tracking link update failed: {e}")
+
+    # Auto-activate promo from special start link
+    if promo_code and user:
+        try:
+            result = core.apply_promocode(user['id'], promo_code)
+            if result.get('success'):
+                await message.answer(
+                    notify_msgs.build_promo_activated_message(
+                        promo_code, result.get('message', '')
+                    ),
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                await message.answer(
+                    notify_msgs.build_promo_failed_message(
+                        promo_code, result.get('error', 'не удалось применить')
+                    ),
+                    parse_mode=ParseMode.HTML,
+                )
+        except Exception as e:
+            logger.warning(f"Promo auto-apply failed: {e}")
+
+
+@dp.pre_checkout_query()
+async def on_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
+    """Telegram Stars: ответ на pre_checkout в течение 10 сек (иначе оплата зависает)."""
+    try:
+        if hasattr(pre_checkout_query, "model_dump"):
+            pcq = pre_checkout_query.model_dump(mode="json")
+        else:
+            pcq = pre_checkout_query.dict()
+        ok, err = telegram_stars.validate_pre_checkout(pcq)
+        await pre_checkout_query.answer(ok=ok, error_message=err)
+    except Exception as e:
+        logger.error("pre_checkout_query handler error: %s", e)
+        try:
+            await pre_checkout_query.answer(ok=False, error_message="Ошибка сервера, попробуйте снова")
+        except Exception:
+            pass
+
+
+@dp.message(F.successful_payment)
+async def on_successful_payment(message: Message):
+    """Telegram Stars: зачисление после успешной оплаты."""
+    try:
+        sp = message.successful_payment
+        if not sp:
+            return
+        successful = sp.model_dump() if hasattr(sp, "model_dump") else sp.dict()
+        telegram_stars.process_successful_payment(successful)
+    except Exception as e:
+        logger.error("successful_payment handler error: %s", e)
+
+
+@dp.message(Command("support"))
+async def cmd_support(message: types.Message):
+    await message.answer(
+        notify_msgs.build_support_command_message(),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text=notify_msgs.BUTTON_SUPPORT,
+                url=os.getenv("SUPPORT_URL", "https://t.me/blinteambot"),
+            )
+        ]])
+    )
+
+
+@dp.message()
+async def unknown_command_handler(message: types.Message):
+    """Unknown commands fallback"""
+    if message.text and message.text.startswith('/'):
+        await message.answer(
+            notify_msgs.build_unknown_command_message(),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text=notify_msgs.BUTTON_SUPPORT,
+                    url=os.getenv("SUPPORT_URL", "https://t.me/blinteambot"),
+                )
+            ]])
         )
-    ]])
-    
-    await message.answer(text, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
 
 
 # ========== Обработчики callback для запросов на вывод ==========
@@ -149,71 +425,105 @@ withdrawal_reject_states = {}
 
 @dp.callback_query(F.data.startswith('withdraw_approve_'))
 async def handle_withdraw_approve(callback: CallbackQuery):
-    """Обработка одобрения запроса на вывод"""
+    """Одобрить заявку — уведомить пользователя, показать админу кнопку «Я выполнил»."""
     try:
         transaction_id = int(callback.data.split('_')[-1])
-        
-        # Отправляем запрос на подтверждение
-        confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text='✅ Да, выполнить', callback_data=f'withdraw_confirm_{transaction_id}'),
-                InlineKeyboardButton(text='❌ Отмена', callback_data=f'withdraw_cancel_{transaction_id}')
-            ]
+
+        conn = database.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT t.*, u.telegram_id
+            FROM transactions t
+            JOIN users u ON t.user_id = u.id
+            WHERE t.id = ?
+            """,
+            (transaction_id,),
+        )
+        transaction = cursor.fetchone()
+        if not transaction:
+            await callback.answer('Транзакция не найдена', show_alert=True)
+            return
+        if transaction['status'] != 'Pending':
+            await callback.answer('Заявка уже обработана', show_alert=True)
+            return
+
+        cursor.execute(
+            "UPDATE transactions SET status = 'Approved' WHERE id = ?",
+            (transaction_id,),
+        )
+        conn.commit()
+        conn.close()
+
+        amount = abs(float(transaction['amount']))
+        core.send_notification_to_user(
+            transaction['telegram_id'],
+            notify_msgs.build_withdrawal_approved_message(
+                transaction_id, amount, transaction['payment_method'] or ''
+            ),
+        )
+
+        complete_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text='✅ Я выполнил',
+                callback_data=f'withdraw_complete_{transaction_id}',
+            )],
+            [InlineKeyboardButton(
+                text='❌ Отмена',
+                callback_data=f'withdraw_cancel_{transaction_id}',
+            )],
         ])
-        
-        await callback.message.edit_reply_markup(reply_markup=confirm_keyboard)
-        await callback.answer('Подтвердите выполнение вывода')
+        await callback.message.edit_reply_markup(reply_markup=complete_keyboard)
+        await callback.answer('Заявка одобрена. Нажмите «Я выполнил» после перевода.')
     except Exception as e:
         logger.error(f"Error handling withdraw approve: {e}")
         await callback.answer('Ошибка обработки', show_alert=True)
 
 
-@dp.callback_query(F.data.startswith('withdraw_confirm_'))
-async def handle_withdraw_confirm(callback: CallbackQuery):
-    """Подтверждение вывода - отправляем пользователю уведомление об успехе"""
+@dp.callback_query(F.data.startswith('withdraw_complete_'))
+async def handle_withdraw_complete(callback: CallbackQuery):
+    """Подтвердить выполнение перевода — финальное уведомление пользователю."""
     try:
         transaction_id = int(callback.data.split('_')[-1])
-        
+
         conn = database.get_db_connection()
         cursor = conn.cursor()
-        
-        # Получаем информацию о транзакции
-        cursor.execute("""
-            SELECT t.*, u.telegram_id, u.username
+        cursor.execute(
+            """
+            SELECT t.*, u.telegram_id
             FROM transactions t
             JOIN users u ON t.user_id = u.id
             WHERE t.id = ?
-        """, (transaction_id,))
-        
+            """,
+            (transaction_id,),
+        )
         transaction = cursor.fetchone()
         if not transaction:
             await callback.answer('Транзакция не найдена', show_alert=True)
             return
-        
-        # Обновляем статус транзакции
-        cursor.execute("""
-            UPDATE transactions SET status = 'Success' WHERE id = ?
-        """, (transaction_id,))
-        
+        if transaction['status'] != 'Approved':
+            await callback.answer('Сначала одобрите заявку', show_alert=True)
+            return
+
+        cursor.execute(
+            "UPDATE transactions SET status = 'Success' WHERE id = ?",
+            (transaction_id,),
+        )
         conn.commit()
         conn.close()
-        
-        # Отправляем уведомление пользователю
+
         amount = abs(float(transaction['amount']))
         core.send_notification_to_user(
             transaction['telegram_id'],
-            f"✅ <b>Вывод средств выполнен!</b>\n\n"
-            f"💵 Сумма: {amount}₽\n"
-            f"💳 Метод: {transaction['payment_method']}\n\n"
-            f"Деньги отправлены. Спасибо за использование BlinVPN!"
+            notify_msgs.build_withdrawal_completed_message(
+                transaction_id, amount, transaction['payment_method'] or ''
+            ),
         )
-        
-        # Удаляем сообщение с запросом
+
         await callback.message.delete()
-        await callback.answer('Вывод успешно выполнен!', show_alert=True)
-        
+        await callback.answer('Вывод отмечен как выполненный!', show_alert=True)
     except Exception as e:
-        logger.error(f"Error confirming withdrawal: {e}")
+        logger.error(f"Error completing withdrawal: {e}")
         await callback.answer('Ошибка обработки', show_alert=True)
 
 
@@ -268,16 +578,17 @@ async def handle_withdraw_reject_confirm(callback: CallbackQuery):
         if not transaction:
             await callback.answer('Транзакция не найдена', show_alert=True)
             return
+        if transaction['status'] not in ('Pending', 'Approved'):
+            await callback.answer('Заявка уже завершена', show_alert=True)
+            return
         
         amount = abs(float(transaction['amount']))
         user_id = transaction['user_id']
         
-        # Возвращаем деньги на реферальный баланс
         cursor.execute("""
             UPDATE users SET partner_balance = partner_balance + ? WHERE id = ?
         """, (amount, user_id))
         
-        # Обновляем статус транзакции
         cursor.execute("""
             UPDATE transactions SET status = 'Rejected', description = description || ' | Причина отказа: ' || ? WHERE id = ?
         """, (reason or 'Не указана', transaction_id))
@@ -285,13 +596,10 @@ async def handle_withdraw_reject_confirm(callback: CallbackQuery):
         conn.commit()
         conn.close()
         
-        # Отправляем уведомление пользователю
-        reject_msg = f"❌ <b>Вывод средств отклонён</b>\n\n💵 Сумма: {amount}₽\n"
-        if reason:
-            reject_msg += f"📝 Причина: {reason}\n"
-        reject_msg += "\n💰 Средства возвращены на ваш реферальный баланс."
-        
-        core.send_notification_to_user(transaction['telegram_id'], reject_msg)
+        core.send_notification_to_user(
+            transaction['telegram_id'],
+            notify_msgs.build_withdrawal_rejected_message(transaction_id, amount, reason),
+        )
         
         # Удаляем сообщение с запросом
         await callback.message.delete()
@@ -304,18 +612,36 @@ async def handle_withdraw_reject_confirm(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith('withdraw_cancel_'))
 async def handle_withdraw_cancel(callback: CallbackQuery):
-    """Отмена действия - возвращаем исходные кнопки"""
+    """Отмена действия — вернуть кнопки к текущему статусу заявки."""
     try:
         transaction_id = int(callback.data.split('_')[-1])
-        
-        original_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text='✅ Принять', callback_data=f'withdraw_approve_{transaction_id}'),
-                InlineKeyboardButton(text='❌ Отказать', callback_data=f'withdraw_reject_{transaction_id}')
-            ]
-        ])
-        
-        await callback.message.edit_reply_markup(reply_markup=original_keyboard)
+        conn = database.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM transactions WHERE id = ?", (transaction_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        status = row['status'] if row else 'Pending'
+        if status == 'Approved':
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text='✅ Я выполнил',
+                    callback_data=f'withdraw_complete_{transaction_id}',
+                )],
+                [InlineKeyboardButton(
+                    text='❌ Отказать',
+                    callback_data=f'withdraw_reject_{transaction_id}',
+                )],
+            ])
+        else:
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text='✅ Одобрить', callback_data=f'withdraw_approve_{transaction_id}'),
+                    InlineKeyboardButton(text='❌ Отказать', callback_data=f'withdraw_reject_{transaction_id}'),
+                ],
+            ])
+
+        await callback.message.edit_reply_markup(reply_markup=keyboard)
         await callback.answer('Действие отменено')
     except Exception as e:
         logger.error(f"Error canceling: {e}")
@@ -323,141 +649,236 @@ async def handle_withdraw_cancel(callback: CallbackQuery):
 
 
 async def subscription_notifications_task():
-    """Фоновая задача для уведомлений о подписках. Время окончания — из Remnawave (UTC), отображение — МСК."""
+    """Уведомления по подписке: точное время до expiry, grace 7 дней, удаление."""
     while True:
         try:
-            await asyncio.sleep(3600)  # Проверка каждый час
-            
-            # Единый источник истины: синхронизируем expiry из Remnawave перед проверками
             core.sync_expiry_from_remnawave()
-            
+
             conn = database.get_db_connection()
             cursor = conn.cursor()
-            
+
             from datetime import datetime, timedelta
-            now_utc = datetime.utcnow()  # Сравниваем в UTC (expiry_date в БД хранится как UTC)
-            
-            # === 1. Уведомления за 3, 2, 1 день и 3 часа до конца ===
-            notification_intervals = [
-                (3, 'days', '3 дня'),
-                (2, 'days', '2 дня'),
-                (1, 'days', '1 день'),
-                (3, 'hours', '3 часа')
+            now_utc = datetime.utcnow()
+
+            cursor.execute("""
+                SELECT vk.id, vk.expiry_date, vk.devices_limit,
+                       u.id as user_id, u.telegram_id, u.balance
+                FROM vpn_keys vk
+                JOIN users u ON vk.user_id = u.id
+                WHERE vk.status = 'Active' AND vk.expiry_date IS NOT NULL
+            """)
+            active_keys = cursor.fetchall()
+
+            # === 1. За 3 / 2 / 1 день и 2 часа (ровно до момента expiry, только при нехватке баланса) ===
+            warning_intervals = [
+                (3 * 86400, 'expiry_warn_3d', '3 дня', False),
+                (2 * 86400, 'expiry_warn_2d', '2 дня', False),
+                (1 * 86400, 'expiry_warn_1d', '1 день', False),
+                (2 * 3600, 'expiry_warn_2h', '2 часа', True),
             ]
-            
-            for value, unit, text in notification_intervals:
-                if unit == 'days':
-                    target_time = now_utc + timedelta(days=value)
-                    window_start = target_time - timedelta(hours=1)
-                    window_end = target_time + timedelta(hours=1)
-                else:
-                    target_time = now_utc + timedelta(hours=value)
-                    window_start = target_time - timedelta(minutes=30)
-                    window_end = target_time + timedelta(minutes=30)
-                
-                cursor.execute("""
-                    SELECT vk.id, vk.key_uuid, vk.expiry_date, u.telegram_id
-                    FROM vpn_keys vk
-                    JOIN users u ON vk.user_id = u.id
-                    WHERE vk.status = 'Active'
-                      AND datetime(vk.expiry_date) BETWEEN ? AND ?
-                """, (window_start.isoformat(), window_end.isoformat()))
-                
-                for row in cursor.fetchall():
+
+            for target_secs, notif_type, time_text, almost in warning_intervals:
+                for row in active_keys:
+                    if not _should_send_expiry_warning(row, now_utc, target_secs, notif_type, cursor):
+                        continue
                     key_id = row['id']
-                    key_uuid = row['key_uuid']
-                    telegram_id = row['telegram_id']
-                    short_id = key_uuid[:8] if key_uuid else f"#{key_id}"
-                    expiry_str = core.format_expiry_for_notification(row['expiry_date']) if row.get('expiry_date') else ''
-                    msg = (
-                        f"⚠️ <b>Ваша подписка скоро закончится</b>\n\n"
-                        f"Через {text} ваш ключ {short_id} закончится."
-                        + (f" Окончание: {expiry_str} (МСК)." if expiry_str else "")
-                        + "\nЧтобы сохранить доступ в свободный интернет, оплатите подписку!"
+                    renewal_price = _get_renewal_price(row['devices_limit'])
+                    balance = float(row['balance'] or 0)
+                    topup = max(0.0, round(renewal_price - balance, 2))
+                    msg = notify_msgs.build_expiry_warning_message(
+                        key_id, time_text, balance, topup, almost=almost
                     )
-                    core.send_notification_to_user(telegram_id, msg)
-                    logger.info(f"Sent expiry reminder ({text}) to {telegram_id} for key {key_id}")
-            
-            # === 2. Уведомление при истечении подписки ===
-            cursor.execute("""
-                SELECT vk.id, vk.key_uuid, vk.expiry_date, u.telegram_id
-                FROM vpn_keys vk
-                JOIN users u ON vk.user_id = u.id
-                WHERE vk.status = 'Active'
-                  AND datetime(vk.expiry_date) < ?
-            """, (now_utc.isoformat(),))
-            
-            for row in cursor.fetchall():
+                    if core.send_notification_to_user(row['telegram_id'], msg):
+                        _mark_expiry_notification_sent(cursor, row['user_id'], key_id, notif_type)
+                        logger.info(
+                            f"Sent expiry warning ({time_text}) to {row['telegram_id']} for key {key_id}"
+                        )
+
+            # === 2. Подписка истекла (в окне ±2.5 мин от expiry; догон до 2 ч при простое бота) ===
+            for row in active_keys:
+                secs_left = _seconds_until_expiry(row['expiry_date'], now_utc)
                 key_id = row['id']
-                telegram_id = row['telegram_id']
-                
-                # Помечаем как истёкший
+
+                if secs_left > _NOTIF_WINDOW_SEC:
+                    continue
+
+                renewal_price = _get_renewal_price(row['devices_limit'])
+                balance = float(row['balance'] or 0)
+
+                if balance >= renewal_price:
+                    cursor.execute("UPDATE vpn_keys SET status = 'Expired' WHERE id = ?", (key_id,))
+                    continue
+
+                if not _expiry_notification_sent(cursor, key_id, 'expiry_expired'):
+                    in_exact_window = secs_left >= -_NOTIF_WINDOW_SEC
+                    catch_up = secs_left >= -7200
+                    if in_exact_window or catch_up:
+                        msg = notify_msgs.build_expiry_expired_message(key_id, _GRACE_PERIOD_DAYS)
+                        if core.send_notification_to_user(row['telegram_id'], msg):
+                            _mark_expiry_notification_sent(
+                                cursor, row['user_id'], key_id, 'expiry_expired'
+                            )
+                            logger.info(
+                                f"Subscription expired notice sent to {row['telegram_id']} for key {key_id}"
+                            )
                 cursor.execute("UPDATE vpn_keys SET status = 'Expired' WHERE id = ?", (key_id,))
-                
-                msg = (
-                    "❌ <b>Ваша подписка закончилась.</b>\n\n"
-                    "Вскоре она будет окончательно удалена. "
-                    "Чтобы не перенастраивать всё заново, продлите подписку в разделе \"Устройства\""
-                )
-                core.send_notification_to_user(telegram_id, msg)
-                logger.info(f"Subscription expired for key {key_id}, notified user {telegram_id}")
-            
-            # === 3. Уведомление за сутки перед удалением (9-й день) ===
-            nine_days_ago = now_utc - timedelta(days=9)
+
+            # === 3. Ежедневно в grace-период (7 дней после истечения) ===
             cursor.execute("""
-                SELECT vk.id, vk.key_uuid, vk.expiry_date, u.telegram_id
+                SELECT vk.id, vk.expiry_date, u.id as user_id, u.telegram_id
                 FROM vpn_keys vk
                 JOIN users u ON vk.user_id = u.id
-                WHERE vk.status = 'Expired'
-                  AND datetime(vk.expiry_date) BETWEEN ? AND ?
-            """, ((nine_days_ago - timedelta(hours=1)).isoformat(), 
-                  (nine_days_ago + timedelta(hours=1)).isoformat()))
-            
+                WHERE vk.status = 'Expired' AND vk.expiry_date IS NOT NULL
+            """)
             for row in cursor.fetchall():
-                telegram_id = row['telegram_id']
-                
-                msg = (
-                    "❗️ <b>Ваша подписка будет удалена</b>\n\n"
-                    "Через 24 часа ваша подписка будет окончательно удалена. "
-                    "Чтобы не потерять доступ, продлите подписку."
-                )
-                core.send_notification_to_user(telegram_id, msg)
-            
-            # === 4. Удаление через 10 дней после истечения ===
-            ten_days_ago = now_utc - timedelta(days=10)
-            cursor.execute("""
-                SELECT vk.id, vk.key_uuid, vk.user_id, u.telegram_id
-                FROM vpn_keys vk
-                JOIN users u ON vk.user_id = u.id
-                WHERE vk.status = 'Expired'
-                  AND datetime(vk.expiry_date) < ?
-            """, (ten_days_ago.isoformat(),))
-            
-            for row in cursor.fetchall():
+                secs_since = -_seconds_until_expiry(row['expiry_date'], now_utc)
+                if secs_since <= 0:
+                    continue
                 key_id = row['id']
-                key_uuid = row['key_uuid']
-                user_id = row['user_id']
-                
-                # Удаляем из Remnawave
-                if key_uuid:
-                    try:
-                        from backend.api import remnawave
-                        remnawave.remnawave_api.delete_user_sync(key_uuid)
-                        logger.info(f"Deleted key {key_uuid} from Remnawave")
-                    except Exception as e:
-                        logger.error(f"Failed to delete key {key_uuid} from Remnawave: {e}")
-                
-                # Удаляем ключ/устройство (теперь одна запись)
-                cursor.execute("DELETE FROM vpn_keys WHERE id = ?", (key_id,))
-                
-                logger.info(f"Auto-deleted expired key {key_id} for user {user_id}")
-            
+                for day in range(1, _GRACE_PERIOD_DAYS + 1):
+                    if secs_since < day * 86400:
+                        continue
+                    notif_type = f'grace_daily_{day}'
+                    if _expiry_notification_sent(cursor, key_id, notif_type):
+                        continue
+                    days_left = _GRACE_PERIOD_DAYS - day
+                    msg = notify_msgs.build_grace_daily_message(key_id, days_left)
+                    if core.send_notification_to_user(row['telegram_id'], msg):
+                        _mark_expiry_notification_sent(cursor, row['user_id'], key_id, notif_type)
+                        logger.info(
+                            f"Grace daily ({days_left}d left) sent to {row['telegram_id']} for key {key_id}"
+                        )
+
+            # === 4. Удаление через 7 дней (Remnawave + БД + уведомление) ===
+            grace_cutoff = now_utc - timedelta(days=_GRACE_PERIOD_DAYS)
+            cursor.execute("""
+                SELECT vk.id, vk.key_uuid, vk.user_id, vk.expiry_date, u.telegram_id
+                FROM vpn_keys vk
+                JOIN users u ON vk.user_id = u.id
+                WHERE vk.status = 'Expired'
+                  AND vk.expiry_date IS NOT NULL
+                  AND datetime(vk.expiry_date) < ?
+            """, (grace_cutoff.isoformat(),))
+
+            for row in cursor.fetchall():
+                _delete_subscription_fully(
+                    cursor,
+                    row['id'],
+                    row['key_uuid'],
+                    row['user_id'],
+                    row['telegram_id'],
+                    row['expiry_date'],
+                )
+                logger.info(
+                    f"Auto-deleted expired key {row['id']} for user {row['user_id']} "
+                    f"after {_GRACE_PERIOD_DAYS} days"
+                )
+
             conn.commit()
             conn.close()
-            
+
         except Exception as e:
-            logger.error(f"Error in subscription_notifications_task: {e}")
-            await asyncio.sleep(60)
+            logger.error(f"Error in subscription_notifications_task: {e}", exc_info=True)
+        await asyncio.sleep(_NOTIF_TICK_SEC)
+
+
+async def user_engagement_notifications_task():
+    """Напоминания без подписки (раз в 3 дня) и одноразовая скидка 10% на 24 часа."""
+    while True:
+        try:
+            database.clear_expired_discount_offers()
+
+            from datetime import datetime, timedelta
+            now_utc = datetime.utcnow()
+
+            conn = database.get_db_connection()
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT id, telegram_id, balance, trial_used, created_at,
+                       first_start_at, discount_offer_expires_at
+                FROM users
+                WHERE (is_banned = 0 OR is_banned IS NULL)
+            """)
+            users = cursor.fetchall()
+
+            for row in users:
+                user_id = row['id']
+                telegram_id = row['telegram_id']
+
+                if database.user_has_active_subscription(user_id):
+                    continue
+
+                # --- Одноразовая скидка 10% на 24 часа (только после успешной отправки) ---
+                if not _user_notification_sent(cursor, user_id, 'discount_offer_24h'):
+                    if not database.user_has_paid_subscription_purchase(user_id):
+                        offer_reason = None
+                        first_start = _parse_dt_utc(
+                            row['first_start_at'] or row['created_at']
+                        )
+                        trial_expiry_raw = database.get_last_trial_expiry_iso(user_id)
+
+                        if trial_expiry_raw:
+                            trial_end = _parse_dt_utc(trial_expiry_raw)
+                            if trial_end and now_utc >= trial_end + timedelta(hours=24):
+                                offer_reason = 'after_trial'
+                        elif (
+                            first_start
+                            and now_utc >= first_start + timedelta(hours=24)
+                            and not database.user_ever_had_subscription(user_id)
+                        ):
+                            offer_reason = 'no_sub_24h'
+
+                        if offer_reason:
+                            msg = notify_msgs.build_discount_offer_message()
+                            if core.send_notification_to_user(telegram_id, msg):
+                                database.grant_24h_discount_offer(user_id)
+                                _mark_user_notification_sent(cursor, user_id, 'discount_offer_24h')
+                                logger.info(
+                                    f"24h discount offer ({offer_reason}) sent to {telegram_id}"
+                                )
+
+                if database.user_in_grace_period(user_id):
+                    continue
+
+                first_start = _parse_dt_utc(row['first_start_at'] or row['created_at'])
+                if not first_start:
+                    continue
+                if now_utc < first_start + timedelta(seconds=_NO_SUB_AFTER_START_SEC):
+                    continue
+
+                had_subscription = database.user_ever_had_subscription(user_id)
+                last_expiry_raw = database.get_user_last_subscription_expiry_iso(user_id)
+                last_expiry = _parse_dt_utc(last_expiry_raw) if last_expiry_raw else None
+
+                if had_subscription and last_expiry:
+                    period_end = last_expiry + timedelta(days=_NO_SUB_MAX_DAYS)
+                    if now_utc >= period_end:
+                        last_sent = _last_user_notification_at(cursor, user_id, 'comeback_reminder')
+                        if last_sent and (now_utc - last_sent).total_seconds() < _COMEBACK_INTERVAL_SEC:
+                            continue
+                        msg = notify_msgs.build_comeback_message()
+                        if core.send_notification_to_user(telegram_id, msg):
+                            _mark_user_notification_sent(cursor, user_id, 'comeback_reminder')
+                            logger.info(f"Comeback reminder sent to {telegram_id}")
+                        continue
+
+                if now_utc > first_start + timedelta(days=_NO_SUB_MAX_DAYS):
+                    continue
+                last_sent = _last_user_notification_at(cursor, user_id, 'no_sub_reminder')
+                if last_sent and (now_utc - last_sent).total_seconds() < _NO_SUB_INTERVAL_SEC:
+                    continue
+                msg = notify_msgs.build_no_sub_message()
+                if core.send_notification_to_user(telegram_id, msg):
+                    _mark_user_notification_sent(cursor, user_id, 'no_sub_reminder')
+                    logger.info(f"No-sub reminder sent to {telegram_id}")
+
+            conn.commit()
+            conn.close()
+
+        except Exception as e:
+            logger.error(f"Error in user_engagement_notifications_task: {e}", exc_info=True)
+        await asyncio.sleep(1800)
 
 
 async def auto_renewal_task():
@@ -480,7 +901,7 @@ async def auto_renewal_task():
             
             cursor.execute("""
                 SELECT vk.id, vk.key_uuid, vk.expiry_date, vk.plan_type, vk.traffic_limit,
-                       u.id as user_id, u.telegram_id, u.balance, u.username
+                       vk.devices_limit, u.id as user_id, u.telegram_id, u.balance, u.username
                 FROM vpn_keys vk
                 JOIN users u ON vk.user_id = u.id
                 WHERE vk.status = 'Active'
@@ -495,11 +916,9 @@ async def auto_renewal_task():
                 user_id = row['user_id']
                 telegram_id = row['telegram_id']
                 balance = float(row['balance'] or 0)
-                plan_type = row['plan_type'] or 'vpn'
                 
-                # Получаем минимальную цену продления (1 месяц VPN = 99₽)
-                renewal_price = 99  # Базовая цена за 1 месяц
-                renewal_days = 30
+                renewal_price = _get_renewal_price(row['devices_limit'])
+                renewal_days = _AUTO_RENEWAL_DAYS
                 
                 # Проверяем, достаточно ли средств на балансе
                 if balance >= renewal_price:
@@ -522,7 +941,7 @@ async def auto_renewal_task():
                             # Обновляем ключ в Remnawave
                             if key_uuid:
                                 try:
-                                    from backend.api import remnawave
+                                    from src.api import remnawave
                                     remnawave.remnawave_api.update_user_sync(
                                         uuid=key_uuid,
                                         expire_at=new_expiry
@@ -545,14 +964,9 @@ async def auto_renewal_task():
                             
                             conn.commit()
                             
-                            # Уведомляем пользователя
                             core.send_notification_to_user(
                                 telegram_id,
-                                f"✅ <b>Подписка автоматически продлена!</b>\n\n"
-                                f"💳 Списано с баланса: {renewal_price}₽\n"
-                                f"📅 Новая дата окончания: {new_expiry.strftime('%d.%m.%Y')}\n"
-                                f"💰 Остаток на балансе: {new_balance:.2f}₽\n\n"
-                                f"Если вы не хотите автопродления, уменьшите баланс до 0."
+                                notify_msgs.build_auto_renewal_message(key_id, new_balance),
                             )
                             
                             logger.info(f"Auto-renewed subscription for user {user_id} (key {key_id})")
@@ -565,30 +979,7 @@ async def auto_renewal_task():
                             conn.rollback()
                         except:
                             pass
-                else:
-                    # Недостаточно средств - уведомляем пользователя (только один раз)
-                    # Проверяем, не отправляли ли уже уведомление
-                    cursor.execute("""
-                        SELECT COUNT(*) as cnt FROM transactions 
-                        WHERE user_id = ? AND type = 'auto_renewal_warning' 
-                        AND created_at > datetime('now', '-2 hours')
-                    """, (user_id,))
-                    
-                    if cursor.fetchone()['cnt'] == 0:
-                        core.send_notification_to_user(
-                            telegram_id,
-                            f"⚠️ <b>Подписка истекает через 1 час!</b>\n\n"
-                            f"Для автоматического продления на балансе должно быть минимум {renewal_price}₽.\n"
-                            f"💰 Ваш баланс: {balance:.2f}₽\n\n"
-                            f"Пополните баланс, чтобы не потерять доступ к VPN!"
-                        )
-                        
-                        # Записываем предупреждение чтобы не спамить
-                        cursor.execute("""
-                            INSERT INTO transactions (user_id, type, amount, status, description)
-                            VALUES (?, 'auto_renewal_warning', 0, 'Info', 'Уведомление о недостатке средств для автопродления')
-                        """, (user_id,))
-                        conn.commit()
+                # Недостаточно средств — уведомления за 3/2/1 день отправляет subscription_notifications_task
             
             conn.close()
             
@@ -597,58 +988,6 @@ async def auto_renewal_task():
             import traceback
             traceback.print_exc()
             await asyncio.sleep(60)
-
-
-async def weekly_reminder_task():
-    """Еженедельное напоминание для неактивных пользователей (в течение полугода)"""
-    while True:
-        try:
-            await asyncio.sleep(86400)  # Проверка раз в день
-            
-            # Проверяем только по понедельникам
-            from datetime import datetime, timedelta
-            if datetime.now().weekday() != 0:  # 0 = понедельник
-                continue
-            
-            conn = database.get_db_connection()
-            cursor = conn.cursor()
-            
-            # Находим пользователей у которых были подписки, но нет активных,
-            # и последняя подписка была удалена не более 6 месяцев назад
-            six_months_ago = datetime.now() - timedelta(days=180)
-            
-            cursor.execute("""
-                SELECT DISTINCT u.telegram_id, u.id
-                FROM users u
-                WHERE u.id IN (
-                    SELECT DISTINCT user_id FROM transactions 
-                    WHERE type IN ('subscription', 'trial') 
-                    AND created_at > ?
-                )
-                AND u.id NOT IN (
-                    SELECT user_id FROM vpn_keys WHERE status = 'Active'
-                )
-                AND (u.is_banned = 0 OR u.is_banned IS NULL)
-            """, (six_months_ago.isoformat(),))
-            
-            for row in cursor.fetchall():
-                telegram_id = row['telegram_id']
-                
-                msg = (
-                    "❔️ <b>Вы про нас не забыли?</b>\n\n"
-                    "А мы про вас нет. Вы приобретали подписку у нас и перестали пользоваться. "
-                    "Нам очень жаль, если наш сервис вам не понравился.\n\n"
-                    "Напишите нам в поддержку, чтобы мы разобрались с вашей проблемой "
-                    "и вы вновь могли пользоваться нашим сервисом!"
-                )
-                
-                core.send_notification_to_user(telegram_id, msg)
-            
-            conn.close()
-            
-        except Exception as e:
-            logger.error(f"Error in weekly_reminder_task: {e}")
-            await asyncio.sleep(3600)
 
 
 async def auto_refund_expired_withdrawals():
@@ -666,7 +1005,7 @@ async def auto_refund_expired_withdrawals():
                 FROM transactions t
                 JOIN users u ON t.user_id = u.id
                 WHERE t.type = 'withdrawal_request' 
-                  AND t.status = 'Pending'
+                  AND t.status IN ('Pending', 'Approved')
                   AND datetime(t.created_at) < datetime('now', '-7 days')
             """)
             
@@ -692,10 +1031,7 @@ async def auto_refund_expired_withdrawals():
                 # Уведомляем пользователя
                 core.send_notification_to_user(
                     telegram_id,
-                    f"⏰ <b>Истёк срок обработки заявки на вывод</b>\n\n"
-                    f"💵 Сумма: {amount}₽\n\n"
-                    f"Заявка не была обработана в течение 7 дней. "
-                    f"Средства возвращены на ваш реферальный баланс."
+                    notify_msgs.build_withdrawal_expired_refund_message(amount),
                 )
                 
                 logger.info(f"Auto-refunded withdrawal #{trans_id} for user {user_id}: {amount}₽")
@@ -716,16 +1052,20 @@ async def main():
     # Запускаем фоновые задачи
     asyncio.create_task(auto_refund_expired_withdrawals())
     asyncio.create_task(subscription_notifications_task())
-    asyncio.create_task(weekly_reminder_task())
+    asyncio.create_task(user_engagement_notifications_task())
     asyncio.create_task(auto_renewal_task())  # Автопродление за 60 минут до истечения
     
     logger.info("Бот запущен...")
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+    # Stars обрабатываются через polling (pre_checkout_query + successful_payment).
+    # Webhook с install.sh сбрасывался при каждом рестарте бота — из-за этого оплата зависала.
+    await bot.delete_webhook(drop_pending_updates=False)
+    await dp.start_polling(
+        bot,
+        allowed_updates=["message", "callback_query", "pre_checkout_query"],
+    )
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Бот остановлен")
-
