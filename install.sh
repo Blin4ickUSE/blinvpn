@@ -484,7 +484,7 @@ register_cryptopay_webhook() {
 }
 
 REPO_URL="https://github.com/Blin4ickUSE/blinvpn.git"
-REPO_BRANCH="${BLINVPN_BRANCH:-2.0-refactoring}"
+REPO_BRANCH="${BLINVPN_BRANCH:-2.0}"
 PROJECT_DIR="blinvpn"
 NGINX_CONF="/etc/nginx/sites-available/${PROJECT_DIR}.conf"
 NGINX_LINK="/etc/nginx/sites-enabled/${PROJECT_DIR}.conf"

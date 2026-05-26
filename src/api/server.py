@@ -558,28 +558,77 @@ def get_telegram_user_from_request() -> dict | None:
         return verify_telegram_webapp_data(init_data)
     return None
 
-def require_telegram_auth(allow_user_id: bool = False):
+
+def miniapp_auth_relaxed() -> bool:
+    """Разрешить miniapp без initData (только dev: MINIAPP_ALLOW_UNAUTH=1)."""
+    return os.getenv('MINIAPP_ALLOW_UNAUTH', '').lower() in ('1', 'true', 'yes')
+
+
+def enforce_telegram_id_auth(telegram_id: int | None):
     """
-    Декоратор для проверки Telegram аутентификации.
-    Если allow_user_id=True, также проверяет что user_id в запросе совпадает с authenticated user.
+    Проверяет, что telegram_id совпадает с пользователем из подписанного initData.
+    Returns None если OK, иначе (response, status_code).
     """
-    def decorator(f):
-        def wrapper(*args, **kwargs):
-            tg_user = get_telegram_user_from_request()
-            
-            # Если initData не валидный, проверяем fallback через telegram_id
-            # Это менее безопасно, но сохраняет обратную совместимость
-            if not tg_user:
-                # В production здесь должен быть return jsonify({'error': 'Unauthorized'}), 401
-                # Но для совместимости оставляем fallback
-                pass
-            
-            # Добавляем user данные в kwargs для использования в функции
-            kwargs['_tg_user'] = tg_user
-            return f(*args, **kwargs)
-        wrapper.__name__ = f.__name__
-        return wrapper
-    return decorator
+    if not telegram_id:
+        return jsonify({'error': 'telegram_id required'}), 400
+
+    tg_user = get_telegram_user_from_request()
+    if tg_user:
+        verified_id = int(tg_user.get('id') or 0)
+        if verified_id != int(telegram_id):
+            logger.warning(
+                'telegram_id spoof attempt: claimed=%s verified=%s ip=%s',
+                telegram_id,
+                verified_id,
+                request.remote_addr,
+            )
+            return jsonify({'error': 'Forbidden'}), 403
+        return None
+
+    if miniapp_auth_relaxed():
+        return None
+
+    return jsonify({
+        'error': 'Unauthorized',
+        'message': 'Valid X-Telegram-Init-Data header required',
+    }), 401
+
+
+def enforce_user_id_auth(user_id: int | None, user: dict | None = None):
+    """
+    Проверяет, что user_id принадлежит пользователю из initData.
+    Returns None если OK, иначе (response, status_code).
+    """
+    if not user_id:
+        return jsonify({'error': 'user_id required'}), 400
+
+    if user is None:
+        user = database.get_user_by_id(int(user_id))
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    tg_user = get_telegram_user_from_request()
+    if tg_user:
+        verified_id = int(tg_user.get('id') or 0)
+        owner_id = int(user.get('telegram_id') or 0)
+        if verified_id != owner_id:
+            logger.warning(
+                'user_id spoof attempt: user_id=%s owner_tg=%s verified_tg=%s ip=%s',
+                user_id,
+                owner_id,
+                verified_id,
+                request.remote_addr,
+            )
+            return jsonify({'error': 'Forbidden'}), 403
+        return None
+
+    if miniapp_auth_relaxed():
+        return None
+
+    return jsonify({
+        'error': 'Unauthorized',
+        'message': 'Valid X-Telegram-Init-Data header required',
+    }), 401
 
 def require_auth(f):
     """Декоратор для проверки аутентификации по session token."""
@@ -759,9 +808,10 @@ def get_user_info():
     username = request.args.get('username', '')
     first_name = request.args.get('first_name', '')  # Имя пользователя из Telegram
     ref = request.args.get('ref', type=int)  # Telegram ID реферера
-    
-    if not telegram_id:
-        return jsonify({'error': 'telegram_id required'}), 400
+
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
     
     # Нельзя быть своим собственным рефералом
     if ref == telegram_id:
@@ -895,12 +945,9 @@ def get_user_info():
 def get_user_avatar():
     """Прокси аватара: Telegram CDN → наш API → miniapp (для РФ и др.)."""
     telegram_id = request.args.get('telegram_id', type=int)
-    if not telegram_id:
-        return jsonify({'error': 'telegram_id required'}), 400
-
-    tg_user = get_telegram_user_from_request()
-    if tg_user and int(tg_user.get('id') or 0) != int(telegram_id):
-        return jsonify({'error': 'Forbidden'}), 403
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
 
     avatar = fetch_telegram_user_avatar(telegram_id)
     if not avatar:
@@ -928,6 +975,10 @@ def create_payment():
     user = database.get_user_by_id(user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
+
+    auth_err = enforce_user_id_auth(user_id, user)
+    if auth_err:
+        return auth_err
     
     # Проверка на бан и blacklist
     ban_status = get_user_ban_status(user)
@@ -1126,6 +1177,10 @@ def apply_promocode():
     
     if not user_id or not code:
         return jsonify({'error': 'Missing required fields'}), 400
+
+    auth_err = enforce_user_id_auth(user_id)
+    if auth_err:
+        return auth_err
     
     result = core.apply_promocode(user_id, code)
     return jsonify(result)
@@ -1134,8 +1189,9 @@ def apply_promocode():
 def get_user_devices():
     """Получить список устройств пользователя"""
     telegram_id = request.args.get('telegram_id', type=int)
-    if not telegram_id:
-        return jsonify({'error': 'telegram_id required'}), 400
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
     
     user = database.get_user_by_telegram_id(telegram_id)
     if not user:
@@ -1289,8 +1345,9 @@ def get_user_devices():
 def get_user_history():
     """Получить историю транзакций пользователя"""
     telegram_id = request.args.get('telegram_id', type=int)
-    if not telegram_id:
-        return jsonify({'error': 'telegram_id required'}), 400
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
     
     user = database.get_user_by_telegram_id(telegram_id)
     if not user:
@@ -1369,8 +1426,9 @@ def get_user_history():
 def get_user_payment_methods():
     """Получить сохраненные способы оплаты пользователя"""
     telegram_id = request.args.get('telegram_id', type=int)
-    if not telegram_id:
-        return jsonify({'error': 'telegram_id required'}), 400
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
     
     user = database.get_user_by_telegram_id(telegram_id)
     if not user:
@@ -1406,8 +1464,9 @@ def get_user_payment_methods():
 def delete_payment_method(method_id: int):
     """Удалить сохраненный способ оплаты"""
     telegram_id = request.args.get('telegram_id', type=int)
-    if not telegram_id:
-        return jsonify({'error': 'telegram_id required'}), 400
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
     
     user = database.get_user_by_telegram_id(telegram_id)
     if not user:
@@ -1430,8 +1489,9 @@ def delete_payment_method(method_id: int):
 def delete_user_device(device_id: int):
     """Удалить устройство пользователя и ключ из Remnawave"""
     telegram_id = request.args.get('telegram_id', type=int)
-    if not telegram_id:
-        return jsonify({'error': 'telegram_id required'}), 400
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
     
     user = database.get_user_by_telegram_id(telegram_id)
     if not user:
@@ -1478,8 +1538,9 @@ def delete_user_device(device_id: int):
 def update_device_name(device_id: int):
     """Обновить имя устройства/ключа"""
     telegram_id = request.args.get('telegram_id', type=int)
-    if not telegram_id:
-        return jsonify({'error': 'telegram_id required'}), 400
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
     
     data = request.json or {}
     new_name = data.get('name', '').strip()
@@ -1536,6 +1597,10 @@ def extend_subscription():
     user = database.get_user_by_id(user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
+
+    auth_err = enforce_user_id_auth(user_id, user)
+    if auth_err:
+        return auth_err
     
     # Проверка на бан и blacklist
     ban_status = get_user_ban_status(user)
@@ -1738,6 +1803,10 @@ def create_subscription():
     user = database.get_user_by_id(user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
+
+    auth_err = enforce_user_id_auth(user_id, user)
+    if auth_err:
+        return auth_err
     
     # Проверка на бан и blacklist
     ban_status = get_user_ban_status(user)
@@ -3174,8 +3243,9 @@ def update_key(key_id: int):
 def get_user_referrals():
     """Получить список рефералов пользователя"""
     telegram_id = request.args.get('telegram_id', type=int)
-    if not telegram_id:
-        return jsonify({'error': 'telegram_id required'}), 400
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
 
     user = database.get_user_by_telegram_id(telegram_id)
     if not user:
@@ -3313,8 +3383,9 @@ def get_user_referrals():
 def get_referral_income_history():
     """Получить историю реферального дохода пользователя"""
     telegram_id = request.args.get('telegram_id', type=int)
-    if not telegram_id:
-        return jsonify({'error': 'telegram_id required'}), 400
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
     
     user = database.get_user_by_telegram_id(telegram_id)
     if not user:
@@ -3384,6 +3455,15 @@ def request_withdrawal():
     if not telegram_id or not method:
         logger.error("Missing required fields: telegram_id or method")
         return jsonify({'error': 'Missing required fields'}), 400
+
+    try:
+        telegram_id = int(telegram_id)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid telegram_id'}), 400
+
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
     
     try:
         amount = float(amount)
