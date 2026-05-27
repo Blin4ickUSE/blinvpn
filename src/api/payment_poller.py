@@ -100,7 +100,7 @@ def _is_already_credited(payment_id: str, provider: str) -> bool:
 def _check_cryptopay(tx: Dict[str, Any]) -> None:
     """Проверить и при необходимости зачислить CryptoPay-платёж."""
     from src.api import cryptopay
-    from src.api.webhook import credit_deposit_from_payment  # type: ignore
+    from src.core.webhook import credit_deposit_from_payment  # type: ignore
 
     payment_id = str(tx.get("payment_id") or "")
     if not payment_id.startswith("cryptopay:"):
@@ -142,7 +142,7 @@ def _check_cryptopay(tx: Dict[str, Any]) -> None:
 def _check_heleket(tx: Dict[str, Any]) -> None:
     """Проверить и при необходимости зачислить Heleket-платёж."""
     from src.api import heleket
-    from src.api.webhook import credit_deposit_from_payment  # type: ignore
+    from src.core.webhook import credit_deposit_from_payment  # type: ignore
 
     payment_id = str(tx.get("payment_id") or "")
     # payment_id хранится как uuid или order_id
@@ -177,7 +177,7 @@ def _check_heleket(tx: Dict[str, Any]) -> None:
 def _check_platega(tx: Dict[str, Any]) -> None:
     """Проверить и при необходимости зачислить Platega-платёж."""
     from src.api import platega
-    from src.api.webhook import credit_deposit_from_payment  # type: ignore
+    from src.core.webhook import credit_deposit_from_payment  # type: ignore
 
     payment_id = str(tx.get("payment_id") or "")
     if not payment_id:
@@ -211,7 +211,7 @@ def _check_platega(tx: Dict[str, Any]) -> None:
 def _check_rollypay(tx: Dict[str, Any]) -> None:
     """Проверить и при необходимости зачислить RollyPay-платёж."""
     from src.api import rollypay
-    from src.api.webhook import credit_deposit_from_payment  # type: ignore
+    from src.core.webhook import credit_deposit_from_payment  # type: ignore
 
     payment_id = str(tx.get("payment_id") or "")
     if not payment_id:
