@@ -159,6 +159,39 @@ class CryptoPayAPI:
             or hmac.compare_digest(expected_raw_key, signature_header)
         )
 
+    def check_payment_status(self, payment_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Ручная проверка статуса платежа по payment_id (формат 'cryptopay:{invoice_id}').
+        Возвращает dict с полями: status ('paid'|'active'|'expired'|...), amount, paid_at.
+        """
+        try:
+            raw_invoice_id = payment_id.split(":", 1)[1] if ":" in payment_id else payment_id
+            invoice = self.get_invoice(int(raw_invoice_id))
+            if not isinstance(invoice, dict):
+                return None
+            status = str(invoice.get("status") or "").strip().lower()
+            fiat_amount = (
+                invoice.get("paid_fiat_amount")
+                or invoice.get("fiat_amount")
+                or invoice.get("amount")
+                or 0
+            )
+            try:
+                amount = float(str(fiat_amount).replace(",", "."))
+            except Exception:
+                amount = 0.0
+            return {
+                "status": status,
+                "is_paid": status == "paid",
+                "amount": amount,
+                "invoice_id": invoice.get("invoice_id"),
+                "paid_at": invoice.get("paid_at"),
+                "payload": invoice.get("payload"),
+            }
+        except Exception as e:
+            logger.error("CryptoPay check_payment_status error: %s", e)
+            return None
+
     @staticmethod
     def extract_user_id_from_payload(payload: str) -> Optional[int]:
         try:
