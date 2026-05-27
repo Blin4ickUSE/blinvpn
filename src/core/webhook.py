@@ -156,34 +156,45 @@ def heleket_webhook():
             if len(parts) >= 2 and parts[0] == 'heleket':
                 user_id = int(parts[1])
                 
-                # Проверяем, не был ли уже обработан этот платеж
+                payment_ref = uuid or order_id
+                # Проверяем, не был ли уже обработан этот платеж (только Success, Pending не считается)
                 conn = database.get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT id FROM transactions WHERE payment_id = ? AND payment_provider = 'Heleket'",
-                    (uuid or order_id,)
+                    "SELECT id FROM transactions WHERE payment_id = ? AND payment_provider = 'Heleket' AND status = 'Success'",
+                    (payment_ref,)
                 )
                 existing = cursor.fetchone()
                 conn.close()
                 
                 if existing:
-                    logger.info(f"Heleket платеж {uuid or order_id} уже обработан")
+                    logger.info(f"Heleket платеж {payment_ref} уже обработан")
                     return jsonify({'status': 'ok'}), 200
                 
                 # Обновляем баланс
                 database.update_user_balance(user_id, amount)
                 
-                # Создаем транзакцию
+                # Обновляем существующую Pending-транзакцию или создаём новую
                 conn = database.get_db_connection()
                 cursor = conn.cursor()
                 description = f"Пополнение через Heleket"
                 if payer_amount and payer_currency:
                     description += f" ({payer_amount} {payer_currency})"
-                    
-                cursor.execute("""
-                    INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
-                    VALUES (?, 'deposit', ?, 'Success', 'Crypto', 'Heleket', ?, ?)
-                """, (user_id, amount, uuid or order_id, description))
+                cursor.execute(
+                    "SELECT id FROM transactions WHERE payment_id = ? AND payment_provider = 'Heleket' AND status = 'Pending'",
+                    (payment_ref,)
+                )
+                pending = cursor.fetchone()
+                if pending:
+                    cursor.execute("""
+                        UPDATE transactions SET status = 'Success', amount = ?, description = ?
+                        WHERE id = ?
+                    """, (amount, description, pending['id']))
+                else:
+                    cursor.execute("""
+                        INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
+                        VALUES (?, 'deposit', ?, 'Success', 'Crypto', 'Heleket', ?, ?)
+                    """, (user_id, amount, payment_ref, description))
                 conn.commit()
                 conn.close()
                 
@@ -253,7 +264,7 @@ def platega_webhook():
             conn = database.get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT id FROM transactions WHERE payment_id = ? AND payment_provider = 'Platega'",
+                "SELECT id FROM transactions WHERE payment_id = ? AND payment_provider = 'Platega' AND status = 'Success'",
                 (transaction_id,)
             )
             existing = cursor.fetchone()
