@@ -163,6 +163,30 @@ class PlategaAPI:
                                          return_url=return_url, failed_url=failed_url)
         return result
     
+    def check_payment_status(self, transaction_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Ручная проверка статуса платежа по transaction_id (поле 'id' из create_payment).
+        Документация: GET /transaction/{id}
+        Статусы: PENDING, CONFIRMED, CANCELED, CHARGEBACKED
+        """
+        result = self._request('GET', f'/transaction/{transaction_id}')
+        if not result:
+            return None
+        status = str(result.get('status') or '').upper()
+        is_paid = status in PLATEGA_SUCCESS_STATUSES
+        try:
+            amount = float(result.get('amount') or result.get('paymentDetails', {}).get('amount') or 0)
+        except Exception:
+            amount = 0.0
+        payload = result.get('payload') or result.get('correlationId') or ''
+        return {
+            "status": status,
+            "is_paid": is_paid,
+            "amount": amount,
+            "transaction_id": result.get('transactionId') or result.get('id') or transaction_id,
+            "payload": payload,
+        }
+
     def verify_webhook(self, headers: Dict, payload: Dict) -> bool:
         """
         Проверить webhook от Platega
