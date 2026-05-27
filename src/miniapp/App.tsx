@@ -87,6 +87,7 @@ type ViewState =
   | 'history' 
   | 'referral' 
   | 'referral_detail' 
+  | 'partner'
   | 'promo';
 
 type PlatformId = 'android' | 'ios' | 'windows' | 'macos' | 'linux' | 'androidtv';
@@ -840,6 +841,11 @@ const AnimatedBackground: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       .ripple:active::after { opacity: 1; transform: scale(1); transition: 0s; }
 
+      /* ====== PARTNER CTA BANNER ====== */
+      .partner-cta-arrow { transition: transform .2s ease; }
+      .partner-cta:hover .partner-cta-arrow { transform: translateX(3px); }
+      .partner-cta:active .partner-cta-arrow { transform: translateX(4px); }
+
       /* Scrollbar */
       .custom-scrollbar::-webkit-scrollbar { width: 6px; }
       .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
@@ -1047,6 +1053,7 @@ const VIEW_DEPTH: Record<string, number> = {
   extend_subscription: 2,
   instruction_view: 2,
   referral_detail: 2,
+  partner: 2,
   wait_payment: 3,
   success_payment: 4,
 };
@@ -3363,6 +3370,26 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      {/* Стать партнёром */}
+      <button
+        onClick={() => setView('partner')}
+        className="partner-cta group w-full flex items-center gap-3 rounded-xl mb-6 p-4 text-left bg-orange-500/[0.07] border border-orange-500/25 hover:bg-orange-500/[0.12] active:scale-[0.99] transition-all"
+      >
+        <div className="shrink-0 w-10 h-10 rounded-lg bg-orange-500/15 border border-orange-500/25 flex items-center justify-center text-orange-400">
+          <Crown size={20} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-base font-bold text-white">Стать партнёром</span>
+            <span className="text-[10px] font-bold tracking-wide text-orange-300 bg-orange-500/15 px-1.5 py-0.5 rounded">до 40%</span>
+          </div>
+          <p className="text-xs text-zinc-400 leading-snug mt-0.5">
+            Рекламируйте BlinVPN в своём блоге и зарабатывайте до 40% от дохода
+          </p>
+        </div>
+        <ChevronRight size={18} className="text-orange-400/70 shrink-0 partner-cta-arrow" />
+      </button>
       
       <div>
         <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-wider mb-3 px-1">Приглашенные пользователи</h3>
@@ -3408,6 +3435,101 @@ export default function App() {
       </div>
     </div>
   );
+
+  const PartnerView = () => {
+    const openPartnerChat = () => {
+      const link = 'https://t.me/blin4icks';
+      try {
+        const tg: any = (window as any).Telegram?.WebApp;
+        if (typeof tg?.openTelegramLink === 'function') {
+          tg.openTelegramLink(link);
+        } else if (typeof tg?.openLink === 'function') {
+          tg.openLink(link);
+        } else {
+          window.open(link, '_blank');
+        }
+      } catch {
+        window.open(link, '_blank');
+      }
+    };
+
+    const requirements = [
+      {
+        icon: <Globe size={18} />,
+        title: 'Разрешённые площадки',
+        text: 'TikTok, Instagram, YouTube, Telegram-каналы, блоги и статьи и другие площадки с реальной аудиторией.',
+      },
+      {
+        icon: <UserPlus size={18} />,
+        title: 'Минимум 1000 подписчиков',
+        text: 'На площадке, где вы планируете рекламировать BlinVPN, должно быть не менее 1000 подписчиков.',
+      },
+      {
+        icon: <Sparkles size={18} />,
+        title: 'Живая аудитория',
+        text: 'Аудитория должна быть настоящей и активной — без накруток и ботов.',
+      },
+    ];
+
+    return (
+      <div className="min-h-full flex flex-col pb-24">
+        <Header title="Партнёрская программа" onBack={() => setView('referral')} />
+
+        {/* Hero */}
+        <div className="rounded-2xl mb-6 p-6 text-center bg-orange-500/[0.07] border border-orange-500/25">
+          <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-orange-500/15 border border-orange-500/25 flex items-center justify-center text-orange-400">
+            <Crown size={28} />
+          </div>
+          <h2 className="text-xl font-bold text-white mb-1">Зарабатывайте с BlinVPN</h2>
+          <p className="text-zinc-400 text-sm leading-relaxed">
+            Рекламируйте BlinVPN в своём блоге и получайте до{' '}
+            <span className="text-orange-400 font-bold">40%</span> от дохода привлечённых пользователей.
+          </p>
+        </div>
+
+        {/* Requirements */}
+        <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-wider mb-3 px-1">Требования</h3>
+        <div className="space-y-3 mb-6">
+          {requirements.map((r, i) => (
+            <div
+              key={i}
+              className="flex gap-3 bg-zinc-800/50 border border-zinc-800 p-4 rounded-xl"
+            >
+              <div className="shrink-0 w-9 h-9 rounded-lg bg-orange-500/10 border border-orange-500/20 flex items-center justify-center text-orange-400">
+                {r.icon}
+              </div>
+              <div>
+                <div className="text-sm font-bold text-white mb-0.5">{r.title}</div>
+                <div className="text-xs text-zinc-400 leading-relaxed">{r.text}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Disclaimer */}
+        <div className="flex gap-3 bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 mb-8">
+          <AlertTriangle size={18} className="text-amber-400 shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-200/80 leading-relaxed">
+            Администрация оставляет за собой право отказать в участии без объяснения причин.
+            Заявки рассматриваются индивидуально.
+          </p>
+        </div>
+
+        {/* CTA */}
+        <div className="mt-auto">
+          <button
+            onClick={openPartnerChat}
+            className="ripple w-full py-4 bg-orange-600 hover:bg-orange-500 text-white rounded-2xl font-bold transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-orange-900/40 flex items-center justify-center gap-2"
+          >
+            <MessageCircle size={20} /> Стать партнёром
+          </button>
+          <p className="text-center text-xs text-zinc-500 mt-3">
+            Напишите нам — <span className="text-zinc-400">@blin4icks</span>
+          </p>
+        </div>
+      </div>
+    );
+  };
 
   const PromoView = () => {
     const [code, setCode] = useState('');
@@ -3645,6 +3767,7 @@ export default function App() {
           {view === 'history' && <HistoryView />}
           {view === 'referral' && <ReferralView />}
           {view === 'referral_detail' && <ReferralDetailView />}
+          {view === 'partner' && <PartnerView />}
           {view === 'promo' && <PromoView />}
         </div>
       </div>
@@ -3978,4 +4101,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-            }
+    }
