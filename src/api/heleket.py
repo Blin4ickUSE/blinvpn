@@ -279,6 +279,31 @@ class HeleketAPI:
         
         return is_valid
     
+    def check_payment_status(self, order_id: str = None, uuid: str = None) -> Optional[Dict[str, Any]]:
+        """
+        Ручная проверка статуса платежа по order_id или uuid.
+        Возвращает dict с полями: status, is_paid, amount, payer_currency.
+        Статусы Heleket: check / paid / paid_over / wrong_amount / process / cancel / system_fail
+        """
+        result = self.get_payment_info(uuid=uuid, order_id=order_id)
+        if not result:
+            return None
+        status = str(result.get("status") or result.get("payment_status") or "").lower()
+        is_paid = status in ("paid", "paid_over")
+        try:
+            amount = float(result.get("amount") or 0)
+        except Exception:
+            amount = 0.0
+        return {
+            "status": status,
+            "is_paid": is_paid,
+            "amount": amount,
+            "payer_amount": result.get("payer_amount"),
+            "payer_currency": result.get("payer_currency"),
+            "uuid": result.get("uuid"),
+            "order_id": result.get("order_id"),
+        }
+
     def get_available_services(self) -> Optional[Dict]:
         """Получить доступные платежные сервисы/криптовалюты"""
         return self._request('v1/payment/services', {})
