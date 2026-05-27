@@ -139,6 +139,29 @@ class RollyPayAPI:
             fail_redirect_url=fail_redirect_url,
         )
 
+    def check_payment_status(self, payment_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Ручная проверка статуса платежа по payment_id.
+        Документация: GET /api/v1/payments/{payment_id}
+        Статусы: created / pending / paid / failed / cancelled / expired
+        """
+        result = self._request("GET", f"/payments/{payment_id}")
+        if not result:
+            return None
+        status = str(result.get("status") or "").strip().lower()
+        is_paid = status == "paid"
+        try:
+            amount = float(str(result.get("amount") or "0").replace(",", "."))
+        except Exception:
+            amount = 0.0
+        return {
+            "status": status,
+            "is_paid": is_paid,
+            "amount": amount,
+            "payment_id": result.get("payment_id") or payment_id,
+            "order_id": result.get("order_id"),
+        }
+
     def verify_webhook_signature(
         self, raw_body: bytes, timestamp: str, signature: str
     ) -> bool:
