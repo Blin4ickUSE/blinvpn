@@ -35,8 +35,13 @@ def _build_webhook_url() -> str:
         if _HELEKET_WEBHOOK_PORT:
             return f"https://{_HELEKET_WEBHOOK_DOMAIN}:{_HELEKET_WEBHOOK_PORT}/heleket"
         return f"https://{_HELEKET_WEBHOOK_DOMAIN}/heleket"
-    # Fallback на старую переменную
-    return HELEKET_CALLBACK_URL
+    if HELEKET_CALLBACK_URL:
+        return HELEKET_CALLBACK_URL
+    # Fallback: WEBHOOK_URL выставляется инсталлятором автоматически
+    base = os.getenv("WEBHOOK_URL", "").rstrip("/")
+    if base:
+        return f"{base}/heleket"
+    return ""
 
 HELEKET_RETURN_URL = os.getenv('HELEKET_RETURN_URL', '')
 HELEKET_SUCCESS_URL = os.getenv('HELEKET_SUCCESS_URL', '')
