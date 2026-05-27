@@ -3457,7 +3457,7 @@ export default function App() {
       {
         icon: <Globe size={18} />,
         title: 'Разрешённые площадки',
-        text: 'TikTok, Instagram, YouTube, Telegram-каналы, блоги и статьи и другие площадки с реальной аудиторией.',
+        text: 'TikTok, Instagram, YouTube, Telegram каналы, блоги и статьи и другие площадки с реальной аудиторией.',
       },
       {
         icon: <UserPlus size={18} />,
@@ -3467,7 +3467,7 @@ export default function App() {
       {
         icon: <Sparkles size={18} />,
         title: 'Живая аудитория',
-        text: 'Аудитория должна быть настоящей и активной — без накруток и ботов.',
+        text: 'Аудитория должна быть настоящей и активной - без накруток и ботов.',
       },
     ];
 
@@ -3510,7 +3510,7 @@ export default function App() {
         <div className="flex gap-3 bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 mb-8">
           <AlertTriangle size={18} className="text-amber-400 shrink-0 mt-0.5" />
           <p className="text-xs text-amber-200/80 leading-relaxed">
-            Администрация оставляет за собой право отказать в участии без объяснения причин.
+            Администратор оставляет за собой право отказать в участии без объяснения причин.
             Заявки рассматриваются индивидуально.
           </p>
         </div>
