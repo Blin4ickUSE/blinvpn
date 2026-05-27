@@ -23,6 +23,7 @@ from src.core import core
 from src.core import messages as notify_msgs
 from src.core.blacklist import start_blacklist_updater, update_blacklist
 from src.api import remnawave, heleket, platega, rollypay, cryptopay
+from src.api.payment_poller import start_payment_poller
 from src.core import payment_wait
 
 app = Flask(__name__)
@@ -5841,4 +5842,8 @@ if __name__ == '__main__':
     
     # Запускаем планировщик бэкапов
     start_backup_scheduler()
+
+    # Запускаем поллер платежей (перестрахование от потерянных вебхуков)
+    start_payment_poller()
+
     app.run(host='0.0.0.0', port=int(os.getenv('API_PORT', 8000)))
