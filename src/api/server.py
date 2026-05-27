@@ -1017,8 +1017,25 @@ def create_payment():
             # Криптовалюта через Heleket
             payment = heleket.heleket_api.create_payment(amount, user_id)
             if payment:
+                payment_id = payment.get('uuid') or payment.get('order_id')
+                try:
+                    conn = database.get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
+                        VALUES (?, 'deposit', ?, 'Pending', 'Crypto', 'Heleket', ?, ?)
+                        """,
+                        (int(user_id), float(amount), payment_id, "Ожидание оплаты Heleket"),
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception as _e:
+                    logger.warning("Heleket: не удалось создать Pending-транзакцию: %s", _e)
+                    try: conn.close()
+                    except Exception: pass
                 return jsonify({
-                    'payment_id': payment.get('uuid') or payment.get('order_id'),
+                    'payment_id': payment_id,
                     'payment_url': payment.get('payment_url'),
                     'status': payment.get('status', 'pending'),
                     'payer_amount': payment.get('payer_amount'),
@@ -1031,6 +1048,22 @@ def create_payment():
                 amount, user_id, return_url=return_url, failed_url=failed_url
             )
             if payment:
+                try:
+                    conn = database.get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
+                        VALUES (?, 'deposit', ?, 'Pending', 'Карта', 'Platega', ?, ?)
+                        """,
+                        (int(user_id), float(amount), payment.get('id'), "Ожидание оплаты Platega"),
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception as _e:
+                    logger.warning("Platega: не удалось создать Pending-транзакцию: %s", _e)
+                    try: conn.close()
+                    except Exception: pass
                 return jsonify({
                     'payment_id': payment.get('id'),
                     'payment_url': payment.get('redirect_url'),
@@ -1048,6 +1081,22 @@ def create_payment():
                 failed_url=failed_url,
             )
             if payment:
+                try:
+                    conn = database.get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
+                        VALUES (?, 'deposit', ?, 'Pending', 'Карта', 'Platega', ?, ?)
+                        """,
+                        (int(user_id), float(amount), payment.get('id'), "Ожидание оплаты Platega (карта РФ)"),
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception as _e:
+                    logger.warning("Platega: не удалось создать Pending-транзакцию: %s", _e)
+                    try: conn.close()
+                    except Exception: pass
                 return jsonify({
                     'payment_id': payment.get('id'),
                     'payment_url': payment.get('redirect_url'),
@@ -1065,6 +1114,22 @@ def create_payment():
                 failed_url=failed_url,
             )
             if payment:
+                try:
+                    conn = database.get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
+                        VALUES (?, 'deposit', ?, 'Pending', 'Карта', 'Platega', ?, ?)
+                        """,
+                        (int(user_id), float(amount), payment.get('id'), "Ожидание оплаты Platega (иностр. карта)"),
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception as _e:
+                    logger.warning("Platega: не удалось создать Pending-транзакцию: %s", _e)
+                    try: conn.close()
+                    except Exception: pass
                 return jsonify({
                     'payment_id': payment.get('id'),
                     'payment_url': payment.get('redirect_url'),
@@ -1081,6 +1146,22 @@ def create_payment():
                 fail_redirect_url=failed_url,
             )
             if payment:
+                try:
+                    conn = database.get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
+                        VALUES (?, 'deposit', ?, 'Pending', 'СБП', 'RollyPay', ?, ?)
+                        """,
+                        (int(user_id), float(amount), payment.get('id'), "Ожидание оплаты RollyPay СБП"),
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception as _e:
+                    logger.warning("RollyPay: не удалось создать Pending-транзакцию: %s", _e)
+                    try: conn.close()
+                    except Exception: pass
                 return jsonify({
                     'payment_id': payment.get('id'),
                     'payment_url': payment.get('redirect_url'),
