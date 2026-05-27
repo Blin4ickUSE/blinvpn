@@ -793,15 +793,26 @@ const AnimatedBackground: React.FC<{ children: React.ReactNode }> = ({ children 
 
       /* ====== PAGE / ROUTE TRANSITIONS ====== */
       @keyframes pageInForward {
-        from { opacity: 0; transform: translateX(36px); }
-        to   { opacity: 1; transform: translateX(0); }
+        from { opacity: 0; transform: translate3d(28px,0,0); }
+        to   { opacity: 1; transform: translate3d(0,0,0); }
       }
       @keyframes pageInBack {
-        from { opacity: 0; transform: translateX(-36px); }
-        to   { opacity: 1; transform: translateX(0); }
+        from { opacity: 0; transform: translate3d(-28px,0,0); }
+        to   { opacity: 1; transform: translate3d(0,0,0); }
       }
-      .page-enter-forward { animation: pageInForward 0.34s cubic-bezier(0.22,1,0.36,1) both; }
-      .page-enter-back    { animation: pageInBack 0.34s cubic-bezier(0.22,1,0.36,1) both; }
+      .page-enter-forward,
+      .page-enter-back,
+      .page-enter-first {
+        /* Promote to its own compositor layer so the WebView doesn't repaint-jitter */
+        will-change: transform, opacity;
+        backface-visibility: hidden;
+        transform: translateZ(0);
+      }
+      .page-enter-forward { animation: pageInForward 0.32s cubic-bezier(0.22,1,0.36,1) both; }
+      .page-enter-back    { animation: pageInBack 0.32s cubic-bezier(0.22,1,0.36,1) both; }
+      /* First app mount: fade only, no horizontal slide (avoids startup jitter
+         before the Telegram WebView has settled its layout). */
+      .page-enter-first   { animation: blinFadeIn 0.4s ease-out both; }
 
       /* ====== BACK BUTTON ====== */
       .blin-back-btn { transition: background-color .2s, color .2s, transform .2s; }
@@ -950,8 +961,8 @@ const Card: React.FC<{ children: React.ReactNode, className?: string, onClick?: 
 const Header: React.FC<{ title: string, onBack?: () => void }> = ({ title, onBack }) => (
   <div className="flex items-center gap-3 mb-6">
     {onBack && (
-      <button onClick={onBack} className="w-10 h-10 rounded-full bg-zinc-900 flex items-center justify-center text-zinc-300 hover:text-white transition-colors">
-        <ChevronLeft size={22} />
+      <button onClick={onBack} className="blin-back-btn w-10 h-10 rounded-full bg-zinc-900 flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 active:bg-orange-600/20">
+        <ChevronLeft size={22} className="blin-back-ico" />
       </button>
     )}
     <h1 className="text-2xl font-bold text-white">{title}</h1>
@@ -962,8 +973,8 @@ const Modal: React.FC<{ title: string, isOpen: boolean, onClose: () => void, chi
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/80 backdrop-blur-sm transition-opacity" onClick={onClose}></div>
-      <div className={`relative bg-black border border-zinc-900 w-full max-w-sm rounded-2xl p-6 shadow-2xl shadow-orange-950/20 transform transition-all scale-100 flex flex-col ${fullHeight ? 'h-[85vh]' : 'max-h-[90vh]'}`}>
+      <div className="absolute inset-0 bg-black/80 backdrop-blur-sm animate-fade-in" onClick={onClose}></div>
+      <div className={`relative bg-black border border-zinc-900 w-full max-w-sm rounded-2xl p-6 shadow-2xl shadow-orange-950/20 animate-scale-in flex flex-col ${fullHeight ? 'h-[85vh]' : 'max-h-[90vh]'}`}>
         <div className="flex justify-between items-center mb-4 shrink-0">
           <h3 className="text-xl font-bold text-white">{title}</h3>
           <button type="button" onClick={onClose} className="text-zinc-400 hover:text-white">
@@ -1022,9 +1033,54 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
 // 4. MAIN APPLICATION
 // ==========================================
 
+// Иерархия экранов: чем больше число, тем «глубже» экран.
+// Используется для определения направления анимации перехода (вперёд / назад).
+const VIEW_DEPTH: Record<string, number> = {
+  home: 0,
+  devices: 1,
+  history: 1,
+  referral: 1,
+  promo: 1,
+  topup: 1,
+  wizard: 1,
+  buy_device: 2,
+  extend_subscription: 2,
+  instruction_view: 2,
+  referral_detail: 2,
+  wait_payment: 3,
+  success_payment: 4,
+};
+
 export default function App() {
   // --- STATE ---
-  const [view, setView] = useState<ViewState>('home'); 
+  const [view, setViewRaw] = useState<ViewState>('home');
+  // Направление перехода между страницами: 'forward' (вглубь) | 'back' (назад)
+  const [navDir, setNavDir] = useState<'forward' | 'back'>('forward');
+  const [transitionKey, setTransitionKey] = useState(0);
+  const viewRef = useRef<ViewState>('home');
+  // Первый рендер приложения: используем только fade (без горизонтального слайда),
+  // чтобы не было «дёрганья» пока WebView Telegram достраивает лэйаут.
+  const isFirstViewRef = useRef(true);
+
+  // Обёртка над setView: вычисляет направление и форсирует ре-анимацию через ключ.
+  const setView = (next: React.SetStateAction<ViewState>) => {
+    setViewRaw(prev => {
+      const resolved = typeof next === 'function'
+        ? (next as (p: ViewState) => ViewState)(prev)
+        : next;
+      if (resolved !== prev) {
+        const from = VIEW_DEPTH[prev] ?? 0;
+        const to = VIEW_DEPTH[resolved] ?? 0;
+        // success_payment / wait_payment всегда выглядят как «вперёд»
+        setNavDir(to >= from ? 'forward' : 'back');
+        setTransitionKey(k => k + 1);
+        isFirstViewRef.current = false;
+        viewRef.current = resolved;
+      }
+      return resolved;
+    });
+  };
+
   const [balance, setBalance] = useState<number>(0);
   const [nextDiscountPercent, setNextDiscountPercent] = useState<number>(0);
   const [referralInviteDiscountActive, setReferralInviteDiscountActive] = useState(false);
@@ -1919,7 +1975,7 @@ export default function App() {
   // --- VIEWS ---
 
   const HomeView = () => (
-    <div className="space-y-6 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="space-y-6 pb-20">
       <div className="flex justify-between items-center py-2">
         <div className="flex items-center gap-3">
           {userPhotoUrl ? (
@@ -2024,7 +2080,7 @@ export default function App() {
   const WizardView = () => {
     const payableTotal = wizardPlan ? priceFinal(wizardPlan, wizardDeviceCount) : 0;
     return (
-    <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
+    <div className="min-h-full flex flex-col">
       <Header 
         title={
             wizardStep === 1 ? 'Тариф и устройства' :
@@ -2205,12 +2261,12 @@ export default function App() {
       )}
 
       {wizardStep === 4 && (
-        <div className="flex-1 flex flex-col h-full animate-fade-in">
+        <div className="flex-1 flex flex-col h-full">
             <div className="text-center mb-4">
                 <div className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center text-green-500 mx-auto mb-4 ring-2 ring-green-500/20">
                     <CheckCircle size={32} />
                 </div>
-                <h2 className="text-2xl font-bold text-white animate-slide-up">Успешно!</h2>
+                <h2 className="text-2xl font-bold text-white">Успешно!</h2>
                 <p className="text-zinc-400 text-sm px-2">Подписка активирована. Выберите устройство и откройте инструкцию:</p>
             </div>
 
@@ -2324,7 +2380,7 @@ export default function App() {
   };
 
   const DevicesView = () => (
-    <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
+    <div className="min-h-full flex flex-col">
       <Header title="Мои устройства" onBack={() => setView('home')} />
       <div className="flex-1 space-y-4">
         {devices.map(device => {
@@ -2455,7 +2511,7 @@ export default function App() {
     const priceForExtend = (p: Plan) => priceFinal(p, extPricingCnt);
 
     return (
-      <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
+      <div className="min-h-full flex flex-col">
         <Header 
           title="Продление подписки" 
           onBack={() => {
@@ -2557,7 +2613,7 @@ export default function App() {
   };
 
   const TopUpView = () => (
-    <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
+    <div className="min-h-full flex flex-col">
       <Header 
         title={topupStep === 1 ? "Сумма пополнения" : "Способ оплаты"} 
         onBack={() => {
@@ -2677,7 +2733,7 @@ export default function App() {
                   </button>
                   
                   {selectedMethod === method.id && method.variants && (
-                      <div className="mt-2 pl-12 pr-4 pb-2 animate-in slide-in-from-top-2">
+                      <div className="mt-2 pl-12 pr-4 pb-2 animate-in slide-in-from-top-2 duration-300">
                           <select 
                             value={selectedVariant || ''}
                             onChange={(e) => setSelectedVariant(e.target.value)}
@@ -2966,7 +3022,7 @@ export default function App() {
     };
 
     return (
-      <div className="flex flex-col min-h-[calc(100vh-2rem)] animate-in fade-in duration-300">
+      <div className="flex flex-col min-h-[calc(100vh-2rem)]">
 
         {/* Шапка с крестиком — как Header в других экранах */}
         <div className="flex items-center gap-3 mb-6">
@@ -3019,7 +3075,7 @@ export default function App() {
   };
 
   const PaymentSuccessView = () => (
-    <div className="flex flex-col items-center justify-center min-h-[80vh] animate-in zoom-in duration-500 text-center px-4">
+    <div className="flex flex-col items-center justify-center min-h-[80vh] text-center px-4">
       <div className="w-24 h-24 rounded-full bg-green-500/20 flex items-center justify-center mb-6 text-green-500">
         <CheckCircle size={48} />
       </div>
@@ -3046,7 +3102,7 @@ export default function App() {
     const steps = getInstructionSteps(pid, instructionPlainLinkMode);
 
     return (
-      <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
+      <div className="min-h-full flex flex-col">
         <Header title="Настройка" onBack={() => { setInstructionPlainLinkMode(false); setView('devices'); }} />
 
         {/* Platform selector */}
@@ -3184,7 +3240,7 @@ export default function App() {
   };
 
   const HistoryView = () => (
-    <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
+    <div className="min-h-full flex flex-col">
       <Header title="История" onBack={() => setView('home')} />
       {history.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center py-20 text-center">
@@ -3220,7 +3276,7 @@ export default function App() {
   const ReferralDetailView = () => {
     if (!selectedReferral) return null;
     return (
-     <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
+     <div className="min-h-full flex flex-col">
         <Header title={selectedReferral.name} onBack={() => setView('referral')} />
         
         <div className="grid grid-cols-2 gap-4 mb-6">
@@ -3256,7 +3312,7 @@ export default function App() {
   };
 
   const ReferralView = () => (
-    <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
+    <div className="min-h-full flex flex-col">
       <Header title="Реферальная программа" onBack={() => setView('home')} />
       
       <div className="bg-gradient-to-br from-green-900/40 to-black border border-green-500/20 p-6 rounded-2xl mb-6 text-center">
@@ -3356,7 +3412,7 @@ export default function App() {
   const PromoView = () => {
     const [code, setCode] = useState('');
     return (
-      <div className="min-h-full flex flex-col animate-in slide-in-from-right duration-300">
+      <div className="min-h-full flex flex-col">
         <Header title="Промокод" onBack={() => setView('home')} />
         <div className="flex-1 flex flex-col justify-center items-center px-4 pb-20">
           <div className="w-20 h-20 bg-purple-500/10 rounded-full flex items-center justify-center text-purple-500 mb-6">
@@ -3567,20 +3623,30 @@ export default function App() {
 
   return (
     <AnimatedBackground>
-      <div className={`p-4 min-h-screen flex flex-col overflow-x-clip animate-fade-in ${userLoadFailed ? 'pointer-events-none select-none user-load-failed opacity-60' : ''}`}>
-        {view === 'home' && <HomeView />}
-        {view === 'wizard' && <WizardView />}
-        {view === 'topup' && <TopUpView />}
-        {view === 'wait_payment' && <PaymentWaitView />}
-        {view === 'success_payment' && <PaymentSuccessView />}
-        {view === 'devices' && <DevicesView />}
-        {view === 'extend_subscription' && <ExtendSubscriptionView />}
-        {view === 'buy_device' && <BuyDeviceView />}
-        {view === 'instruction_view' && <InstructionView key="instruction" />}
-        {view === 'history' && <HistoryView />}
-        {view === 'referral' && <ReferralView />}
-        {view === 'referral_detail' && <ReferralDetailView />}
-        {view === 'promo' && <PromoView />}
+      <div className={`p-4 min-h-screen flex flex-col overflow-x-clip ${userLoadFailed ? 'pointer-events-none select-none user-load-failed opacity-60' : ''}`}>
+        <div
+          key={transitionKey}
+          className={
+            (isFirstViewRef.current
+              ? 'page-enter-first'
+              : navDir === 'back' ? 'page-enter-back' : 'page-enter-forward'
+            ) + ' flex-1 flex flex-col'
+          }
+        >
+          {view === 'home' && <HomeView />}
+          {view === 'wizard' && <WizardView />}
+          {view === 'topup' && <TopUpView />}
+          {view === 'wait_payment' && <PaymentWaitView />}
+          {view === 'success_payment' && <PaymentSuccessView />}
+          {view === 'devices' && <DevicesView />}
+          {view === 'extend_subscription' && <ExtendSubscriptionView />}
+          {view === 'buy_device' && <BuyDeviceView />}
+          {view === 'instruction_view' && <InstructionView key="instruction" />}
+          {view === 'history' && <HistoryView />}
+          {view === 'referral' && <ReferralView />}
+          {view === 'referral_detail' && <ReferralDetailView />}
+          {view === 'promo' && <PromoView />}
+        </div>
       </div>
       
       {/* USER LOAD FAILED BANNER */}
@@ -3780,69 +3846,113 @@ export default function App() {
 
       {/* Онбординг для новых пользователей */}
       {showOnboarding && (
-        <div className="fixed inset-0 z-[100] bg-zinc-950 flex flex-col animate-fade-in">
+        <div className="fixed inset-0 z-[100] flex flex-col animate-fade-in overflow-hidden"
+             style={{ background: 'radial-gradient(130% 90% at 50% 0%, #1a0f06 0%, #0a0a0b 55%, #000 100%)' }}>
+          {/* Ambient drifting orbs */}
+          <div className="mb-orb mb-orb-1" style={{ opacity: 0.9 }} />
+          <div className="mb-orb mb-orb-2" style={{ opacity: 0.9 }} />
+
           {/* Progress dots */}
-          <div className="flex justify-center gap-2 pt-6 pb-4">
+          <div className="relative z-10 flex justify-center gap-2 pt-8 pb-2">
             {[0, 1, 2].map(i => (
-              <div 
-                key={i} 
-                className={`w-2 h-2 rounded-full transition-all ${i === onboardingStep ? 'bg-orange-500 w-6' : 'bg-zinc-700'}`}
+              <div
+                key={i}
+                className={`ob-dot h-2 rounded-full transition-all duration-500 ${
+                  i === onboardingStep
+                    ? 'bg-orange-500 w-7 shadow-[0_0_12px_rgba(249,115,22,0.7)]'
+                    : i < onboardingStep ? 'bg-orange-700 w-2' : 'bg-zinc-700 w-2'
+                }`}
+                style={{ animationDelay: `${i * 0.1}s` }}
               />
             ))}
           </div>
-          
+
           {/* Content */}
-          <div className="flex-1 flex flex-col items-center justify-center px-8 text-center">
-            <div className={`w-24 h-24 mb-6 ${onboardingStep === 0 ? 'animate-pulse-soft' : 'animate-scale-in'}`}>
+          <div className="relative z-10 flex-1 flex flex-col items-center justify-center px-8 text-center">
+            {/* Animated logo */}
+            <div
+              className={`ob-logo-wrap mb-7 transition-all duration-700 ${
+                onboardingStep === 0 ? 'w-32 h-32' : 'w-20 h-20'
+              }`}
+            >
+              <div className="ob-logo-glow" />
+              {onboardingStep === 0 && (
+                <>
+                  <div className="ob-logo-ring" />
+                  <div className="ob-logo-ring delay" />
+                </>
+              )}
+              <div className="ob-shimmer" />
               <img
                 src="/assets/logo.png"
                 onError={(e) => { (e.currentTarget.style.display = 'none'); }}
                 alt="БлинВПН"
-                className={`w-full h-full object-contain mx-auto ${onboardingStep === 0 ? '' : 'translate-y-[-8px]'} transition-all duration-500`}
+                className={`ob-logo-img ${onboardingStep === 0 ? '' : 'static'} w-full h-full object-contain mx-auto drop-shadow-[0_8px_24px_rgba(234,88,12,0.45)]`}
               />
             </div>
-            {onboardingStep === 0 && (
-              <>
-                <h2 className="text-2xl font-bold text-white mb-4 animate-slide-up">Добро пожаловать в БлинВПН</h2>
-                <p className="text-zinc-400 leading-relaxed">
-                  Быстрый, безопасный и удобный VPN для стабильного доступа к интернету.
-                </p>
-              </>
-            )}
-            
-            {onboardingStep === 1 && (
-              <>
-                <div className="flex gap-2 mb-4 text-xs text-zinc-300 animate-slide-up">
-                  <span>Германия</span><span>•</span><span>Финляндия</span><span>•</span><span>Нидерланды</span><span>•</span><span>Россия</span><span>•</span><span>США</span>
-                </div>
-                <h2 className="text-2xl font-bold text-white mb-4">Много локаций</h2>
-                <p className="text-zinc-400 leading-relaxed">
-                  Выбирайте удобную страну и подключайтесь к серверам с высокой скоростью.
-                </p>
-              </>
-            )}
-            
-            {onboardingStep === 2 && (
-              <>
-                <h2 className="text-2xl font-bold text-white mb-4">Универсальный обход ограничений</h2>
-                <p className="text-zinc-400 leading-relaxed">
-                  Работает при мобильных ограничениях и сценариях вроде режима «беспилотной опасности».
-                </p>
-              </>
-            )}
+
+            {/* Step text — re-animates on each step via key */}
+            <div key={onboardingStep} className="ob-step-content w-full max-w-xs">
+              {onboardingStep === 0 && (
+                <>
+                  <div className="ob-stagger-1 animate-slide-up mb-3 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-widest text-orange-400 bg-orange-500/10 px-3 py-1 rounded-full border border-orange-500/20">
+                    <Sparkles size={12} /> Добро пожаловать
+                  </div>
+                  <h2 className="ob-stagger-2 animate-slide-up text-3xl font-black text-white mb-3 leading-tight">
+                    БлинВПН
+                  </h2>
+                  <p className="ob-stagger-3 animate-slide-up text-zinc-400 leading-relaxed">
+                    Быстрый, безопасный и удобный VPN для стабильного доступа к интернету.
+                  </p>
+                </>
+              )}
+
+              {onboardingStep === 1 && (
+                <>
+                  <div className="flex flex-wrap justify-center gap-2 mb-5">
+                    {['🇩🇪 Германия', '🇫🇮 Финляндия', '🇳🇱 Нидерланды', '🇷🇺 Россия', '🇺🇸 США'].map((c, idx) => (
+                      <span
+                        key={c}
+                        className="ob-dot text-xs text-zinc-200 bg-zinc-800/80 border border-zinc-700 px-3 py-1.5 rounded-full"
+                        style={{ animationDelay: `${0.1 + idx * 0.08}s` }}
+                      >
+                        {c}
+                      </span>
+                    ))}
+                  </div>
+                  <h2 className="ob-stagger-2 animate-slide-up text-2xl font-bold text-white mb-3">Много локаций</h2>
+                  <p className="ob-stagger-3 animate-slide-up text-zinc-400 leading-relaxed">
+                    Выбирайте удобную страну и подключайтесь к серверам с высокой скоростью.
+                  </p>
+                </>
+              )}
+
+              {onboardingStep === 2 && (
+                <>
+                  <div className="ob-stagger-1 animate-zoom-in relative w-16 h-16 mx-auto mb-5 flex items-center justify-center">
+                    <span className="absolute inset-0 rounded-2xl bg-orange-500/15 border border-orange-500/30 animate-pulse-soft" />
+                    <Shield size={30} className="relative text-orange-400" />
+                  </div>
+                  <h2 className="ob-stagger-2 animate-slide-up text-2xl font-bold text-white mb-3">Обход ограничений</h2>
+                  <p className="ob-stagger-3 animate-slide-up text-zinc-400 leading-relaxed">
+                    Работает при мобильных ограничениях и в сложных сетевых условиях.
+                  </p>
+                </>
+              )}
+            </div>
           </div>
-          
+
           {/* Buttons */}
-          <div className="px-6 pb-8 space-y-3">
+          <div className="relative z-10 px-6 pb-10 space-y-3">
             {onboardingStep < 2 ? (
               <>
-                <button 
+                <button
                   onClick={() => setOnboardingStep(prev => prev + 1)}
-                  className="w-full py-4 bg-orange-600 hover:bg-orange-500 text-white rounded-2xl font-bold transition-all hover:scale-[1.01]"
+                  className="ripple w-full py-4 bg-orange-600 hover:bg-orange-500 text-white rounded-2xl font-bold transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-orange-900/40 flex items-center justify-center gap-2"
                 >
-                  Начнем
+                  Далее <ArrowRight size={18} />
                 </button>
-                <button 
+                <button
                   onClick={() => {
                     setShowOnboarding(false);
                     localStorage.setItem(`onboarding_${telegramId}`, 'true');
@@ -3853,14 +3963,14 @@ export default function App() {
                 </button>
               </>
             ) : (
-              <button 
+              <button
                 onClick={() => {
                   setShowOnboarding(false);
                   localStorage.setItem(`onboarding_${telegramId}`, 'true');
                 }}
-                className="w-full py-4 bg-orange-600 hover:bg-orange-500 text-white rounded-2xl font-bold transition-all hover:scale-[1.01]"
+                className="ripple w-full py-4 bg-orange-600 hover:bg-orange-500 text-white rounded-2xl font-bold transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-orange-900/40 flex items-center justify-center gap-2"
               >
-                Начать пользоваться
+                <Rocket size={18} /> Начать пользоваться
               </button>
             )}
           </div>
@@ -3868,4 +3978,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-      }
+            }
