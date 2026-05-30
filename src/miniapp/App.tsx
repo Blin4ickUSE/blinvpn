@@ -2028,7 +2028,7 @@ export default function App() {
                 onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardDeviceCount(2); setView('wizard'); }}
                 className="w-full"
             >
-                <Shield size={20} /> Подключить VPN
+                <Shield size={20} /> {isTrialUsed ? 'Купить VPN' : 'Попробовать VPN'}
             </Button>
             
 
@@ -4095,4 +4095,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-          }
+  }
