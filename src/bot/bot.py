@@ -239,14 +239,19 @@ async def send_streaming_message(
     if not chunks or chunks[-1] != full_text:
         chunks.append(full_text)
 
+    # Сериализуем клавиатуру в dict для aiohttp
+    import json as _json
+    markup_dict = None
+    if reply_markup:
+        try:
+            markup_dict = _json.loads(reply_markup.model_dump_json())
+        except Exception:
+            markup_dict = None
+
     payload_base = {
         "chat_id": chat_id,
         "parse_mode": parse_mode,
     }
-    if reply_markup:
-        import json
-        from aiogram.utils.serialization import bitwise_compatible
-        payload_base["reply_markup"] = reply_markup.model_dump_json() if hasattr(reply_markup, "model_dump_json") else None
 
     async with aiohttp.ClientSession() as session:
         # --- Пробуем sendMessageDraft ---
@@ -272,8 +277,8 @@ async def send_streaming_message(
 
             # Финализируем: отправляем настоящее сообщение
             final_payload = {**payload_base, "text": full_text}
-            if reply_markup:
-                final_payload["reply_markup"] = reply_markup.model_dump_json() if hasattr(reply_markup, "model_dump_json") else None
+            if markup_dict:
+                final_payload["reply_markup"] = markup_dict
             async with session.post(f"{base_url}/sendMessage", json=final_payload) as resp:
                 pass
 
@@ -306,8 +311,8 @@ async def send_streaming_message(
                     "text": full_text,
                     "parse_mode": parse_mode,
                 }
-                if reply_markup:
-                    final_edit["reply_markup"] = reply_markup.model_dump_json() if hasattr(reply_markup, "model_dump_json") else None
+                if markup_dict:
+                    final_edit["reply_markup"] = markup_dict
                 async with session.post(f"{base_url}/editMessageText", json=final_edit) as resp:
                     pass
 
