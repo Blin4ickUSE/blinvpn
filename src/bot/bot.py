@@ -27,6 +27,7 @@ from src.core.blacklist import start_blacklist_updater
 from src.api import telegram_stars
 from src.api import remnawave
 import re
+import aiohttp
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -214,6 +215,103 @@ def extract_tracking_code(text: str) -> str | None:
     m = re.search(r'trk_([A-Za-z0-9_-]+)', text or '')
     return m.group(1) if m else None
 
+async def send_streaming_message(
+    chat_id: int,
+    full_text: str,
+    parse_mode: str = "HTML",
+    reply_markup=None,
+    chunk_size: int = 15,
+    delay: float = 0.07,
+) -> None:
+    """
+    Плавно отправляет текст через sendMessageDraft (Bot API 9.3+).
+    Если черновики не поддерживаются — падает на editMessageText-стриминг.
+    В конце всегда фиксирует финальное сообщение через sendMessage.
+    """
+    token = BOT_TOKEN
+    base_url = f"https://api.telegram.org/bot{token}"
+    draft_id = 1  # фиксированный draft_id для чата
+
+    # Разбиваем текст на нарастающие чанки
+    chunks = []
+    for i in range(chunk_size, len(full_text) + chunk_size, chunk_size):
+        chunks.append(full_text[:i])
+    if not chunks or chunks[-1] != full_text:
+        chunks.append(full_text)
+
+    payload_base = {
+        "chat_id": chat_id,
+        "parse_mode": parse_mode,
+    }
+    if reply_markup:
+        import json
+        from aiogram.utils.serialization import bitwise_compatible
+        payload_base["reply_markup"] = reply_markup.model_dump_json() if hasattr(reply_markup, "model_dump_json") else None
+
+    async with aiohttp.ClientSession() as session:
+        # --- Пробуем sendMessageDraft ---
+        draft_ok = False
+        try:
+            payload = {**payload_base, "draft_id": draft_id, "text": chunks[0]}
+            async with session.post(f"{base_url}/sendMessageDraft", json=payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                data = await resp.json()
+                draft_ok = data.get("ok", False)
+        except Exception:
+            draft_ok = False
+
+        if draft_ok:
+            # Стримим через sendMessageDraft
+            for chunk in chunks[1:]:
+                try:
+                    payload = {**payload_base, "draft_id": draft_id, "text": chunk}
+                    async with session.post(f"{base_url}/sendMessageDraft", json=payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                        pass
+                except Exception:
+                    pass
+                await asyncio.sleep(delay)
+
+            # Финализируем: отправляем настоящее сообщение
+            final_payload = {**payload_base, "text": full_text}
+            if reply_markup:
+                final_payload["reply_markup"] = reply_markup.model_dump_json() if hasattr(reply_markup, "model_dump_json") else None
+            async with session.post(f"{base_url}/sendMessage", json=final_payload) as resp:
+                pass
+
+        else:
+            # Fallback: sendMessage + editMessageText
+            send_payload = {"chat_id": chat_id, "text": chunks[0], "parse_mode": parse_mode}
+            async with session.post(f"{base_url}/sendMessage", json=send_payload) as resp:
+                data = await resp.json()
+                message_id = data.get("result", {}).get("message_id")
+
+            if message_id:
+                for chunk in chunks[1:-1]:
+                    await asyncio.sleep(delay)
+                    edit_payload = {
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        "text": chunk,
+                        "parse_mode": parse_mode,
+                    }
+                    try:
+                        async with session.post(f"{base_url}/editMessageText", json=edit_payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                            pass
+                    except Exception:
+                        pass
+
+                # Финальное редактирование с клавиатурой
+                final_edit = {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "text": full_text,
+                    "parse_mode": parse_mode,
+                }
+                if reply_markup:
+                    final_edit["reply_markup"] = reply_markup.model_dump_json() if hasattr(reply_markup, "model_dump_json") else None
+                async with session.post(f"{base_url}/editMessageText", json=final_edit) as resp:
+                    pass
+
+
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     """Обработчик команды /start"""
@@ -321,7 +419,14 @@ async def cmd_start(message: types.Message):
         ]
     ])
 
-    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+    await send_streaming_message(
+        chat_id=message.chat.id,
+        full_text=text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+        chunk_size=15,
+        delay=0.06,
+    )
 
     if tracking_code:
         try:
