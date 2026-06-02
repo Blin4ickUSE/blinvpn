@@ -224,23 +224,27 @@ async def send_streaming_message(
     delay: float = 0.07,
 ) -> None:
     """
-    Плавно отправляет текст через sendMessageDraft (Bot API 9.3+).
-    Если черновики не поддерживаются — падает на editMessageText-стриминг.
-    В конце всегда фиксирует финальное сообщение через sendMessage.
+    Плавно отправляет текст через editMessageText-стриминг.
+    Промежуточные чанки отправляются как plain text (без HTML-тегов),
+    финальное сообщение — с полной HTML-разметкой и клавиатурой.
     """
+    import re as _re
+    import json as _json
+
     token = BOT_TOKEN
     base_url = f"https://api.telegram.org/bot{token}"
-    draft_id = 1  # фиксированный draft_id для чата
 
-    # Разбиваем текст на нарастающие чанки
+    # Стрипаем HTML-теги для plain-text чанков (чтобы незакрытые теги не ломали парсер)
+    plain_text = _re.sub(r'<[^>]+>', '', full_text)
+
+    # Разбиваем plain-текст на нарастающие чанки
     chunks = []
-    for i in range(chunk_size, len(full_text) + chunk_size, chunk_size):
-        chunks.append(full_text[:i])
-    if not chunks or chunks[-1] != full_text:
-        chunks.append(full_text)
+    for i in range(chunk_size, len(plain_text) + chunk_size, chunk_size):
+        chunks.append(plain_text[:i])
+    if not chunks or chunks[-1] != plain_text:
+        chunks.append(plain_text)
 
     # Сериализуем клавиатуру в dict для aiohttp
-    import json as _json
     markup_dict = None
     if reply_markup:
         try:
@@ -248,86 +252,51 @@ async def send_streaming_message(
         except Exception:
             markup_dict = None
 
-    payload_base = {
-        "chat_id": chat_id,
-        "parse_mode": parse_mode,
-    }
-
     async with aiohttp.ClientSession() as session:
-        # --- Пробуем sendMessageDraft ---
-        draft_ok = False
-        try:
-            payload = {**payload_base, "draft_id": draft_id, "text": chunks[0]}
-            async with session.post(f"{base_url}/sendMessageDraft", json=payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                data = await resp.json()
-                draft_ok = data.get("ok", False)
-                if not draft_ok:
-                    logger.warning(f"[streaming] sendMessageDraft failed: {data}")
-        except Exception as e:
-            logger.warning(f"[streaming] sendMessageDraft exception: {e}")
-            draft_ok = False
+        # Отправляем первый чанк без parse_mode (plain text)
+        send_payload = {"chat_id": chat_id, "text": chunks[0]}
+        async with session.post(f"{base_url}/sendMessage", json=send_payload) as resp:
+            data = await resp.json()
+            if not data.get("ok"):
+                logger.error(f"[streaming] initial sendMessage failed: {data}")
+                return
+            message_id = data.get("result", {}).get("message_id")
 
-        if draft_ok:
-            logger.info("[streaming] using sendMessageDraft")
-            for chunk in chunks[1:]:
-                try:
-                    payload = {**payload_base, "draft_id": draft_id, "text": chunk}
-                    async with session.post(f"{base_url}/sendMessageDraft", json=payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                        pass
-                except Exception:
+        if not message_id:
+            logger.error("[streaming] no message_id from initial sendMessage")
+            return
+
+        # Редактируем промежуточные чанки (plain text, без parse_mode)
+        for chunk in chunks[1:-1]:
+            await asyncio.sleep(delay)
+            edit_payload = {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": chunk,
+            }
+            try:
+                async with session.post(
+                    f"{base_url}/editMessageText",
+                    json=edit_payload,
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
                     pass
-                await asyncio.sleep(delay)
+            except Exception:
+                pass
 
-            # Финализируем: отправляем настоящее сообщение
-            final_payload = {**payload_base, "text": full_text}
-            if markup_dict:
-                final_payload["reply_markup"] = markup_dict
-            async with session.post(f"{base_url}/sendMessage", json=final_payload) as resp:
-                data = await resp.json()
-                if not data.get("ok"):
-                    logger.error(f"[streaming] final sendMessage failed: {data}")
-
-        else:
-            logger.info("[streaming] fallback: sendMessage + editMessageText")
-            # Fallback: sendMessage + editMessageText
-            send_payload = {"chat_id": chat_id, "text": chunks[0], "parse_mode": parse_mode}
-            async with session.post(f"{base_url}/sendMessage", json=send_payload) as resp:
-                data = await resp.json()
-                if not data.get("ok"):
-                    logger.error(f"[streaming] initial sendMessage failed: {data}")
-                    return
-                message_id = data.get("result", {}).get("message_id")
-
-            if message_id:
-                for chunk in chunks[1:-1]:
-                    await asyncio.sleep(delay)
-                    edit_payload = {
-                        "chat_id": chat_id,
-                        "message_id": message_id,
-                        "text": chunk,
-                        "parse_mode": parse_mode,
-                    }
-                    try:
-                        async with session.post(f"{base_url}/editMessageText", json=edit_payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                            pass
-                    except Exception:
-                        pass
-
-                # Финальное редактирование с клавиатурой
-                final_edit = {
-                    "chat_id": chat_id,
-                    "message_id": message_id,
-                    "text": full_text,
-                    "parse_mode": parse_mode,
-                }
-                if markup_dict:
-                    final_edit["reply_markup"] = markup_dict
-                async with session.post(f"{base_url}/editMessageText", json=final_edit) as resp:
-                    data = await resp.json()
-                    if not data.get("ok"):
-                        logger.error(f"[streaming] final editMessageText failed: {data}")
-            else:
-                logger.error("[streaming] no message_id from initial sendMessage")
+        # Финальное редактирование — полный HTML-текст + клавиатура
+        final_edit = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": full_text,
+            "parse_mode": parse_mode,
+        }
+        if markup_dict:
+            final_edit["reply_markup"] = markup_dict
+        async with session.post(f"{base_url}/editMessageText", json=final_edit) as resp:
+            data = await resp.json()
+            if not data.get("ok"):
+                logger.error(f"[streaming] final editMessageText failed: {data}")
 
 
 @dp.message(CommandStart())
