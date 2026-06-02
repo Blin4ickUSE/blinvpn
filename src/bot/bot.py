@@ -261,11 +261,14 @@ async def send_streaming_message(
             async with session.post(f"{base_url}/sendMessageDraft", json=payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                 data = await resp.json()
                 draft_ok = data.get("ok", False)
-        except Exception:
+                if not draft_ok:
+                    logger.warning(f"[streaming] sendMessageDraft failed: {data}")
+        except Exception as e:
+            logger.warning(f"[streaming] sendMessageDraft exception: {e}")
             draft_ok = False
 
         if draft_ok:
-            # Стримим через sendMessageDraft
+            logger.info("[streaming] using sendMessageDraft")
             for chunk in chunks[1:]:
                 try:
                     payload = {**payload_base, "draft_id": draft_id, "text": chunk}
@@ -280,13 +283,19 @@ async def send_streaming_message(
             if markup_dict:
                 final_payload["reply_markup"] = markup_dict
             async with session.post(f"{base_url}/sendMessage", json=final_payload) as resp:
-                pass
+                data = await resp.json()
+                if not data.get("ok"):
+                    logger.error(f"[streaming] final sendMessage failed: {data}")
 
         else:
+            logger.info("[streaming] fallback: sendMessage + editMessageText")
             # Fallback: sendMessage + editMessageText
             send_payload = {"chat_id": chat_id, "text": chunks[0], "parse_mode": parse_mode}
             async with session.post(f"{base_url}/sendMessage", json=send_payload) as resp:
                 data = await resp.json()
+                if not data.get("ok"):
+                    logger.error(f"[streaming] initial sendMessage failed: {data}")
+                    return
                 message_id = data.get("result", {}).get("message_id")
 
             if message_id:
@@ -314,7 +323,11 @@ async def send_streaming_message(
                 if markup_dict:
                     final_edit["reply_markup"] = markup_dict
                 async with session.post(f"{base_url}/editMessageText", json=final_edit) as resp:
-                    pass
+                    data = await resp.json()
+                    if not data.get("ok"):
+                        logger.error(f"[streaming] final editMessageText failed: {data}")
+            else:
+                logger.error("[streaming] no message_id from initial sendMessage")
 
 
 @dp.message(CommandStart())
