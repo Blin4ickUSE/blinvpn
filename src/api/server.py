@@ -2108,20 +2108,26 @@ def get_users():
     """Получить список пользователей с информацией о черном списке"""
     limit = request.args.get('limit', 100, type=int)
     offset = request.args.get('offset', 0, type=int)
-    raw_users = database.get_all_users(limit, offset)
-    
+    search = (request.args.get('search') or request.args.get('q') or '').strip() or None
+    status = request.args.get('status')
+    if status in ('', 'all'):
+        status = None
+
+    total = database.count_panel_users(search, status)
+    raw_users = database.list_panel_users(search, status, limit, offset)
+
     # Получаем telegram_id всех пользователей из черного списка
     conn = database.get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT telegram_id FROM blacklist")
     blacklisted_ids = set(row['telegram_id'] for row in cursor.fetchall())
     conn.close()
-    
+
     # Добавляем статус черного списка к каждому пользователю
     for user in raw_users:
         user['in_blacklist'] = user.get('telegram_id') in blacklisted_ids
-    
-    return jsonify(raw_users)
+
+    return jsonify({'items': raw_users, 'total': total})
 
 
 @app.route('/api/panel/users/<int:user_id>', methods=['GET'])
@@ -2887,39 +2893,24 @@ def get_keys():
     """Получить список ключей VPN с синхронизацией трафика и даты окончания из Remnawave"""
     limit = request.args.get('limit', 100, type=int)
     offset = request.args.get('offset', 0, type=int)
-    
+    search = (request.args.get('search') or request.args.get('q') or '').strip() or None
+    status = request.args.get('status')
+    if status in ('', 'all'):
+        status = None
+
+    total = database.count_panel_keys(search, status)
+    rows = database.list_panel_keys(search, status, limit, offset)
+
     conn = database.get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
-        cursor.execute("""
-            SELECT 
-                vk.id,
-                vk.user_id,
-                u.username,
-                u.telegram_id,
-                vk.key_uuid,
-                vk.key_config,
-                vk.status,
-                vk.expiry_date,
-                vk.traffic_used,
-                vk.traffic_limit,
-                vk.devices_limit,
-                vk.server_location,
-                vk.created_at
-            FROM vpn_keys vk
-            LEFT JOIN users u ON vk.user_id = u.id
-            ORDER BY vk.created_at DESC
-            LIMIT ? OFFSET ?
-        """, (limit, offset))
-        
-        rows = cursor.fetchall()
         keys = []
         
         # Собираем все telegram_id для batch запроса к Remnawave
         telegram_ids = set()
         for row in rows:
-            if row['telegram_id']:
+            if row.get('telegram_id'):
                 telegram_ids.add(row['telegram_id'])
         
         # Трафик и дата окончания из Remnawave (единый источник истины)
@@ -2955,15 +2946,15 @@ def get_keys():
             pass
         
         for row in rows:
-            username = row['username'] or f"user_{row['user_id']}"
-            key_display = row['key_config'] or row['key_uuid'] or f"key_{row['id']}"
+            username = row.get('username') or f"user_{row['user_id']}"
+            key_display = row.get('key_config') or row.get('key_uuid') or f"key_{row['id']}"
             if len(key_display) > 50:
                 key_display = key_display[:47] + '...'
             
             # Дата окончания: приоритет у Remnawave (как в miniapp)
-            key_uuid = row['key_uuid']
+            key_uuid = row.get('key_uuid')
             expiry_dt_src = remnawave_expiry.get(key_uuid) if key_uuid else None
-            if expiry_dt_src is None and row['expiry_date']:
+            if expiry_dt_src is None and row.get('expiry_date'):
                 try:
                     if isinstance(row['expiry_date'], str):
                         expiry_dt_src = datetime.fromisoformat(row['expiry_date'].replace('Z', '+00:00'))
@@ -2972,7 +2963,7 @@ def get_keys():
                 except Exception:
                     expiry_dt_src = None
             expiry_days = 0
-            expiry_date_value = row['expiry_date']
+            expiry_date_value = row.get('expiry_date')
             if expiry_dt_src:
                 try:
                     if getattr(expiry_dt_src, 'tzinfo', None):
@@ -2985,7 +2976,7 @@ def get_keys():
                     pass
             
             # Получаем актуальный трафик из Remnawave если доступен
-            traffic_used = float(row['traffic_used'] or 0)
+            traffic_used = float(row.get('traffic_used') or 0)
             if key_uuid and key_uuid in remnawave_traffic:
                 traffic_used = float(remnawave_traffic[key_uuid])
                 # Обновляем в БД для консистентности
@@ -2995,21 +2986,26 @@ def get_keys():
                 except:
                     pass
             
+            raw_status = row.get('status') or 'Active'
+            panel_status = raw_status
+            if str(raw_status).lower() in ('blocked', 'banned'):
+                panel_status = 'Banned'
+
             keys.append({
                 'id': row['id'],
-                'key_config': row['key_config'],
-                'key_uuid': row['key_uuid'],
+                'key_config': row.get('key_config'),
+                'key_uuid': key_uuid,
                 'key': key_display,
                 'user_id': row['user_id'],
                 'username': f"@{username}" if username and not username.startswith('@') else username,
-                'status': row['status'] or 'Active',
+                'status': panel_status,
                 'expiry_date': expiry_date_value,
                 'expiry': expiry_days,
                 'traffic_used': traffic_used,
-                'traffic_limit': float(row['traffic_limit'] or 0),
+                'traffic_limit': float(row.get('traffic_limit') or 0),
                 'devices_used': 0,  # TODO: подсчитать из devices
-                'devices_limit': row['devices_limit'] or 1,
-                'server_location': row['server_location'] or 'Unknown'
+                'devices_limit': row.get('devices_limit') or 1,
+                'server_location': row.get('server_location') or 'Unknown'
             })
         
         # Commit любых обновлений трафика
@@ -3018,7 +3014,7 @@ def get_keys():
         except:
             pass
         
-        return jsonify(keys)
+        return jsonify({'items': keys, 'total': total})
     finally:
         conn.close()
 

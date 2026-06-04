@@ -315,7 +315,11 @@ function searchableMatch(item: any, q: string): boolean {
     item.telegramId != null ? String(item.telegramId) : '',
     item.id != null ? String(item.id) : '',
   ];
-  return fields.some((f) => typeof f === 'string' && f.toLowerCase().includes(q));
+  const haystack = fields
+    .filter((f) => f != null && f !== '')
+    .map((f) => String(f).toLowerCase())
+    .join(' ');
+  return haystack.includes(q);
 }
 
 interface PaginationBarProps {

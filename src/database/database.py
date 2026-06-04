@@ -838,10 +838,157 @@ def update_user_username(telegram_id: int, username: str) -> bool:
 
 
 def get_all_users(limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    return list_panel_users(limit=limit, offset=offset)
+
+
+def _panel_users_where(search: Optional[str] = None, status: Optional[str] = None) -> tuple[str, list]:
+    """WHERE для списка пользователей в панели (поиск + фильтр статуса)."""
+    conditions: list[str] = []
+    params: list[Any] = []
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        conditions.append(
+            "(CAST(id AS TEXT) LIKE ? OR CAST(telegram_id AS TEXT) LIKE ? "
+            "OR LOWER(COALESCE(username, '')) LIKE LOWER(?) "
+            "OR LOWER(COALESCE(full_name, '')) LIKE LOWER(?) "
+            "OR LOWER(COALESCE(referral_code, '')) LIKE LOWER(?))"
+        )
+        params.extend([term] * 5)
+    if status == 'Banned':
+        conditions.append(
+            "(COALESCE(is_banned, 0) = 1 OR telegram_id IN "
+            "(SELECT telegram_id FROM blacklist WHERE telegram_id IS NOT NULL))"
+        )
+    elif status == 'Trial':
+        conditions.append(
+            "(COALESCE(is_banned, 0) = 0 AND telegram_id NOT IN "
+            "(SELECT telegram_id FROM blacklist WHERE telegram_id IS NOT NULL) "
+            "AND (status IS NULL OR status = '' OR status = 'Trial'))"
+        )
+    elif status == 'Active':
+        conditions.append(
+            "(COALESCE(is_banned, 0) = 0 AND telegram_id NOT IN "
+            "(SELECT telegram_id FROM blacklist WHERE telegram_id IS NOT NULL) "
+            "AND status = 'Active')"
+        )
+    where_sql = " AND ".join(conditions) if conditions else "1=1"
+    return where_sql, params
+
+
+def count_panel_users(search: Optional[str] = None, status: Optional[str] = None) -> int:
+    where_sql, params = _panel_users_where(search, status)
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT * FROM users ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
+        cursor.execute(f"SELECT COUNT(*) AS cnt FROM users WHERE {where_sql}", params)
+        row = cursor.fetchone()
+        return int(row['cnt']) if row else 0
+    finally:
+        conn.close()
+
+
+def list_panel_users(
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    where_sql, params = _panel_users_where(search, status)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            f"SELECT * FROM users WHERE {where_sql} ORDER BY id DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def _panel_keys_from_clause() -> str:
+    return """
+        FROM vpn_keys vk
+        LEFT JOIN users u ON vk.user_id = u.id
+    """
+
+
+def _panel_keys_where(search: Optional[str] = None, status: Optional[str] = None) -> tuple[str, list]:
+    conditions: list[str] = []
+    params: list[Any] = []
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        conditions.append(
+            "(CAST(vk.id AS TEXT) LIKE ? OR CAST(vk.user_id AS TEXT) LIKE ? "
+            "OR CAST(u.telegram_id AS TEXT) LIKE ? "
+            "OR LOWER(COALESCE(u.username, '')) LIKE LOWER(?) "
+            "OR LOWER(COALESCE(vk.key_uuid, '')) LIKE LOWER(?) "
+            "OR LOWER(COALESCE(vk.key_config, '')) LIKE LOWER(?))"
+        )
+        params.extend([term] * 6)
+    if status == 'Active':
+        conditions.append(
+            "(COALESCE(vk.status, 'Active') = 'Active' "
+            "AND (vk.expiry_date IS NULL OR vk.expiry_date > datetime('now')))"
+        )
+    elif status == 'Expired':
+        conditions.append(
+            "(vk.status = 'Expired' OR (vk.expiry_date IS NOT NULL AND vk.expiry_date <= datetime('now')))"
+        )
+    elif status == 'Banned':
+        conditions.append("LOWER(COALESCE(vk.status, '')) IN ('banned', 'blocked')")
+    where_sql = " AND ".join(conditions) if conditions else "1=1"
+    return where_sql, params
+
+
+def count_panel_keys(search: Optional[str] = None, status: Optional[str] = None) -> int:
+    where_sql, params = _panel_keys_where(search, status)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            f"SELECT COUNT(*) AS cnt {_panel_keys_from_clause()} WHERE {where_sql}",
+            params,
+        )
+        row = cursor.fetchone()
+        return int(row['cnt']) if row else 0
+    finally:
+        conn.close()
+
+
+def list_panel_keys(
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    where_sql, params = _panel_keys_where(search, status)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            f"""
+            SELECT
+                vk.id,
+                vk.user_id,
+                u.username,
+                u.telegram_id,
+                vk.key_uuid,
+                vk.key_config,
+                vk.status,
+                vk.expiry_date,
+                vk.traffic_used,
+                vk.traffic_limit,
+                vk.devices_limit,
+                vk.server_location,
+                vk.created_at
+            {_panel_keys_from_clause()}
+            WHERE {where_sql}
+            ORDER BY vk.created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, limit, offset),
+        )
         return [dict(row) for row in cursor.fetchall()]
     finally:
         conn.close()
