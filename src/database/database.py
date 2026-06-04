@@ -1527,7 +1527,51 @@ def delete_panel_session(session_token: str) -> bool:
         conn.close()
 
 
-def get_or_create_default_admin() -> Dict[str, str]:
+PANEL_PENDING_USER_KEY = 'panel_pending_initial_username'
+PANEL_PENDING_PASS_KEY = 'panel_pending_initial_password'
+
+
+def set_panel_pending_initial_credentials(username: str, password: str) -> None:
+    """Сохранить пароль для показа на экране входа до первой успешной авторизации."""
+    set_system_setting(PANEL_PENDING_USER_KEY, username)
+    set_system_setting(PANEL_PENDING_PASS_KEY, password)
+
+
+def get_panel_pending_initial_credentials() -> Optional[Dict[str, str]]:
+    username = get_system_setting(PANEL_PENDING_USER_KEY)
+    password = get_system_setting(PANEL_PENDING_PASS_KEY)
+    if username and password:
+        return {'username': username, 'password': password}
+    return None
+
+
+def clear_panel_pending_initial_credentials() -> None:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "DELETE FROM system_settings WHERE setting_key IN (?, ?)",
+            (PANEL_PENDING_USER_KEY, PANEL_PENDING_PASS_KEY),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def panel_admin_has_any_session(admin_id: int) -> bool:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT 1 FROM panel_sessions WHERE admin_id = ? LIMIT 1",
+            (int(admin_id),),
+        )
+        return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def get_or_create_default_admin() -> Dict[str, Any]:
     import secrets
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1535,12 +1579,38 @@ def get_or_create_default_admin() -> Dict[str, str]:
         cursor.execute("SELECT id, username FROM panel_admins WHERE is_active = 1 LIMIT 1")
         row = cursor.fetchone()
         if row:
-            return {'username': row['username'], 'password': None, 'exists': True}
-        
+            admin_id = int(row['id'])
+            username = str(row['username'])
+            if panel_admin_has_any_session(admin_id):
+                clear_panel_pending_initial_credentials()
+                return {'username': username, 'password': None, 'exists': True}
+
+            pending = get_panel_pending_initial_credentials()
+            if pending and pending.get('username') == username and pending.get('password'):
+                return {
+                    'username': username,
+                    'password': pending['password'],
+                    'exists': True,
+                    'pending': True,
+                }
+
+            # Старые установки: админ есть, пароль не сохранялся — выдаём новый до первого входа
+            password = secrets.token_urlsafe(12)
+            update_admin_password(admin_id, password)
+            set_panel_pending_initial_credentials(username, password)
+            return {
+                'username': username,
+                'password': password,
+                'exists': True,
+                'pending': True,
+                'password_regenerated': True,
+            }
+
         username = 'admin'
         password = secrets.token_urlsafe(12)
         admin_id = create_panel_admin(username, password)
         if admin_id:
+            set_panel_pending_initial_credentials(username, password)
             return {'username': username, 'password': password, 'exists': False}
         return {'username': None, 'password': None, 'exists': False}
     finally:

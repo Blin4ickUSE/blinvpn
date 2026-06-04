@@ -1667,19 +1667,28 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
   const [verifyCode, setVerifyCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [initInfo, setInitInfo] = useState<{username?: string; password?: string; newAdmin?: boolean} | null>(null);
+  const [initInfo, setInitInfo] = useState<{
+    username?: string;
+    password?: string;
+    newAdmin?: boolean;
+    passwordRegenerated?: boolean;
+    message?: string;
+  } | null>(null);
 
-  // Проверяем инициализацию при загрузке
+  // Показываем логин/пароль до первой успешной авторизации (сохраняется в БД между перезапусками)
   useEffect(() => {
     fetch('/api/panel/auth/init')
       .then(res => res.json())
       .then(data => {
-        if (data.new_admin && data.password) {
+        if (data.show_credentials && data.password && data.username) {
           setInitInfo({
             username: data.username,
             password: data.password,
-            newAdmin: true
+            newAdmin: Boolean(data.new_admin),
+            passwordRegenerated: Boolean(data.password_regenerated),
+            message: data.message,
           });
+          setUsername(data.username);
         }
       })
       .catch(() => {});
@@ -1747,13 +1756,20 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
           <p className="text-gray-400 mt-2">Войдите для доступа к панели</p>
         </div>
 
-        {/* Уведомление о новом админе */}
-        {initInfo?.newAdmin && (
+        {initInfo?.password && (
           <div className="bg-green-500/10 border border-green-500/30 text-green-400 px-4 py-3 rounded-lg text-sm mb-6">
-            <p className="font-bold mb-2">Создан администратор!</p>
-            <p>Логин: <code className="bg-green-900/30 px-1 rounded">{initInfo.username}</code></p>
-            <p>Пароль: <code className="bg-green-900/30 px-1 rounded">{initInfo.password}</code></p>
-            <p className="mt-2 text-xs text-green-500">Сохраните эти данные! Пароль показывается только один раз.</p>
+            <p className="font-bold mb-2">
+              {initInfo.newAdmin
+                ? 'Создан администратор'
+                : initInfo.passwordRegenerated
+                  ? 'Пароль сброшен — первый вход ещё не был'
+                  : 'Данные для первого входа'}
+            </p>
+            <p>Логин: <code className="bg-green-900/30 px-1 rounded select-all">{initInfo.username}</code></p>
+            <p>Пароль: <code className="bg-green-900/30 px-1 rounded select-all break-all">{initInfo.password}</code></p>
+            <p className="mt-2 text-xs text-green-500">
+              {initInfo.message || 'Сохраните эти данные. Пароль показывается до первой успешной авторизации.'}
+            </p>
           </div>
         )}
 

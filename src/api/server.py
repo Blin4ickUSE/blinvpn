@@ -5416,6 +5416,7 @@ def panel_verify_login_code():
 
     if not session_token:
         return jsonify({'error': 'Failed to create session'}), 500
+    database.clear_panel_pending_initial_credentials()
     return jsonify({'success': True, 'session_token': session_token})
 
 
@@ -5459,17 +5460,27 @@ def panel_auth_init():
     result = database.get_or_create_default_admin()
     
     if result.get('password'):
-        # Новый админ создан
+        is_new = not result.get('exists')
+        msg = 'Сохраните эти данные! Пароль показывается до первой успешной авторизации.'
+        if result.get('password_regenerated'):
+            msg = (
+                'Пароль был сброшен (первый вход ещё не выполнен). '
+                'Используйте новый пароль ниже — он показывается до первой успешной авторизации.'
+            )
         return jsonify({
             'initialized': True,
-            'new_admin': True,
+            'show_credentials': True,
+            'new_admin': is_new,
+            'pending_login': bool(result.get('pending')),
+            'password_regenerated': bool(result.get('password_regenerated')),
             'username': result['username'],
             'password': result['password'],
-            'message': 'Сохраните эти данные! Пароль показывается только один раз.'
+            'message': msg,
         })
     elif result.get('exists'):
         return jsonify({
             'initialized': True,
+            'show_credentials': False,
             'new_admin': False,
             'username': result['username']
         })
