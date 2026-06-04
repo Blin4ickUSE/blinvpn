@@ -193,6 +193,11 @@ deploy_site_files() {
     if [[ -d "src/site" ]]; then
         sudo rsync -a --delete "src/site/" "${SITE_ROOT}/" 2>/dev/null \
             || sudo cp -a src/site/. "${SITE_ROOT}/"
+        if [[ -d "assets" ]]; then
+            sudo mkdir -p "${SITE_ROOT}/assets"
+            sudo rsync -a assets/ "${SITE_ROOT}/assets/" 2>/dev/null \
+                || sudo cp -a assets/. "${SITE_ROOT}/assets/"
+        fi
         sudo chown -R www-data:www-data "$SITE_ROOT" 2>/dev/null || true
         log_success "✔ файлы сайта развёрнуты."
     else

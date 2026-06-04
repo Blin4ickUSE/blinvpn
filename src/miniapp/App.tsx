@@ -2001,6 +2001,14 @@ export default function App() {
     return Math.round((topupAmount + commission) * 100) / 100;
   };
 
+  const isTelegramStarsMethod = (methodId?: string | null) =>
+    (methodId ?? selectedMethod) === 'tg_stars';
+
+  const formatPaymentUnit = (amount: number, methodId?: string | null) => {
+    const value = formatRubAmount(amount);
+    return isTelegramStarsMethod(methodId) ? `${value} ⭐` : `${value} ₽`;
+  };
+
   // --- VIEWS ---
 
   const HomeView = () => (
@@ -2698,20 +2706,28 @@ export default function App() {
           <div className="flex-1 space-y-3">
              <div className="bg-zinc-800/50 p-4 rounded-xl border border-zinc-700 mb-6 space-y-2">
                 <div className="flex justify-between items-center text-sm">
-                   <span className="text-zinc-400">Сумма:</span>
-                   <span className="text-white">{topupAmount} ₽</span>
+                   <span className="text-zinc-400">
+                     {isTelegramStarsMethod() ? 'На баланс:' : 'Сумма:'}
+                   </span>
+                   <span className="text-white">
+                     {isTelegramStarsMethod()
+                       ? `${formatRubAmount(topupAmount)} ₽`
+                       : formatPaymentUnit(topupAmount)}
+                   </span>
                 </div>
-                {selectedMethod && getSelectedFeePercent() > 0 && (
+                {selectedMethod && getSelectedFeePercent() > 0 && !isTelegramStarsMethod() && (
                   <div className="flex justify-between items-center text-sm">
                      <span className="text-zinc-400">
                        Комиссия ({formatFeePercent(getSelectedFeePercent())}%):
                      </span>
-                     <span className="text-zinc-300">+{formatRubAmount(getPaymentCommission())} ₽</span>
+                     <span className="text-zinc-300">
+                       +{formatPaymentUnit(getPaymentCommission())}
+                     </span>
                   </div>
                 )}
                 <div className="flex justify-between items-center pt-2 border-t border-zinc-700 font-bold text-lg">
                    <span className="text-white">Итого к оплате:</span>
-                   <span className="text-orange-400">{getPaymentTotal()} ₽</span>
+                   <span className="text-orange-400">{formatPaymentUnit(getPaymentTotal())}</span>
                 </div>
              </div>
 
@@ -2737,7 +2753,13 @@ export default function App() {
                       <span className="font-medium text-left">
                         <div className="leading-tight">{method.name}</div>
                         <div className="text-xs text-zinc-500 font-normal mt-0.5">
-                           {method.variants ? 'Выберите провайдера' : (method.feePercent === 0 ? 'Без комиссии' : `Комиссия ${method.feePercent}%`)}
+                           {method.variants
+                             ? 'Выберите провайдера'
+                             : method.id === 'tg_stars'
+                               ? '1 ⭐ = 1 ₽ на баланс'
+                               : method.feePercent === 0
+                                 ? 'Без комиссии'
+                                 : `Комиссия ${formatFeePercent(method.feePercent)}%`}
                         </div>
                       </span>
                     </div>
@@ -2828,7 +2850,7 @@ export default function App() {
                 }
               }}
             >
-              Оплатить {getPaymentTotal()} ₽
+              Оплатить {formatPaymentUnit(getPaymentTotal())}
             </Button>
           </div>
         </>
@@ -3997,25 +4019,15 @@ export default function App() {
 
           {/* Content */}
           <div className="relative z-10 flex-1 flex flex-col items-center justify-center px-8 text-center">
-            {/* Animated logo */}
             <div
-              className={`ob-logo-wrap mb-7 transition-all duration-700 ${
+              className={`mb-7 transition-all duration-500 ${
                 onboardingStep === 0 ? 'w-32 h-32' : 'w-20 h-20'
               }`}
             >
-              <div className="ob-logo-glow" />
-              {onboardingStep === 0 && (
-                <>
-                  <div className="ob-logo-ring" />
-                  <div className="ob-logo-ring delay" />
-                </>
-              )}
-              <div className="ob-shimmer" />
               <img
                 src="/assets/logo.png"
-                onError={(e) => { (e.currentTarget.style.display = 'none'); }}
                 alt="БлинВПН"
-                className={`ob-logo-img ${onboardingStep === 0 ? '' : 'static'} w-full h-full object-contain mx-auto drop-shadow-[0_8px_24px_rgba(234,88,12,0.45)]`}
+                className="w-full h-full object-contain mx-auto drop-shadow-[0_8px_24px_rgba(234,88,12,0.35)]"
               />
             </div>
 

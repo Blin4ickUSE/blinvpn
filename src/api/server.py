@@ -1211,7 +1211,7 @@ def create_payment():
             bot_token = os.getenv('TELEGRAM_BOT_TOKEN', '')
             if not bot_token:
                 return jsonify({'error': 'Telegram bot token is not configured'}), 500
-            # 1 ⭐ = 1 ₽, currency XTR
+            # 1 ⭐ = 1 ₽ на баланс, в инвойсе — XTR (Telegram Stars)
             stars = int(round(float(amount)))
             if stars <= 0:
                 return jsonify({'error': 'Invalid amount'}), 400
@@ -1221,11 +1221,11 @@ def create_payment():
             payload = f"stars_{user_id}_{int(time.time())}_{secrets.token_hex(3)}"
             invoice = {
                 "title": "Пополнение баланса",
-                "description": f"Пополнение на {stars} ₽",
+                "description": f"Пополнение на {stars} ⭐",
                 "payload": payload,
                 "provider_token": "",
                 "currency": "XTR",
-                "prices": [{"label": "Баланс", "amount": stars}],
+                "prices": [{"label": f"{stars} ⭐", "amount": stars}],
             }
             url = f"https://api.telegram.org/bot{bot_token}/createInvoiceLink"
             r = requests.post(url, json=invoice, timeout=20)
