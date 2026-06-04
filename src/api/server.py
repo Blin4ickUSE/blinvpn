@@ -986,7 +986,7 @@ def create_payment():
     data = request.json
     user_id = data.get('user_id')
     amount = data.get('amount')
-    method = data.get('method')  # 'heleket', 'platega_sbp' (→ RollyPay СБП), 'platega_card_*', 'cryptopay', 'tg_stars'
+    method = data.get('method')  # 'heleket', 'platega_sbp', 'platega_card_*', 'cryptopay', 'tg_stars'
     
     if not user_id or not amount or not method:
         return jsonify({'error': 'Missing required fields'}), 400
@@ -1137,13 +1137,13 @@ def create_payment():
                 })
         
         elif method in ('platega_sbp', 'rollypay_sbp'):
-            # СБП через RollyPay (id platega_sbp сохранён для совместимости с miniapp)
-            payment = rollypay.rollypay_api.create_sbp_payment(
+            # СБП через Platega (rollypay_sbp — legacy id из старых клиентов)
+            payment = platega.platega_api.create_sbp_payment(
                 float(amount),
                 int(user_id),
                 description="Пополнение баланса (СБП)",
-                success_redirect_url=return_url,
-                fail_redirect_url=failed_url,
+                return_url=return_url,
+                failed_url=failed_url,
             )
             if payment:
                 try:
@@ -1152,21 +1152,20 @@ def create_payment():
                     cursor.execute(
                         """
                         INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
-                        VALUES (?, 'deposit', ?, 'Pending', 'СБП', 'RollyPay', ?, ?)
+                        VALUES (?, 'deposit', ?, 'Pending', 'СБП', 'Platega', ?, ?)
                         """,
-                        (int(user_id), float(amount), payment.get('id'), "Ожидание оплаты RollyPay СБП"),
+                        (int(user_id), float(amount), payment.get('id'), "Ожидание оплаты Platega СБП"),
                     )
                     conn.commit()
                     conn.close()
                 except Exception as _e:
-                    logger.warning("RollyPay: не удалось создать Pending-транзакцию: %s", _e)
+                    logger.warning("Platega СБП: не удалось создать Pending-транзакцию: %s", _e)
                     try: conn.close()
                     except Exception: pass
                 return jsonify({
                     'payment_id': payment.get('id'),
                     'payment_url': payment.get('redirect_url'),
                     'status': payment.get('status', 'pending'),
-                    'order_id': payment.get('order_id'),
                 })
 
         elif method == 'cryptopay' or method == 'cryptobot':

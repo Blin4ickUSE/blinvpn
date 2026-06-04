@@ -81,30 +81,51 @@ def credit_deposit_from_payment(
 ) -> bool:
     """
     Зачислить пополнение на баланс (идемпотентно по payment_id + provider).
+    Pending-транзакция при создании платежа обновляется до Success, а не дублируется.
     Возвращает True если зачисление выполнено, False если платёж уже обработан.
     """
     conn = database.get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id FROM transactions WHERE payment_id = ? AND payment_provider = ?",
+        """
+        SELECT id, status FROM transactions
+        WHERE payment_id = ? AND payment_provider = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
         (payment_id, provider),
     )
-    if cursor.fetchone():
+    existing = cursor.fetchone()
+    if existing and str(existing["status"] or "") == "Success":
         conn.close()
         logger.info("%s платёж %s уже обработан", provider, payment_id)
         return False
-    conn.close()
+
+    pending_tx_id = None
+    if existing and str(existing["status"] or "") == "Pending":
+        pending_tx_id = int(existing["id"])
 
     bonus_amount, bonus_name = _calc_deposit_bonus(amount, method_name)
     total_amount = amount + bonus_amount
     database.update_user_balance(user_id, total_amount)
 
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id)
-        VALUES (?, 'deposit', ?, 'Success', ?, ?, ?)
-    """, (user_id, total_amount, method_name, provider, payment_id))
+    if pending_tx_id is not None:
+        cursor.execute(
+            """
+            UPDATE transactions
+            SET amount = ?, status = 'Success', payment_method = ?, description = NULL
+            WHERE id = ?
+            """,
+            (total_amount, method_name, pending_tx_id),
+        )
+    else:
+        cursor.execute(
+            """
+            INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id)
+            VALUES (?, 'deposit', ?, 'Success', ?, ?, ?)
+            """,
+            (user_id, total_amount, method_name, provider, payment_id),
+        )
     if bonus_amount > 0:
         cursor.execute("""
             INSERT INTO transactions (user_id, type, amount, status, description)

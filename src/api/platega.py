@@ -148,7 +148,7 @@ class PlategaAPI:
     
     def create_sbp_payment(self, amount: float, user_id: int, description: str = None,
                            return_url: str = None, failed_url: str = None) -> Optional[Dict]:
-        """Создать СБП QR платеж (legacy; в проде СБП — через RollyPay, см. rollypay.py)."""
+        """Создать СБП QR платеж через Platega (paymentMethod=2)."""
         return self.create_payment(amount, user_id, description, PLATEGA_METHOD_SBP_QR,
                                   return_url=return_url, failed_url=failed_url)
     
@@ -174,10 +174,20 @@ class PlategaAPI:
             return None
         status = str(result.get('status') or '').upper()
         is_paid = status in PLATEGA_SUCCESS_STATUSES
-        try:
-            amount = float(result.get('amount') or result.get('paymentDetails', {}).get('amount') or 0)
-        except Exception:
-            amount = 0.0
+        amount = 0.0
+        for candidate in (
+            result.get('amount'),
+            (result.get('paymentDetails') or {}).get('amount') if isinstance(result.get('paymentDetails'), dict) else None,
+            (result.get('payment_details') or {}).get('amount') if isinstance(result.get('payment_details'), dict) else None,
+        ):
+            if candidate is None:
+                continue
+            try:
+                amount = float(candidate)
+                if amount > 0:
+                    break
+            except (TypeError, ValueError):
+                continue
         payload = result.get('payload') or result.get('correlationId') or ''
         return {
             "status": status,

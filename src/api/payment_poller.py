@@ -6,7 +6,7 @@
 и зачисляем баланс при необходимости.
 
 Защита от двойного зачисления обеспечивается функцией credit_deposit_from_payment
-из webhook.py (идемпотентна по паре payment_id + provider).
+из webhook.py (идемпотентна по паре payment_id + provider, учитывает Pending).
 
 Использование (в server.py или точке входа):
     from src.api.payment_poller import start_payment_poller
@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,10 @@ def _seconds_since_created(created_at_str: Optional[str]) -> float:
     if not created_at_str:
         return 0.0
     try:
-        dt = datetime.fromisoformat(str(created_at_str).replace("Z", "+00:00"))
+        raw = str(created_at_str).strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return (datetime.now(timezone.utc) - dt).total_seconds()
@@ -61,13 +64,19 @@ def _get_pending_transactions() -> list[Dict[str, Any]]:
             FROM transactions
             WHERE status = 'Pending'
               AND payment_provider IN ('CryptoPay', 'Heleket', 'Platega', 'RollyPay')
-              AND created_at >= datetime('now', ?)
+              AND payment_id IS NOT NULL
+              AND TRIM(payment_id) != ''
             ORDER BY id DESC
-            """,
-            (f"-{MAX_PENDING_AGE_SECONDS} seconds",),
+            """
         )
         rows = cursor.fetchall() or []
-        return [dict(r) for r in rows]
+        pending: list[Dict[str, Any]] = []
+        for row in rows:
+            tx = dict(row)
+            age = _seconds_since_created(tx.get("created_at"))
+            if age <= MAX_PENDING_AGE_SECONDS:
+                pending.append(tx)
+        return pending
     except Exception as e:
         logger.error("payment_poller: ошибка получения Pending-транзакций: %s", e)
         return []
@@ -79,11 +88,17 @@ def _is_already_credited(payment_id: str, provider: str) -> bool:
     """Проверить, существует ли уже успешная транзакция с этим payment_id."""
     from src.database import database
 
+    if not payment_id or not provider:
+        return False
+
     conn = database.get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "SELECT id FROM transactions WHERE payment_id = ? AND payment_provider = ? AND status = 'Success'",
+            """
+            SELECT id FROM transactions
+            WHERE payment_id = ? AND payment_provider = ? AND status = 'Success'
+            """,
             (payment_id, provider),
         )
         return cursor.fetchone() is not None
@@ -93,6 +108,44 @@ def _is_already_credited(payment_id: str, provider: str) -> bool:
         conn.close()
 
 
+def _credit_if_paid(
+    tx: Dict[str, Any],
+    *,
+    provider: str,
+    method_name: str,
+    amount: float,
+    log_label: str,
+) -> None:
+    """Зачислить платёж, если сумма валидна и платёж ещё не зачислен."""
+    from src.core.webhook import credit_deposit_from_payment  # type: ignore
+
+    payment_id = str(tx.get("payment_id") or "")
+    if amount <= 0:
+        logger.warning(
+            "payment_poller %s: некорректная сумма %.2f для %s, пропускаем",
+            provider,
+            amount,
+            payment_id,
+        )
+        return
+
+    user_id = int(tx["user_id"])
+    logger.info(
+        "payment_poller: %s платёж %s оплачен (%.2f₽), зачисляем user %s",
+        log_label,
+        payment_id,
+        amount,
+        user_id,
+    )
+    credit_deposit_from_payment(
+        user_id=user_id,
+        amount=amount,
+        payment_id=payment_id,
+        provider=provider,
+        method_name=method_name,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Проверка по провайдерам
 # ---------------------------------------------------------------------------
@@ -100,7 +153,6 @@ def _is_already_credited(payment_id: str, provider: str) -> bool:
 def _check_cryptopay(tx: Dict[str, Any]) -> None:
     """Проверить и при необходимости зачислить CryptoPay-платёж."""
     from src.api import cryptopay
-    from src.core.webhook import credit_deposit_from_payment  # type: ignore
 
     payment_id = str(tx.get("payment_id") or "")
     if not payment_id.startswith("cryptopay:"):
@@ -111,73 +163,49 @@ def _check_cryptopay(tx: Dict[str, Any]) -> None:
         return
 
     amount = float(result.get("amount") or tx.get("amount") or 0)
-    if amount <= 0:
-        return
 
-    user_id = int(tx["user_id"])
-
-    # Извлекаем user_id из payload как дополнительную проверку
     payload_str = str(result.get("payload") or "")
     uid_from_payload = cryptopay.cryptopay_api.extract_user_id_from_payload(payload_str)
+    user_id = int(tx["user_id"])
     if uid_from_payload and uid_from_payload != user_id:
         logger.warning(
             "payment_poller CryptoPay: user_id из БД (%s) не совпадает с payload (%s), пропускаем",
-            user_id, uid_from_payload,
+            user_id,
+            uid_from_payload,
         )
         return
 
-    logger.info(
-        "payment_poller: CryptoPay платёж %s оплачен (%.2f₽), зачисляем user %s",
-        payment_id, amount, user_id,
-    )
-    credit_deposit_from_payment(
-        user_id=user_id,
-        amount=amount,
-        payment_id=payment_id,
-        provider="CryptoPay",
-        method_name="CryptoPay",
-    )
+    _credit_if_paid(tx, provider="CryptoPay", method_name="CryptoPay", amount=amount, log_label="CryptoPay")
 
 
 def _check_heleket(tx: Dict[str, Any]) -> None:
     """Проверить и при необходимости зачислить Heleket-платёж."""
     from src.api import heleket
-    from src.core.webhook import credit_deposit_from_payment  # type: ignore
 
     payment_id = str(tx.get("payment_id") or "")
-    # payment_id хранится как uuid или order_id
-    # Если это uuid (32 hex символа с дефисами) — ищем по uuid, иначе по order_id
-    is_uuid = len(payment_id) == 36 and payment_id.count("-") == 4
+    if not payment_id:
+        return
 
+    is_uuid = len(payment_id) == 36 and payment_id.count("-") == 4
     result = heleket.heleket_api.check_payment_status(
         uuid=payment_id if is_uuid else None,
         order_id=None if is_uuid else payment_id,
     )
+    if (not result or not result.get("is_paid")) and is_uuid:
+        result = heleket.heleket_api.check_payment_status(order_id=payment_id)
+    if (not result or not result.get("is_paid")) and not is_uuid:
+        result = heleket.heleket_api.check_payment_status(uuid=payment_id)
+
     if not result or not result.get("is_paid"):
         return
 
     amount = float(result.get("amount") or tx.get("amount") or 0)
-    if amount <= 0:
-        return
-
-    user_id = int(tx["user_id"])
-    logger.info(
-        "payment_poller: Heleket платёж %s оплачен (%.2f₽), зачисляем user %s",
-        payment_id, amount, user_id,
-    )
-    credit_deposit_from_payment(
-        user_id=user_id,
-        amount=amount,
-        payment_id=payment_id,
-        provider="Heleket",
-        method_name="Crypto",
-    )
+    _credit_if_paid(tx, provider="Heleket", method_name="Crypto", amount=amount, log_label="Heleket")
 
 
 def _check_platega(tx: Dict[str, Any]) -> None:
     """Проверить и при необходимости зачислить Platega-платёж."""
     from src.api import platega
-    from src.core.webhook import credit_deposit_from_payment  # type: ignore
 
     payment_id = str(tx.get("payment_id") or "")
     if not payment_id:
@@ -188,30 +216,13 @@ def _check_platega(tx: Dict[str, Any]) -> None:
         return
 
     amount = float(result.get("amount") or tx.get("amount") or 0)
-    if amount <= 0:
-        return
-
-    # Определяем метод из payment_method в транзакции
     method_name = str(tx.get("payment_method") or "Platega")
-
-    user_id = int(tx["user_id"])
-    logger.info(
-        "payment_poller: Platega платёж %s подтверждён (%.2f₽), зачисляем user %s",
-        payment_id, amount, user_id,
-    )
-    credit_deposit_from_payment(
-        user_id=user_id,
-        amount=amount,
-        payment_id=payment_id,
-        provider="Platega",
-        method_name=method_name,
-    )
+    _credit_if_paid(tx, provider="Platega", method_name=method_name, amount=amount, log_label="Platega")
 
 
 def _check_rollypay(tx: Dict[str, Any]) -> None:
-    """Проверить и при необходимости зачислить RollyPay-платёж."""
+    """Проверить и при необходимости зачислить RollyPay-платёж (legacy)."""
     from src.api import rollypay
-    from src.core.webhook import credit_deposit_from_payment  # type: ignore
 
     payment_id = str(tx.get("payment_id") or "")
     if not payment_id:
@@ -222,28 +233,14 @@ def _check_rollypay(tx: Dict[str, Any]) -> None:
         return
 
     amount = float(result.get("amount") or tx.get("amount") or 0)
-    if amount <= 0:
-        return
-
-    user_id = int(tx["user_id"])
-    logger.info(
-        "payment_poller: RollyPay платёж %s оплачен (%.2f₽), зачисляем user %s",
-        payment_id, amount, user_id,
-    )
-    credit_deposit_from_payment(
-        user_id=user_id,
-        amount=amount,
-        payment_id=payment_id,
-        provider="RollyPay",
-        method_name="СБП",
-    )
+    _credit_if_paid(tx, provider="RollyPay", method_name="СБП", amount=amount, log_label="RollyPay")
 
 
 # ---------------------------------------------------------------------------
 # Основной цикл опроса
 # ---------------------------------------------------------------------------
 
-_CHECKER_MAP = {
+_CHECKER_MAP: Dict[str, Callable[[Dict[str, Any]], None]] = {
     "CryptoPay": _check_cryptopay,
     "Heleket": _check_heleket,
     "Platega": _check_platega,
@@ -262,12 +259,12 @@ def _poll_once() -> None:
         provider = str(tx.get("payment_provider") or "")
         payment_id = str(tx.get("payment_id") or "")
 
-        # Быстрая проверка — вдруг уже зачислилось пока мы итерировались
         if _is_already_credited(payment_id, provider):
             continue
 
         checker = _CHECKER_MAP.get(provider)
         if not checker:
+            logger.debug("payment_poller: нет обработчика для провайдера %s", provider)
             continue
 
         try:
@@ -275,7 +272,10 @@ def _poll_once() -> None:
         except Exception as e:
             logger.error(
                 "payment_poller: ошибка при проверке %s платёжа %s: %s",
-                provider, payment_id, e,
+                provider,
+                payment_id,
+                e,
+                exc_info=True,
             )
 
 
@@ -297,6 +297,11 @@ def start_payment_poller() -> None:
         _poller_started = True
 
     try:
+        _poll_once()
+    except Exception as e:
+        logger.error("payment_poller: ошибка при стартовой проверке: %s", e)
+
+    try:
         from apscheduler.schedulers.background import BackgroundScheduler  # type: ignore
 
         scheduler = BackgroundScheduler()
@@ -307,7 +312,9 @@ def start_payment_poller() -> None:
             id="payment_poller",
             name="Payment fallback poller",
             replace_existing=True,
-            max_instances=1,  # не запускать новый если предыдущий ещё идёт
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=POLL_INTERVAL_SECONDS,
         )
         scheduler.start()
         logger.info(
@@ -316,7 +323,6 @@ def start_payment_poller() -> None:
             MAX_PENDING_AGE_SECONDS,
         )
     except ImportError:
-        # Fallback на threading.Timer
         logger.warning(
             "APScheduler не найден, используем threading.Timer для payment_poller"
         )
@@ -331,7 +337,7 @@ def _schedule_timer() -> None:
         except Exception as e:
             logger.error("payment_poller (_run): %s", e)
         finally:
-            _schedule_timer()  # перезапустить после выполнения
+            _schedule_timer()
 
     t = threading.Timer(POLL_INTERVAL_SECONDS, _run)
     t.daemon = True

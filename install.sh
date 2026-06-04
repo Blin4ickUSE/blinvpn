@@ -185,12 +185,28 @@ ensure_certbot_nginx() {
     exit 1
 }
 
+SITE_ROOT="/var/www/blinvpn-site"
+
+deploy_site_files() {
+    log_info "\nпубликация лендинга в ${SITE_ROOT}"
+    sudo mkdir -p "$SITE_ROOT"
+    if [[ -d "src/site" ]]; then
+        sudo rsync -a --delete "src/site/" "${SITE_ROOT}/" 2>/dev/null \
+            || sudo cp -a src/site/. "${SITE_ROOT}/"
+        sudo chown -R www-data:www-data "$SITE_ROOT" 2>/dev/null || true
+        log_success "✔ файлы сайта развёрнуты."
+    else
+        log_warn "каталог src/site не найден — пропускаем публикацию лендинга."
+    fi
+}
+
 configure_nginx() {
     local miniapp_domain="$1"
     local panel_domain="$2"
-    local ssl_port="$3"
-    local nginx_conf="$4"
-    local nginx_link="$5"
+    local site_domain="$3"
+    local ssl_port="$4"
+    local nginx_conf="$5"
+    local nginx_link="$6"
 
     log_info "\nнастройка Nginx с SSL на порту ${ssl_port}"
     sudo rm -f /etc/nginx/sites-enabled/default
@@ -287,6 +303,29 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 }
+
+# Маркетинговый сайт (статика)
+server {
+    listen ${ssl_port} ssl http2;
+    listen [::]:${ssl_port} ssl http2;
+    server_name ${site_domain};
+
+    ssl_certificate /etc/letsencrypt/live/${site_domain}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${site_domain}/privkey.pem;
+
+    root ${SITE_ROOT};
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location ~* \\.(js|css|woff2?|png|jpg|jpeg|svg|ico|webp|gif)$ {
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800";
+        try_files \$uri =404;
+    }
+}
 EOF
 
     sudo rm -f "$nginx_link"
@@ -321,8 +360,9 @@ hint() {
 create_env_file() {
     local domain="$1"
     local panel_domain="$2"
-    local email="$3"
-    local ssl_port="$4"
+    local site_domain="$3"
+    local email="$4"
+    local ssl_port="$5"
 
     section "Настройка переменных окружения"
 
@@ -393,8 +433,11 @@ CRYPTOPAY_API_TOKEN=
 # ===== URLs =====
 MINIAPP_URL=https://${domain}${port_suffix}
 PANEL_URL=https://${panel_domain}${port_suffix}
+SITE_URL=https://${site_domain}${port_suffix}
 WEBHOOK_URL=https://${domain}${port_suffix}
 API_URL=https://${domain}${port_suffix}/api
+PLATEGA_RETURN_URL=https://${domain}${port_suffix}/success
+PLATEGA_FAILED_URL=https://${domain}${port_suffix}/failed
 
 # Ports (внутренние)
 API_PORT=8000
@@ -409,6 +452,7 @@ DB_PATH=data/data.db
 # SSL
 SSL_EMAIL=${email}
 PANEL_DOMAIN=${panel_domain}
+SITE_DOMAIN=${site_domain}
 MINIAPP_DOMAIN=${domain}
 WEBHOOK_DOMAIN=${domain}
 EOF
@@ -489,8 +533,8 @@ PROJECT_DIR="blinvpn"
 NGINX_CONF="/etc/nginx/sites-available/${PROJECT_DIR}.conf"
 NGINX_LINK="/etc/nginx/sites-enabled/${PROJECT_DIR}.conf"
 
-# Порт для SSL (8443 чтобы не конфликтовать с другими сервисами на 443)
-SSL_PORT=8443
+# Порт для SSL (по умолчанию 443)
+SSL_PORT=443
 
 log_success "--- Запуск скрипта установки/обновления BlinVPN ---"
 
@@ -508,9 +552,17 @@ if [[ -f "$NGINX_CONF" ]]; then
     git checkout "$REPO_BRANCH" 2>/dev/null || git checkout -b "$REPO_BRANCH" --track origin/"$REPO_BRANCH"
     git reset --hard origin/"$REPO_BRANCH"
     log_success "✔ Репозиторий обновлён."
-    log_info "\nШаг 2: пересборка и перезапуск контейнеров"
+    log_info "\nШаг 2: публикация лендинга"
+    deploy_site_files
+
+    log_info "\nШаг 3: пересборка и перезапуск контейнеров"
     sudo docker-compose down --remove-orphans
     sudo docker-compose up -d --build
+
+    if [[ -f "$NGINX_CONF" ]]; then
+        sudo nginx -t && sudo systemctl reload nginx
+    fi
+
     log_success "\n🎉 Обновление успешно завершено!"
     exit 0
 fi
@@ -547,18 +599,26 @@ if [[ -z "$PANEL_DOMAIN" ]]; then
     exit 1
 fi
 
+prompt "Введите домен для сайта (лендинг, например blinvpn.ru): " USER_SITE_DOMAIN_INPUT
+SITE_DOMAIN=$(sanitize_domain "$USER_SITE_DOMAIN_INPUT")
+if [[ -z "$SITE_DOMAIN" ]]; then
+    log_error "Некорректное доменное имя для сайта. Установка прервана."
+    exit 1
+fi
+
 prompt "Введите email для Let's Encrypt: " EMAIL
 if [[ -z "$EMAIL" ]]; then
     log_error "Email обязателен для выпуска сертификата."
     exit 1
 fi
 
-prompt "SSL порт (по умолчанию 8443, введите 443 если порт свободен): " SSL_PORT_INPUT
-SSL_PORT="${SSL_PORT_INPUT:-8443}"
+prompt "SSL порт (по умолчанию 443): " SSL_PORT_INPUT
+SSL_PORT="${SSL_PORT_INPUT:-443}"
 
 SERVER_IP=$(get_server_ip || true)
 DOMAIN_IP=$(resolve_domain_ip "$DOMAIN" || true)
 PANEL_DOMAIN_IP=$(resolve_domain_ip "$PANEL_DOMAIN" || true)
+SITE_DOMAIN_IP=$(resolve_domain_ip "$SITE_DOMAIN" || true)
 
 if [[ -n "$SERVER_IP" ]]; then
     log_info "IP сервера: ${SERVER_IP}"
@@ -572,6 +632,10 @@ if [[ -n "$PANEL_DOMAIN_IP" ]]; then
     log_info "IP домена панели ${PANEL_DOMAIN}: ${PANEL_DOMAIN_IP}"
 fi
 
+if [[ -n "$SITE_DOMAIN_IP" ]]; then
+    log_info "IP домена сайта ${SITE_DOMAIN}: ${SITE_DOMAIN_IP}"
+fi
+
 if [[ -n "$SERVER_IP" && -n "$DOMAIN_IP" && "$SERVER_IP" != "$DOMAIN_IP" ]]; then
     log_warn "DNS-запись домена ${DOMAIN} не совпадает с IP этого сервера."
     if ! confirm "Продолжить установку? (y/n): "; then
@@ -581,6 +645,13 @@ fi
 
 if [[ -n "$SERVER_IP" && -n "$PANEL_DOMAIN_IP" && "$SERVER_IP" != "$PANEL_DOMAIN_IP" ]]; then
     log_warn "DNS-запись домена панели ${PANEL_DOMAIN} не совпадает с IP этого сервера."
+    if ! confirm "Продолжить установку? (y/n): "; then
+        exit 1
+    fi
+fi
+
+if [[ -n "$SERVER_IP" && -n "$SITE_DOMAIN_IP" && "$SERVER_IP" != "$SITE_DOMAIN_IP" ]]; then
+    log_warn "DNS-запись домена сайта ${SITE_DOMAIN} не совпадает с IP этого сервера."
     if ! confirm "Продолжить установку? (y/n): "; then
         exit 1
     fi
@@ -619,6 +690,16 @@ server {
         return 301 https://\$host:${SSL_PORT}\$request_uri;
     }
 }
+server {
+    listen 80;
+    server_name ${SITE_DOMAIN};
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+    location / {
+        return 301 https://\$host:${SSL_PORT}\$request_uri;
+    }
+}
 EOF
 
 # Убираем старые конфиги и ставим временный
@@ -646,12 +727,21 @@ else
     log_success "✔ Сертификаты Let's Encrypt для ${PANEL_DOMAIN} успешно получены."
 fi
 
+if [[ -d "/etc/letsencrypt/live/${SITE_DOMAIN}" ]]; then
+    log_success "✔ SSL-сертификаты для ${SITE_DOMAIN} уже существуют."
+else
+    log_info "Получение SSL-сертификатов для ${SITE_DOMAIN}..."
+    sudo certbot certonly --webroot -w /var/www/html -d "$SITE_DOMAIN" --email "$EMAIL" --agree-tos --non-interactive
+    log_success "✔ Сертификаты Let's Encrypt для ${SITE_DOMAIN} успешно получены."
+fi
+
 # Удаляем временную конфигурацию
 sudo rm -f "$TEMP_CONF"
 
-# Настраиваем финальную конфигурацию nginx
-log_info "\nШаг 4: настройка Nginx"
-configure_nginx "$DOMAIN" "$PANEL_DOMAIN" "$SSL_PORT" "$NGINX_CONF" "$NGINX_LINK"
+# Настраиваем финальную конфигурацию nginx и публикуем лендинг
+log_info "\nШаг 4: настройка Nginx и публикация сайта"
+deploy_site_files
+configure_nginx "$DOMAIN" "$PANEL_DOMAIN" "$SITE_DOMAIN" "$SSL_PORT" "$NGINX_CONF" "$NGINX_LINK"
 
 log_info "\nШаг 5: настройка переменных окружения (.env)"
 
@@ -660,10 +750,10 @@ if [[ -f ".env" ]]; then
     if ! confirm "Перезаписать существующий .env? (y/n): "; then
         log_info "Используется существующий .env файл."
     else
-        create_env_file "$DOMAIN" "$PANEL_DOMAIN" "$EMAIL" "$SSL_PORT"
+        create_env_file "$DOMAIN" "$PANEL_DOMAIN" "$SITE_DOMAIN" "$EMAIL" "$SSL_PORT"
     fi
 else
-    create_env_file "$DOMAIN" "$PANEL_DOMAIN" "$EMAIL" "$SSL_PORT"
+    create_env_file "$DOMAIN" "$PANEL_DOMAIN" "$SITE_DOMAIN" "$EMAIL" "$SSL_PORT"
 fi
 
 log_info "\nШаг 6: подготовка директорий и запуск Docker-контейнеров"
@@ -691,31 +781,30 @@ printf "\e[0;32m┏━━━━━━━━━━━━━━━━━━━━�
 printf "\e[0;32m┃\e[0m  🎉 \e[1mУстановка BlinVPN завершена!\e[0m 🎉                        \e[0;32m┃\e[0m\n"
 printf "\e[0;32m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\e[0m\n"
 printf "\n"
-printf "\e[1mМини-приложение:\e[0m\n"
-printf "  \e[1;33mhttps://%s%s\e[0m\n" "${DOMAIN}" "${PORT_SUFFIX}"
+
+printf "\e[0;32m───────────────────────────────────────────────────────────────\e[0m\n"
+printf "\e[1m  Адреса\e[0m\n"
+printf "\e[0;32m───────────────────────────────────────────────────────────────\e[0m\n"
+printf "  Сайт:             \e[1;33mhttps://%s%s\e[0m\n"        "${SITE_DOMAIN}"  "${PORT_SUFFIX}"
+printf "  Мини-приложение:  \e[1;33mhttps://%s%s\e[0m\n"        "${DOMAIN}"       "${PORT_SUFFIX}"
+printf "  Панель:           \e[1;33mhttps://%s%s\e[0m\n"        "${PANEL_DOMAIN}" "${PORT_SUFFIX}"
+printf "  API:              \e[1;33mhttps://%s%s/api\e[0m\n"    "${DOMAIN}"       "${PORT_SUFFIX}"
 printf "\n"
-printf "\e[1mВеб‑панель:\e[0m\n"
-printf "  \e[1;33mhttps://%s%s\e[0m\n" "${PANEL_DOMAIN}" "${PORT_SUFFIX}"
+
+printf "\e[0;32m───────────────────────────────────────────────────────────────\e[0m\n"
+printf "\e[1m  Webhooks\e[0m\n"
+printf "\e[0;32m───────────────────────────────────────────────────────────────\e[0m\n"
+printf "  Heleket:          \e[1;33mhttps://%s%s/heleket\e[0m\n"                "${DOMAIN}" "${PORT_SUFFIX}"
+printf "  Platega:          \e[1;33mhttps://%s%s/platega\e[0m\n"                "${DOMAIN}" "${PORT_SUFFIX}"
+printf "  Telegram Stars:   \e[1;33mhttps://%s%s/api/telegram/webhook\e[0m"     "${DOMAIN}" "${PORT_SUFFIX}"
+printf "  \e[0;32m(авто)\e[0m\n"
+printf "  CryptoBot:        \e[1;33mhttps://%s%s/cryptopay\e[0m\n"             "${DOMAIN}" "${PORT_SUFFIX}"
 printf "\n"
-printf "\e[1mAPI:\e[0m\n"
-printf "  \e[1;33mhttps://%s%s/api\e[0m\n" "${DOMAIN}" "${PORT_SUFFIX}"
-printf "\n"
-printf "\e[1mWebhooks:\e[0m\n"
-printf "  Heleket:        \e[1;33mhttps://%s%s/heleket\e[0m\n"  "${DOMAIN}" "${PORT_SUFFIX}"
-printf "  Platega:        \e[1;33mhttps://%s%s/platega\e[0m\n"  "${DOMAIN}" "${PORT_SUFFIX}"
-printf "  RollyPay (СБП): \e[1;33mhttps://%s%s/rollypay\e[0m \e[0;33m(callback_url в кабинете RollyPay)\e[0m\n" "${DOMAIN}" "${PORT_SUFFIX}"
-printf "  Telegram Stars: \e[1;33mhttps://%s%s/api/telegram/webhook\e[0m \e[0;32m(зарегистрирован автоматически)\e[0m\n" "${DOMAIN}" "${PORT_SUFFIX}"
-printf "\n"
-printf "\e[1mCryptoBot webhook \e[0;33m(зарегистрировать вручную)\e[0m\e[1m:\e[0m\n"
-printf "  Откройте @CryptoBot → My Apps → ваше приложение → Webhooks\n"
-printf "  \e[1;33mhttps://%s%s/cryptopay\e[0m\n" "${DOMAIN}" "${PORT_SUFFIX}"
-printf "\n"
-printf "\e[1mАвторизация в панели:\e[0m\n"
-printf "  \e[0;36mПри первом входе в панель будут автоматически созданы\e[0m\n"
-printf "  \e[0;36mлогин и пароль администратора. Сохраните их!\e[0m\n"
-printf "\n"
-printf "\e[1;33m⚠️  Не забудьте обновить Web App URL в BotFather:\e[0m\n"
-printf "  \e[0;36mhttps://%s%s\e[0m\n" "${DOMAIN}" "${PORT_SUFFIX}"
-printf "\n"
-printf "\e[1;33m⚠️  Проверьте настройки в файле .env\e[0m\n"
+
+printf "\e[0;32m───────────────────────────────────────────────────────────────\e[0m\n"
+printf "\e[1;33m  ⚠️  Обязательно после установки\e[0m\n"
+printf "\e[0;32m───────────────────────────────────────────────────────────────\e[0m\n"
+printf "  1. Обновите Web App URL в BotFather:\n"
+printf "     \e[0;36mhttps://%s%s\e[0m\n" "${DOMAIN}" "${PORT_SUFFIX}"
+printf "  2. Проверьте настройки в файле \e[0;36m.env\e[0m\n"
 printf "\n"

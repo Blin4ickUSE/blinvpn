@@ -412,7 +412,7 @@ function computePlanPrice(plan: Plan, devices: number): number {
 // Платежные методы загружаются из API с комиссиями, но оставляем дефолтные
 const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
   {
-    id: 'rollypay_sbp',
+    id: 'platega_sbp',
     name: 'СБП',
     icon: <img src="https://i.imgur.com/pu9w7tE.png" className="w-8 h-8 object-contain" alt="СБП" />,
     feePercent: 7
@@ -2765,7 +2765,7 @@ export default function App() {
                   const total = getPaymentTotal();
                   // Используем выбранный вариант если есть, иначе выбранный метод
                   const method = paymentMethods.find(m => m.id === selectedMethod);
-                  let methodKey = selectedMethod || 'rollypay_sbp';
+                  let methodKey = selectedMethod || 'platega_sbp';
                   
                   // Если у метода есть варианты и выбран вариант - используем его
                   if (method?.variants && selectedVariant) {
