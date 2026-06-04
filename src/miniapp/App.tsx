@@ -415,7 +415,7 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
     id: 'platega_sbp',
     name: 'СБП',
     icon: <img src="https://i.imgur.com/pu9w7tE.png" className="w-8 h-8 object-contain" alt="СБП" />,
-    feePercent: 7
+    feePercent: 6.5
   },
   { id: 'platega_card_ru', name: 'Российские карты', icon: <img src="https://i.imgur.com/CE6Q9yJ.png" className="w-8 h-8 object-contain" alt="МИР" />, feePercent: 8 },
   { id: 'platega_card_intl', name: 'Иностранные карты', icon: <img src="https://upload.wikimedia.org/wikipedia/commons/2/2a/Mastercard-logo.svg" className="w-8 h-8 object-contain" alt="Card" />, feePercent: 15 },
@@ -429,7 +429,7 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
     id: 'heleket',
     name: 'Криптовалюта',
     icon: <img src="https://i.imgur.com/bdC3E81.png" className="w-8 h-8 object-contain rounded-md" alt="Heleket" />,
-    feePercent: 1
+    feePercent: 2
   },
   {
     id: 'cryptopay',
@@ -1974,9 +1974,31 @@ export default function App() {
     }
   };
 
+  const formatFeePercent = (fee: number) =>
+    Number.isInteger(fee) ? String(fee) : fee.toFixed(1).replace(/\.0$/, '');
+
+  const formatRubAmount = (amount: number) =>
+    amount.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+
+  const getSelectedFeePercent = (): number => {
+    if (!selectedMethod) return 0;
+    const method = paymentMethods.find((m) => m.id === selectedMethod);
+    if (!method) return 0;
+    if (method.variants && selectedVariant) {
+      return method.variants.find((v) => v.id === selectedVariant)?.feePercent ?? method.feePercent;
+    }
+    return method.feePercent ?? 0;
+  };
+
+  const getPaymentCommission = (): number => {
+    const fee = getSelectedFeePercent();
+    if (fee <= 0 || topupAmount <= 0) return 0;
+    return Math.round(topupAmount * fee) / 100;
+  };
+
   const getPaymentTotal = () => {
-    // Комиссию добавляет платёжная система, мы создаём платеж ровно на сумму пользователя.
-    return topupAmount;
+    const commission = getPaymentCommission();
+    return Math.round((topupAmount + commission) * 100) / 100;
   };
 
   // --- VIEWS ---
@@ -2679,23 +2701,12 @@ export default function App() {
                    <span className="text-zinc-400">Сумма:</span>
                    <span className="text-white">{topupAmount} ₽</span>
                 </div>
-                {selectedMethod && (
+                {selectedMethod && getSelectedFeePercent() > 0 && (
                   <div className="flex justify-between items-center text-sm">
-                     <span className="text-zinc-400">Комиссия ({
-                        (() => {
-                            const method = paymentMethods.find(m => m.id === selectedMethod);
-                            if (method?.variants && selectedVariant) {
-                                return method.variants.find(v => v.id === selectedVariant)?.feePercent;
-                            }
-                            return method?.feePercent;
-                        })()
-                     }%):</span>
-                     <span className="text-zinc-300">+{
-                        (() => {
-                           const total = getPaymentTotal();
-                           return (total - topupAmount).toFixed(1).replace(/\.0$/, '');
-                        })()
-                     } ₽</span>
+                     <span className="text-zinc-400">
+                       Комиссия ({formatFeePercent(getSelectedFeePercent())}%):
+                     </span>
+                     <span className="text-zinc-300">+{formatRubAmount(getPaymentCommission())} ₽</span>
                   </div>
                 )}
                 <div className="flex justify-between items-center pt-2 border-t border-zinc-700 font-bold text-lg">
