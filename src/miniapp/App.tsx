@@ -4019,17 +4019,19 @@ export default function App() {
 
           {/* Content */}
           <div className="relative z-10 flex-1 flex flex-col items-center justify-center px-8 text-center">
-            <div
-              className={`mb-7 transition-all duration-500 ${
-                onboardingStep === 0 ? 'w-32 h-32' : 'w-20 h-20'
-              }`}
-            >
-              <img
-                src="/assets/logo.png"
-                alt="БлинВПН"
-                className="w-full h-full object-contain mx-auto drop-shadow-[0_8px_24px_rgba(234,88,12,0.35)]"
-              />
-            </div>
+            {onboardingStep !== 2 && (
+              <div
+                className={`mb-7 transition-all duration-500 ${
+                  onboardingStep === 0 ? 'w-32 h-32' : 'w-20 h-20'
+                }`}
+              >
+                <img
+                  src="/assets/logo.png"
+                  alt="БлинВПН"
+                  className="w-full h-full object-contain mx-auto drop-shadow-[0_8px_24px_rgba(234,88,12,0.35)]"
+                />
+              </div>
+            )}
 
             {/* Step text — re-animates on each step via key */}
             <div key={onboardingStep} className="ob-step-content w-full max-w-xs">
