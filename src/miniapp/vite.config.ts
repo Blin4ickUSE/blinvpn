@@ -1,7 +1,17 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { cpSync, mkdirSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
+
+const ROOT_ASSETS = resolve(__dirname, '../../assets')
+const PUBLIC_ASSETS = resolve(__dirname, 'public/assets')
+
+/** Единый источник: /assets в корне репозитория → public/assets для Vite/serve */
+function syncRootAssets() {
+  if (!existsSync(ROOT_ASSETS)) return
+  mkdirSync(PUBLIC_ASSETS, { recursive: true })
+  cpSync(ROOT_ASSETS, PUBLIC_ASSETS, { recursive: true })
+}
 
 export default defineConfig({
   resolve: {
@@ -12,6 +22,12 @@ export default defineConfig({
   },
   plugins: [
     react(),
+    {
+      name: 'sync-root-assets',
+      buildStart() {
+        syncRootAssets()
+      },
+    },
     {
       name: 'copy-sdk',
       closeBundle() {

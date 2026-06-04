@@ -5,7 +5,7 @@ WORKDIR /app
 COPY src/miniapp/package*.json ./
 RUN npm install
 
-COPY assets/ ./public/assets/
+COPY assets/ /assets/
 COPY src/miniapp/ ./
 
 RUN npm run build

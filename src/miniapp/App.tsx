@@ -2756,7 +2756,7 @@ export default function App() {
                            {method.variants
                              ? 'Выберите провайдера'
                              : method.id === 'tg_stars'
-                               ? '1 ⭐ = 1 ₽ на баланс'
+                               ? 'Без комиссии'
                                : method.feePercent === 0
                                  ? 'Без комиссии'
                                  : `Комиссия ${formatFeePercent(method.feePercent)}%`}
