@@ -69,44 +69,75 @@ def send_support_message_to_user(telegram_id: int, message: str) -> bool:
     # Если не удалось - через основной бот
     return send_notification_to_user(telegram_id, message)
 
-def send_notification_to_user(telegram_id: int, message: str, reply_markup: dict = None) -> bool:
-    """Отправить уведомление пользователю в Telegram"""
+_UNREACHABLE_CHAT_MARKERS = (
+    'chat not found',
+    'bot was blocked by the user',
+    'user is deactivated',
+    'peer_id_invalid',
+    'input user deactivated',
+)
+
+
+def _is_unreachable_chat_error(status_code: int, response_text: str, body: Optional[Dict] = None) -> bool:
+    """Чат недоступен — повторные отправки бессмысленны."""
+    haystack = (response_text or '').lower()
+    if body:
+        haystack = f"{haystack} {str(body.get('description', '')).lower()}"
+    if status_code == 403:
+        return True
+    return any(marker in haystack for marker in _UNREACHABLE_CHAT_MARKERS)
+
+
+def send_notification_to_user_ex(
+    telegram_id: int, message: str, reply_markup: dict = None
+) -> tuple[bool, bool]:
+    """Отправить уведомление. Возвращает (sent, unreachable)."""
     if not TELEGRAM_BOT_TOKEN:
-        return False
-    
+        return False, False
+
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         data = {
             'chat_id': telegram_id,
             'text': message,
-            'parse_mode': 'HTML'
+            'parse_mode': 'HTML',
         }
         if reply_markup:
             data['reply_markup'] = reply_markup
         response = requests.post(url, json=data, timeout=10)
-        if response.status_code != 200:
+        body = None
+        try:
+            body = response.json()
+        except Exception:
+            pass
+
+        if response.status_code == 200 and body and body.get('ok'):
+            return True, False
+
+        unreachable = _is_unreachable_chat_error(response.status_code, response.text, body)
+        if unreachable:
+            logger.debug(
+                "sendMessage skipped (unreachable chat) for %s: %s",
+                telegram_id,
+                (body or {}).get('description', response.text[:200]),
+            )
+        else:
             logger.warning(
                 "sendMessage HTTP %s to %s: %s",
                 response.status_code,
                 telegram_id,
                 response.text[:300],
             )
-            return False
-        try:
-            body = response.json()
-        except Exception:
-            return False
-        if not body.get('ok'):
-            logger.warning(
-                "sendMessage failed for %s: %s",
-                telegram_id,
-                body.get('description', body),
-            )
-            return False
-        return True
+        return False, unreachable
     except Exception as e:
         logger.error(f"Failed to send notification to user {telegram_id}: {e}")
-        return False
+        return False, False
+
+
+def send_notification_to_user(telegram_id: int, message: str, reply_markup: dict = None) -> bool:
+    """Отправить уведомление пользователю в Telegram"""
+    sent, _ = send_notification_to_user_ex(telegram_id, message, reply_markup)
+    return sent
 
 
 def send_key_created_notification(telegram_id: int, days: int, traffic_gb: int, devices: int) -> bool:

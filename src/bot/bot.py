@@ -59,6 +59,20 @@ _NO_SUB_INTERVAL_SEC = 3 * 86400
 _NO_SUB_AFTER_START_SEC = 30 * 60
 _NO_SUB_MAX_DAYS = 30
 _COMEBACK_INTERVAL_SEC = 7 * 86400
+_BACKGROUND_TASK_STARTUP_DELAY_SEC = 15
+
+
+async def _send_user_notification(
+    telegram_id: int, message: str, reply_markup: dict = None
+) -> tuple[bool, bool]:
+    """(sent, unreachable) — не блокирует event loop."""
+    return await asyncio.to_thread(
+        core.send_notification_to_user_ex, telegram_id, message, reply_markup
+    )
+
+
+def _notification_considered_delivered(sent: bool, unreachable: bool) -> bool:
+    return sent or unreachable
 
 
 def _parse_expiry_utc(expiry_str: str):
@@ -118,14 +132,16 @@ def _mark_expiry_notification_sent(cursor, user_id: int, key_id: int, notif_type
     )
 
 
-def _delete_subscription_fully(
+async def _delete_subscription_fully(
     cursor, key_id: int, key_uuid: str, user_id: int, telegram_id: int, expiry_date: str
 ) -> None:
     """Удалить подписку из Remnawave и БД, уведомить пользователя."""
     if not _expiry_notification_sent(cursor, key_id, 'subscription_deleted'):
         msg = notify_msgs.build_subscription_deleted_message(key_id)
-        if telegram_id and core.send_notification_to_user(telegram_id, msg):
-            _mark_expiry_notification_sent(cursor, user_id, key_id, 'subscription_deleted')
+        if telegram_id:
+            sent, unreachable = await _send_user_notification(telegram_id, msg)
+            if _notification_considered_delivered(sent, unreachable):
+                _mark_expiry_notification_sent(cursor, user_id, key_id, 'subscription_deleted')
 
     if key_uuid:
         try:
@@ -650,6 +666,7 @@ async def handle_withdraw_cancel(callback: CallbackQuery):
 
 async def subscription_notifications_task():
     """Уведомления по подписке: точное время до expiry, grace 7 дней, удаление."""
+    await asyncio.sleep(_BACKGROUND_TASK_STARTUP_DELAY_SEC)
     while True:
         try:
             core.sync_expiry_from_remnawave()
@@ -688,11 +705,13 @@ async def subscription_notifications_task():
                     msg = notify_msgs.build_expiry_warning_message(
                         key_id, time_text, balance, topup, almost=almost
                     )
-                    if core.send_notification_to_user(row['telegram_id'], msg):
+                    sent, unreachable = await _send_user_notification(row['telegram_id'], msg)
+                    if _notification_considered_delivered(sent, unreachable):
                         _mark_expiry_notification_sent(cursor, row['user_id'], key_id, notif_type)
-                        logger.info(
-                            f"Sent expiry warning ({time_text}) to {row['telegram_id']} for key {key_id}"
-                        )
+                        if sent:
+                            logger.info(
+                                f"Sent expiry warning ({time_text}) to {row['telegram_id']} for key {key_id}"
+                            )
 
             # === 2. Подписка истекла (в окне ±2.5 мин от expiry; догон до 2 ч при простое бота) ===
             for row in active_keys:
@@ -714,13 +733,15 @@ async def subscription_notifications_task():
                     catch_up = secs_left >= -7200
                     if in_exact_window or catch_up:
                         msg = notify_msgs.build_expiry_expired_message(key_id, _GRACE_PERIOD_DAYS)
-                        if core.send_notification_to_user(row['telegram_id'], msg):
+                        sent, unreachable = await _send_user_notification(row['telegram_id'], msg)
+                        if _notification_considered_delivered(sent, unreachable):
                             _mark_expiry_notification_sent(
                                 cursor, row['user_id'], key_id, 'expiry_expired'
                             )
-                            logger.info(
-                                f"Subscription expired notice sent to {row['telegram_id']} for key {key_id}"
-                            )
+                            if sent:
+                                logger.info(
+                                    f"Subscription expired notice sent to {row['telegram_id']} for key {key_id}"
+                                )
                 cursor.execute("UPDATE vpn_keys SET status = 'Expired' WHERE id = ?", (key_id,))
 
             # === 3. Ежедневно в grace-период (7 дней после истечения) ===
@@ -743,11 +764,13 @@ async def subscription_notifications_task():
                         continue
                     days_left = _GRACE_PERIOD_DAYS - day
                     msg = notify_msgs.build_grace_daily_message(key_id, days_left)
-                    if core.send_notification_to_user(row['telegram_id'], msg):
+                    sent, unreachable = await _send_user_notification(row['telegram_id'], msg)
+                    if _notification_considered_delivered(sent, unreachable):
                         _mark_expiry_notification_sent(cursor, row['user_id'], key_id, notif_type)
-                        logger.info(
-                            f"Grace daily ({days_left}d left) sent to {row['telegram_id']} for key {key_id}"
-                        )
+                        if sent:
+                            logger.info(
+                                f"Grace daily ({days_left}d left) sent to {row['telegram_id']} for key {key_id}"
+                            )
 
             # === 4. Удаление через 7 дней (Remnawave + БД + уведомление) ===
             grace_cutoff = now_utc - timedelta(days=_GRACE_PERIOD_DAYS)
@@ -761,7 +784,7 @@ async def subscription_notifications_task():
             """, (grace_cutoff.isoformat(),))
 
             for row in cursor.fetchall():
-                _delete_subscription_fully(
+                await _delete_subscription_fully(
                     cursor,
                     row['id'],
                     row['key_uuid'],
@@ -784,6 +807,7 @@ async def subscription_notifications_task():
 
 async def user_engagement_notifications_task():
     """Напоминания без подписки (раз в 3 дня) и одноразовая скидка 10% на 24 часа."""
+    await asyncio.sleep(_BACKGROUND_TASK_STARTUP_DELAY_SEC)
     while True:
         try:
             database.clear_expired_discount_offers()
@@ -831,12 +855,15 @@ async def user_engagement_notifications_task():
 
                         if offer_reason:
                             msg = notify_msgs.build_discount_offer_message()
-                            if core.send_notification_to_user(telegram_id, msg):
-                                database.grant_24h_discount_offer(user_id)
+                            sent, unreachable = await _send_user_notification(telegram_id, msg)
+                            if _notification_considered_delivered(sent, unreachable):
+                                if sent:
+                                    database.grant_24h_discount_offer(user_id)
                                 _mark_user_notification_sent(cursor, user_id, 'discount_offer_24h')
-                                logger.info(
-                                    f"24h discount offer ({offer_reason}) sent to {telegram_id}"
-                                )
+                                if sent:
+                                    logger.info(
+                                        f"24h discount offer ({offer_reason}) sent to {telegram_id}"
+                                    )
 
                 if database.user_in_grace_period(user_id):
                     continue
@@ -858,9 +885,11 @@ async def user_engagement_notifications_task():
                         if last_sent and (now_utc - last_sent).total_seconds() < _COMEBACK_INTERVAL_SEC:
                             continue
                         msg = notify_msgs.build_comeback_message()
-                        if core.send_notification_to_user(telegram_id, msg):
+                        sent, unreachable = await _send_user_notification(telegram_id, msg)
+                        if _notification_considered_delivered(sent, unreachable):
                             _mark_user_notification_sent(cursor, user_id, 'comeback_reminder')
-                            logger.info(f"Comeback reminder sent to {telegram_id}")
+                            if sent:
+                                logger.info(f"Comeback reminder sent to {telegram_id}")
                         continue
 
                 if now_utc > first_start + timedelta(days=_NO_SUB_MAX_DAYS):
@@ -869,9 +898,13 @@ async def user_engagement_notifications_task():
                 if last_sent and (now_utc - last_sent).total_seconds() < _NO_SUB_INTERVAL_SEC:
                     continue
                 msg = notify_msgs.build_no_sub_message()
-                if core.send_notification_to_user(telegram_id, msg):
+                sent, unreachable = await _send_user_notification(telegram_id, msg)
+                if _notification_considered_delivered(sent, unreachable):
                     _mark_user_notification_sent(cursor, user_id, 'no_sub_reminder')
-                    logger.info(f"No-sub reminder sent to {telegram_id}")
+                    if sent:
+                        logger.info(f"No-sub reminder sent to {telegram_id}")
+
+                await asyncio.sleep(0)
 
             conn.commit()
             conn.close()
@@ -964,7 +997,7 @@ async def auto_renewal_task():
                             
                             conn.commit()
                             
-                            core.send_notification_to_user(
+                            await _send_user_notification(
                                 telegram_id,
                                 notify_msgs.build_auto_renewal_message(key_id, new_balance),
                             )
