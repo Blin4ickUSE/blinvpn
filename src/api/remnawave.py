@@ -616,6 +616,10 @@ class RemnawaveAPI:
             async with self._api as api:
                 return await api.get_internal_squads()
         return asyncio.run(_get())
+
+    def get_all_squads(self):
+        """Алиас для get_internal_squads (обратная совместимость)"""
+        return self.get_internal_squads()
     
     def delete_user_sync(self, uuid: str) -> bool:
         """Удалить пользователя (синхронная обёртка)"""

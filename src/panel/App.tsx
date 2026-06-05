@@ -3786,6 +3786,7 @@ interface SquadConfig {
     squad_type: string;
     max_users: number;
     current_users: number;
+    inbounds_count?: number;
     is_active: boolean;
     priority: number;
 }
@@ -3881,6 +3882,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
         switch(type) {
             case 'vpn': return 'bg-orange-500/20 text-orange-400 border-orange-500/30';
             case 'trial': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
+            case 'whitelist': return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
             default: return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
         }
     };
@@ -3936,6 +3938,12 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                                     {squad.current_users} {squad.max_users > 0 && `/ ${squad.max_users}`}
                                 </span>
                             </div>
+                            {squad.inbounds_count != null && (
+                                <div className="flex justify-between">
+                                    <span className="text-gray-400">Инбаундов:</span>
+                                    <span className="text-white">{squad.inbounds_count}</span>
+                                </div>
+                            )}
                             <div className="flex justify-between">
                                 <span className="text-gray-400">Приоритет:</span>
                                 <span className="text-white">{squad.priority}</span>

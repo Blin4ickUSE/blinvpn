@@ -1522,14 +1522,72 @@ def upsert_squad_config(squad_uuid: str, squad_name: str, squad_type: str,
             INSERT INTO squad_configs (squad_uuid, squad_name, squad_type, max_users, priority)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(squad_uuid) DO UPDATE SET
-                squad_name = excluded.squad_name, squad_type = excluded.squad_type,
-                max_users = excluded.max_users, priority = excluded.priority,
+                squad_name = excluded.squad_name,
+                max_users = excluded.max_users,
+                priority = excluded.priority,
                 updated_at = CURRENT_TIMESTAMP
         """, (squad_uuid, squad_name, squad_type, max_users, priority))
         conn.commit()
         return True
     except:
         return False
+    finally:
+        conn.close()
+
+
+def sync_remnawave_squad(squad_uuid: str, squad_name: str, squad_type: str,
+                         priority: int, members_count: int) -> bool:
+    """Синхронизировать сквад из Remnawave, сохраняя локальные настройки."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT squad_uuid FROM squad_configs WHERE squad_uuid = ?", (squad_uuid,))
+        if cursor.fetchone():
+            cursor.execute("""
+                UPDATE squad_configs
+                SET squad_name = ?, current_users = ?, priority = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE squad_uuid = ?
+            """, (squad_name, members_count, priority, squad_uuid))
+        else:
+            cursor.execute("""
+                INSERT INTO squad_configs
+                    (squad_uuid, squad_name, squad_type, max_users, priority, current_users)
+                VALUES (?, ?, ?, 0, ?, ?)
+            """, (squad_uuid, squad_name, squad_type, priority, members_count))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"sync_remnawave_squad error: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def delete_squads_not_in(squad_uuids: List[str]) -> int:
+    """Удалить сквады, которых больше нет в Remnawave."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        if squad_uuids:
+            placeholders = ','.join('?' * len(squad_uuids))
+            cursor.execute(
+                f"DELETE FROM subscription_squad_mapping WHERE squad_uuid NOT IN ({placeholders})",
+                squad_uuids
+            )
+            cursor.execute(
+                f"DELETE FROM squad_configs WHERE squad_uuid NOT IN ({placeholders})",
+                squad_uuids
+            )
+        else:
+            cursor.execute("DELETE FROM subscription_squad_mapping")
+            cursor.execute("DELETE FROM squad_configs")
+        conn.commit()
+        return cursor.rowcount
+    except Exception as e:
+        logger.error(f"delete_squads_not_in error: {e}")
+        conn.rollback()
+        return 0
     finally:
         conn.close()
 

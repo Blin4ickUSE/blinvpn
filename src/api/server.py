@@ -4971,7 +4971,12 @@ def get_remnawave_squads():
             api = get_remnawave_api()
             async with api as connected_api:
                 internal_squads = await connected_api.get_internal_squads()
-                return [{'uuid': s.uuid, 'name': s.name, 'members_count': s.members_count} for s in internal_squads]
+                return [{
+                    'uuid': s.uuid,
+                    'name': s.name,
+                    'members_count': s.members_count,
+                    'inbounds_count': s.inbounds_count,
+                } for s in internal_squads]
         
         squads = asyncio.run(fetch_squads())
         # Убираем дубликаты по UUID
@@ -5510,16 +5515,79 @@ def panel_change_password():
 
 # ========== Управление сквадами ==========
 
+def _guess_squad_type(name: str) -> str:
+    name_lower = name.lower()
+    if 'trial' in name_lower or 'test' in name_lower:
+        return 'trial'
+    if 'whitelist' in name_lower or 'lte' in name_lower:
+        return 'whitelist'
+    if 'vpn' in name_lower or 'wifi' in name_lower:
+        return 'vpn'
+    return 'vpn'
+
+
+async def _fetch_remnawave_squads():
+    api = remnawave.get_remnawave_api()
+    async with api as rw_api:
+        return await rw_api.get_internal_squads()
+
+
+def _merge_squads_with_local_config(rw_squads) -> list:
+    local_by_uuid = {c['squad_uuid']: c for c in database.get_all_squad_configs()}
+    merged = []
+    for squad in rw_squads:
+        local = local_by_uuid.get(squad.uuid, {})
+        merged.append({
+            'id': local.get('id', 0),
+            'squad_uuid': squad.uuid,
+            'squad_name': squad.name,
+            'squad_type': local.get('squad_type') or _guess_squad_type(squad.name),
+            'max_users': local.get('max_users', 0),
+            'current_users': squad.members_count,
+            'inbounds_count': squad.inbounds_count,
+            'is_active': bool(local.get('is_active', 1)),
+            'priority': local.get('priority', squad.view_position),
+        })
+    return merged
+
+
+def _persist_remnawave_squads(rw_squads) -> None:
+    """Обновить локальную БД актуальными данными Remnawave для балансировщика."""
+    synced_uuids = []
+    for squad in rw_squads:
+        database.sync_remnawave_squad(
+            squad_uuid=squad.uuid,
+            squad_name=squad.name,
+            squad_type=_guess_squad_type(squad.name),
+            priority=squad.view_position,
+            members_count=squad.members_count,
+        )
+        synced_uuids.append(squad.uuid)
+    database.delete_squads_not_in(synced_uuids)
+
+
 @app.route('/api/panel/squads', methods=['GET'])
 @require_auth
 def get_squads():
-    """Получить все сквады"""
-    squads = database.get_all_squad_configs()
-    mapping = database.get_subscription_squad_mapping()
-    return jsonify({
-        'squads': squads,
-        'mapping': mapping
-    })
+    """Получить сквады из Remnawave с локальными настройками балансировщика"""
+    try:
+        import asyncio
+        rw_squads = asyncio.run(_fetch_remnawave_squads())
+        _persist_remnawave_squads(rw_squads)
+        squads = _merge_squads_with_local_config(rw_squads)
+        existing_uuids = {squad.uuid for squad in rw_squads}
+        mapping = database.get_subscription_squad_mapping()
+        filtered_mapping = {
+            key: [uuid for uuid in uuids if uuid in existing_uuids]
+            for key, uuids in mapping.items()
+        }
+        return jsonify({
+            'squads': squads,
+            'mapping': filtered_mapping
+        })
+    except Exception as e:
+        logger.error(f"Error fetching squads from Remnawave: {e}")
+        return jsonify({'error': f'Не удалось загрузить сквады из Remnawave: {e}'}), 500
 
 
 @app.route('/api/panel/squads/sync', methods=['POST'])
@@ -5530,40 +5598,14 @@ def sync_squads():
         import asyncio
         
         async def do_sync():
-            api = remnawave.get_remnawave_api()
-            async with api as rw_api:
-                rw_squads = await rw_api.get_internal_squads()
-                
-                synced = []
-                for squad in rw_squads:
-                    # Определяем тип сквада по имени
-                    name_lower = squad.name.lower()
-                    if 'wifi' in name_lower or 'vpn' in name_lower:
-                        squad_type = 'vpn'
-                    elif 'lte' in name_lower or 'whitelist' in name_lower:
-                        squad_type = 'whitelist'
-                    elif 'trial' in name_lower or 'test' in name_lower:
-                        squad_type = 'trial'
-                    else:
-                        squad_type = 'vpn'  # По умолчанию
-                    
-                    database.upsert_squad_config(
-                        squad_uuid=squad.uuid,
-                        squad_name=squad.name,
-                        squad_type=squad_type,
-                        max_users=0,  # Без лимита по умолчанию
-                        priority=squad.view_position
-                    )
-                    synced.append({
-                        'uuid': squad.uuid,
-                        'name': squad.name,
-                        'type': squad_type
-                    })
-                
-                # Синхронизируем счётчики
-                database.sync_squad_user_counts()
-                
-                return synced
+            rw_squads = await _fetch_remnawave_squads()
+            _persist_remnawave_squads(rw_squads)
+            return [{
+                'uuid': squad.uuid,
+                'name': squad.name,
+                'type': _guess_squad_type(squad.name),
+                'members_count': squad.members_count,
+            } for squad in rw_squads]
         
         synced = asyncio.run(do_sync())
         return jsonify({
@@ -5833,7 +5875,7 @@ def get_diagnostics():
         # Проверка Remnawave
         remnawave_status = 'OK'
         try:
-            rw_squads = remnawave.get_all_squads()
+            rw_squads = remnawave.remnawave_api.get_all_squads()
             if not rw_squads:
                 remnawave_status = 'Нет сквадов'
                 issues.append('Remnawave: нет доступных сквадов')
