@@ -260,6 +260,7 @@ async def cmd_start(message: types.Message):
     
     # Получаем или создаем пользователя
     user = database.get_user_by_telegram_id(telegram_id)
+    was_new_user = False
     database.ensure_first_start_at(user['id']) if user else None
     if not user:
         # Создаем нового пользователя
@@ -281,6 +282,7 @@ async def cmd_start(message: types.Message):
         user_id = database.create_user(telegram_id, username, full_name, referred_by)
         user = database.get_user_by_id(user_id)
         database.ensure_first_start_at(user_id)
+        was_new_user = True
     else:
         # Пользователь уже существует - попробуем установить реферера, если его нет
         if referral_id and user.get('referred_by') is None:
@@ -341,15 +343,11 @@ async def cmd_start(message: types.Message):
 
     if tracking_code:
         try:
-            conn = database.get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("UPDATE tracking_links SET clicks = clicks + 1 WHERE code = ?", (tracking_code,))
-            cursor.execute("SELECT promocode FROM tracking_links WHERE code = ?", (tracking_code,))
-            tr = cursor.fetchone()
-            conn.commit()
-            conn.close()
-            if tr and tr['promocode'] and not promo_code:
-                promo_code = tr['promocode']
+            linked_promo = database.record_tracking_link_visit(
+                tracking_code, user['id'], was_new_user
+            )
+            if linked_promo and not promo_code:
+                promo_code = linked_promo
         except Exception as e:
             logger.warning(f"tracking link update failed: {e}")
 

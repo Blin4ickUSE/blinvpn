@@ -2265,17 +2265,30 @@ def delete_promocode(promo_id: int):
 @app.route('/api/panel/tracking-links', methods=['GET'])
 @require_auth
 def panel_list_tracking_links():
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT id, code, name, promocode, clicks, created_at FROM tracking_links ORDER BY id DESC")
-        rows = [dict(r) for r in cursor.fetchall()]
-        bot_username = os.getenv('BOT_USERNAME') or os.getenv('BOT_USERNAME_MINI') or 'blinvpn_bot'
-        for r in rows:
-            r['url'] = f"https://t.me/{bot_username}?start=trk_{r['code']}"
-        return jsonify(rows)
-    finally:
-        conn.close()
+    rows = database.get_tracking_links_with_stats()
+    bot_username = os.getenv('BOT_USERNAME') or os.getenv('BOT_USERNAME_MINI') or 'blinvpn_bot'
+    for r in rows:
+        r['url'] = f"https://t.me/{bot_username}?start=trk_{r['code']}"
+        r['is_active'] = bool(r.get('is_active', 1))
+    return jsonify(rows)
+
+
+@app.route('/api/panel/tracking-links/stats', methods=['GET'])
+@require_auth
+def panel_tracking_links_stats():
+    return jsonify(database.get_tracking_links_aggregate_stats())
+
+
+@app.route('/api/panel/tracking-links/<int:link_id>', methods=['GET'])
+@require_auth
+def panel_get_tracking_link(link_id):
+    link = database.get_tracking_link_detail(link_id)
+    if not link:
+        return jsonify({'success': False, 'error': 'Link not found'}), 404
+    bot_username = os.getenv('BOT_USERNAME') or os.getenv('BOT_USERNAME_MINI') or 'blinvpn_bot'
+    link['url'] = f"https://t.me/{bot_username}?start=trk_{link['code']}"
+    link['is_active'] = bool(link.get('is_active', 1))
+    return jsonify(link)
 
 
 @app.route('/api/panel/tracking-links', methods=['POST'])
@@ -2285,19 +2298,41 @@ def panel_create_tracking_link():
     code = str(data.get('code') or secrets.token_hex(4)).strip()
     name = str(data.get('name') or '').strip()
     promocode = str(data.get('promocode') or '').strip().upper() or None
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
     try:
-        cursor.execute(
-            "INSERT INTO tracking_links (code, name, promocode) VALUES (?, ?, ?)",
-            (code, name, promocode),
-        )
-        conn.commit()
-        return jsonify({'success': True, 'code': code})
+        result = database.create_tracking_link(code, name, promocode)
+        bot_username = os.getenv('BOT_USERNAME') or os.getenv('BOT_USERNAME_MINI') or 'blinvpn_bot'
+        return jsonify({
+            'success': True,
+            'id': result['id'],
+            'code': result['code'],
+            'url': f"https://t.me/{bot_username}?start=trk_{result['code']}",
+        })
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 400
-    finally:
-        conn.close()
+
+
+@app.route('/api/panel/tracking-links/<int:link_id>', methods=['PUT'])
+@require_auth
+def panel_update_tracking_link(link_id):
+    data = request.json or {}
+    try:
+        if not database.update_tracking_link(link_id, data):
+            return jsonify({'success': False, 'error': 'Link not found'}), 404
+        return jsonify({'success': True})
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+
+
+@app.route('/api/panel/tracking-links/<int:link_id>', methods=['DELETE'])
+@require_auth
+def panel_delete_tracking_link(link_id):
+    if not database.delete_tracking_link(link_id):
+        return jsonify({'success': False, 'error': 'Link not found'}), 404
+    return jsonify({'success': True})
 
 @app.route('/api/panel/mailing', methods=['POST'])
 @require_auth

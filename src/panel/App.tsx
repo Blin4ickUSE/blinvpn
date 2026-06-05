@@ -461,6 +461,38 @@ interface Promo {
   expires: string;
 }
 
+interface TrackingLink {
+  id: number;
+  code: string;
+  name: string;
+  promocode: string | null;
+  url: string;
+  clicks: number;
+  is_active: boolean;
+  created_at: string;
+  unique_users: number;
+  new_users: number;
+  total_revenue: number;
+  paid_users: number;
+  active_subscriptions: number;
+  total_keys: number;
+  conversion_rate: number;
+}
+
+interface TrackingLinkUser {
+  user_id: number;
+  telegram_id: number;
+  username: string | null;
+  full_name: string | null;
+  is_new_user: boolean;
+  visited_at: string;
+  trial_used: boolean;
+  total_spent: number;
+  keys_count: number;
+  active_keys: number;
+  has_paid: boolean;
+}
+
 // ==========================================
 // 2. TOAST SYSTEM
 // ==========================================
@@ -2068,7 +2100,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             {[
                 { category: "Главное", items: [{ name: "Главная страница", icon: Home }, { name: "Финансы", icon: DollarSign }] },
                 { category: "Пользователи", items: [{ name: "Пользователи", icon: Users }, { name: "Подписки", icon: Key }] },
-                { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Промокоды", icon: Gift }] },
+                { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Промокоды", icon: Gift }, { name: "Специальные ссылки", icon: Link }] },
                 { category: "Другое", items: [{ name: "Настройки", icon: Settings }] }
             ].map((section, idx) => (
                 <div key={idx}>
@@ -2094,6 +2126,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             {activePage === 'Подписки' && <KeysPage keySearch={keySearch} setKeySearch={setKeySearch} setIsCreateKeyOpen={setIsCreateKeyOpen} setEditingKey={setEditingKey} />}
             {activePage === 'Рассылка' && <MailingPage onToast={addToast} />}
             {activePage === 'Промокоды' && <PromocodesPage promos={promos} onToast={addToast} />}
+            {activePage === 'Специальные ссылки' && <TrackingLinksPage onToast={addToast} />}
             {activePage === 'Настройки' && <SettingsPage onToast={addToast} />}
         </div>
       </main>
@@ -3120,6 +3153,326 @@ const PromocodesPage: React.FC<{ promos: Promo[]; onToast: (title: string, msg: 
                         <div className="flex gap-3 mt-5">
                             <button onClick={() => setEditingPromo(null)} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Отмена</button>
                             <button onClick={handleSavePromo} className="flex-1 px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg">Сохранить</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+const TrackingLinksPage: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
+    const [links, setLinks] = useState<TrackingLink[]>([]);
+    const [stats, setStats] = useState<{ total_links: number; total_clicks: number; total_unique_users: number; total_revenue: number; paid_users: number } | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [detailLink, setDetailLink] = useState<(TrackingLink & { users?: TrackingLinkUser[] }) | null>(null);
+    const [detailLoading, setDetailLoading] = useState(false);
+    const [editingLink, setEditingLink] = useState<TrackingLink | null>(null);
+    const [newLink, setNewLink] = useState({ name: '', code: '', promocode: '' });
+
+    const fmtMoney = (n: number) => `${Math.round(n).toLocaleString('ru-RU')} ₽`;
+    const fmtPct = (n: number) => `${n.toFixed(1)}%`;
+    const fmtDate = (s: string) => {
+        if (!s) return '—';
+        try {
+            return new Date(s).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        } catch {
+            return s;
+        }
+    };
+
+    const copyToClipboard = async (text: string, label = 'Ссылка') => {
+        try {
+            await navigator.clipboard.writeText(text);
+            onToast('Скопировано', `${label} в буфере обмена`, 'success');
+        } catch {
+            onToast('Ошибка', 'Не удалось скопировать', 'error');
+        }
+    };
+
+    const loadLinks = async () => {
+        setLoading(true);
+        try {
+            const [linksData, statsData] = await Promise.all([
+                apiFetch('/panel/tracking-links'),
+                apiFetch('/panel/tracking-links/stats'),
+            ]);
+            if (Array.isArray(linksData)) {
+                setLinks(linksData.map((l: any) => ({
+                    id: l.id,
+                    code: l.code,
+                    name: l.name || '',
+                    promocode: l.promocode || null,
+                    url: l.url,
+                    clicks: Number(l.clicks || 0),
+                    is_active: Boolean(l.is_active),
+                    created_at: l.created_at || '',
+                    unique_users: Number(l.unique_users || 0),
+                    new_users: Number(l.new_users || 0),
+                    total_revenue: Number(l.total_revenue || 0),
+                    paid_users: Number(l.paid_users || 0),
+                    active_subscriptions: Number(l.active_subscriptions || 0),
+                    total_keys: Number(l.total_keys || 0),
+                    conversion_rate: Number(l.conversion_rate || 0),
+                })));
+            }
+            if (statsData) setStats(statsData);
+        } catch {
+            onToast('Ошибка', 'Не удалось загрузить специальные ссылки', 'error');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const openDetail = async (link: TrackingLink) => {
+        setDetailLink(link);
+        setDetailLoading(true);
+        try {
+            const data = await apiFetch(`/panel/tracking-links/${link.id}`);
+            setDetailLink(data);
+        } catch {
+            onToast('Ошибка', 'Не удалось загрузить детали', 'error');
+        } finally {
+            setDetailLoading(false);
+        }
+    };
+
+    useEffect(() => { loadLinks(); }, []);
+
+    const handleCreate = async () => {
+        if (!newLink.name.trim()) {
+            onToast('Ошибка', 'Укажите название кампании', 'error');
+            return;
+        }
+        try {
+            const body: Record<string, string> = { name: newLink.name.trim() };
+            if (newLink.code.trim()) body.code = newLink.code.trim();
+            if (newLink.promocode.trim()) body.promocode = newLink.promocode.trim().toUpperCase();
+            const res = await apiFetch('/panel/tracking-links', { method: 'POST', body: JSON.stringify(body) });
+            onToast('Успех', `Ссылка создана: ${res.url || ''}`, 'success');
+            setNewLink({ name: '', code: '', promocode: '' });
+            await loadLinks();
+        } catch (e: any) {
+            onToast('Ошибка', e?.message || 'Не удалось создать ссылку', 'error');
+        }
+    };
+
+    const handleDelete = async (id: number) => {
+        if (!confirm('Удалить специальную ссылку? Статистика по ней будет потеряна.')) return;
+        try {
+            await apiFetch(`/panel/tracking-links/${id}`, { method: 'DELETE' });
+            onToast('Успех', 'Ссылка удалена', 'success');
+            if (detailLink?.id === id) setDetailLink(null);
+            await loadLinks();
+        } catch {
+            onToast('Ошибка', 'Не удалось удалить', 'error');
+        }
+    };
+
+    const handleSaveEdit = async () => {
+        if (!editingLink) return;
+        try {
+            await apiFetch(`/panel/tracking-links/${editingLink.id}`, {
+                method: 'PUT',
+                body: JSON.stringify({
+                    name: editingLink.name,
+                    code: editingLink.code,
+                    promocode: editingLink.promocode || '',
+                    is_active: editingLink.is_active,
+                }),
+            });
+            onToast('Успех', 'Ссылка обновлена', 'success');
+            setEditingLink(null);
+            await loadLinks();
+        } catch (e: any) {
+            onToast('Ошибка', e?.message || 'Не удалось обновить', 'error');
+        }
+    };
+
+    const toggleActive = async (link: TrackingLink) => {
+        try {
+            await apiFetch(`/panel/tracking-links/${link.id}`, {
+                method: 'PUT',
+                body: JSON.stringify({ is_active: !link.is_active }),
+            });
+            await loadLinks();
+        } catch {
+            onToast('Ошибка', 'Не удалось изменить статус', 'error');
+        }
+    };
+
+    return (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div>
+                <h2 className="text-2xl font-bold text-white">Специальные ссылки</h2>
+                <p className="text-gray-400 mt-1">Отслеживание рекламных кампаний: переходы, регистрации, оплаты</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <StatCard title="Активных ссылок" value={stats?.total_links ?? links.length} icon={Link} color="orange" />
+                <StatCard title="Всего переходов" value={(stats?.total_clicks ?? 0).toLocaleString('ru-RU')} icon={MousePointer} color="blue" />
+                <StatCard title="Уникальных пользователей" value={(stats?.total_unique_users ?? 0).toLocaleString('ru-RU')} icon={Users} color="green" />
+                <StatCard title="Доход с кампаний" value={fmtMoney(stats?.total_revenue ?? 0)} icon={DollarSign} color="purple" subValue={`${stats?.paid_users ?? 0} оплатили подписку`} />
+            </div>
+
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                <h3 className="text-lg font-bold text-gray-200 mb-1">Новая ссылка</h3>
+                <p className="text-sm text-gray-500 mb-4">
+                    Ссылка будет вида <span className="font-mono text-gray-400">t.me/{BOT_USERNAME}?start=trk_<b>код</b></span>
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <input type="text" value={newLink.name} onChange={e => setNewLink({ ...newLink, name: e.target.value })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Название (YouTube, VK Ads…)" />
+                    <input type="text" value={newLink.code} onChange={e => setNewLink({ ...newLink, code: e.target.value.replace(/[^A-Za-z0-9_-]/g, '') })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono" placeholder="Код (ad, youtube1…)" />
+                    <input type="text" value={newLink.promocode} onChange={e => setNewLink({ ...newLink, promocode: e.target.value.toUpperCase() })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono" placeholder="Промокод (необяз.)" />
+                    <button onClick={handleCreate} className="px-6 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg font-medium">Создать ссылку</button>
+                </div>
+            </div>
+
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+                <div className="p-4 border-b border-gray-800 flex items-center justify-between">
+                    <h3 className="text-lg font-bold text-gray-200">Кампании</h3>
+                    <button onClick={loadLinks} className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800" title="Обновить"><RefreshCw size={16} /></button>
+                </div>
+                {loading ? (
+                    <div className="p-8 text-center text-gray-500">Загрузка...</div>
+                ) : links.length === 0 ? (
+                    <div className="p-12 text-center">
+                        <Link size={40} className="mx-auto text-gray-600 mb-3" />
+                        <p className="text-gray-400">Специальных ссылок пока нет</p>
+                        <p className="text-sm text-gray-600 mt-1">Создайте первую ссылку для рекламной кампании</p>
+                    </div>
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left min-w-[900px]">
+                            <thead>
+                                <tr className="bg-gray-800/50 text-gray-400 text-xs uppercase">
+                                    <th className="px-4 py-3">Кампания</th>
+                                    <th className="px-4 py-3">Ссылка</th>
+                                    <th className="px-4 py-3 text-center">Переходы</th>
+                                    <th className="px-4 py-3 text-center">Уник.</th>
+                                    <th className="px-4 py-3 text-center">Новые</th>
+                                    <th className="px-4 py-3 text-center">Оплатили</th>
+                                    <th className="px-4 py-3 text-right">Доход</th>
+                                    <th className="px-4 py-3 text-center">Конверсия</th>
+                                    <th className="px-4 py-3 text-right">Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-800">
+                                {links.map(l => (
+                                    <tr key={l.id} className={`hover:bg-gray-800/30 ${!l.is_active ? 'opacity-50' : ''}`}>
+                                        <td className="px-4 py-3">
+                                            <div className="text-white font-medium">{l.name || l.code}</div>
+                                            <div className="text-xs text-gray-500 font-mono mt-0.5">trk_{l.code}{l.promocode ? ` · ${l.promocode}` : ''}</div>
+                                        </td>
+                                        <td className="px-4 py-3">
+                                            <button onClick={() => copyToClipboard(l.url)} className="flex items-center gap-1.5 text-sm text-orange-400 hover:text-orange-300 font-mono max-w-[180px] truncate" title={l.url}>
+                                                <Copy size={13} /> копировать
+                                            </button>
+                                        </td>
+                                        <td className="px-4 py-3 text-center text-gray-300">{l.clicks}</td>
+                                        <td className="px-4 py-3 text-center text-gray-300">{l.unique_users}</td>
+                                        <td className="px-4 py-3 text-center text-green-400">{l.new_users}</td>
+                                        <td className="px-4 py-3 text-center text-gray-300">{l.paid_users}</td>
+                                        <td className="px-4 py-3 text-right text-white font-medium">{fmtMoney(l.total_revenue)}</td>
+                                        <td className="px-4 py-3 text-center">
+                                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${l.conversion_rate >= 10 ? 'bg-green-500/10 text-green-400' : l.conversion_rate >= 3 ? 'bg-yellow-500/10 text-yellow-400' : 'bg-gray-700 text-gray-400'}`}>
+                                                {fmtPct(l.conversion_rate)}
+                                            </span>
+                                        </td>
+                                        <td className="px-4 py-3 text-right">
+                                            <div className="inline-flex gap-1">
+                                                <button onClick={() => openDetail(l)} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg" title="Детали"><BarChart2 size={14} className="text-gray-200" /></button>
+                                                <button onClick={() => toggleActive(l)} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg" title={l.is_active ? 'Отключить' : 'Включить'}>
+                                                    {l.is_active ? <ToggleRight size={14} className="text-green-400" /> : <ToggleLeft size={14} className="text-gray-500" />}
+                                                </button>
+                                                <button onClick={() => setEditingLink({ ...l })} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg" title="Редактировать"><Edit2 size={14} className="text-gray-200" /></button>
+                                                <button onClick={() => handleDelete(l.id)} className="p-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg" title="Удалить"><Trash2 size={14} className="text-red-400" /></button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+
+            {editingLink && (
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setEditingLink(null)}>
+                    <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+                        <h3 className="text-xl font-bold text-white mb-4">Редактировать ссылку</h3>
+                        <div className="space-y-3">
+                            <input type="text" value={editingLink.name} onChange={e => setEditingLink({ ...editingLink, name: e.target.value })} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Название" />
+                            <input type="text" value={editingLink.code} onChange={e => setEditingLink({ ...editingLink, code: e.target.value.replace(/[^A-Za-z0-9_-]/g, '') })} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono" placeholder="Код" />
+                            <input type="text" value={editingLink.promocode || ''} onChange={e => setEditingLink({ ...editingLink, promocode: e.target.value.toUpperCase() })} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono" placeholder="Промокод" />
+                            <label className="flex items-center gap-2 text-gray-300 text-sm cursor-pointer">
+                                <input type="checkbox" checked={editingLink.is_active} onChange={e => setEditingLink({ ...editingLink, is_active: e.target.checked })} className="rounded" />
+                                Ссылка активна
+                            </label>
+                        </div>
+                        <div className="flex gap-3 mt-5">
+                            <button onClick={() => setEditingLink(null)} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Отмена</button>
+                            <button onClick={handleSaveEdit} className="flex-1 px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg">Сохранить</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {detailLink && (
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setDetailLink(null)}>
+                    <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+                        <div className="p-6 border-b border-gray-800 flex items-start justify-between gap-4">
+                            <div>
+                                <h3 className="text-xl font-bold text-white">{detailLink.name || detailLink.code}</h3>
+                                <button onClick={() => copyToClipboard(detailLink.url)} className="flex items-center gap-1.5 text-sm text-orange-400 hover:text-orange-300 font-mono mt-1">
+                                    <Copy size={13} /> {detailLink.url}
+                                </button>
+                            </div>
+                            <button onClick={() => setDetailLink(null)} className="text-gray-500 hover:text-white p-1"><X size={20} /></button>
+                        </div>
+
+                        <div className="p-6 grid grid-cols-2 md:grid-cols-4 gap-4 border-b border-gray-800">
+                            <div className="bg-gray-950 rounded-xl p-3 border border-gray-800"><div className="text-xs text-gray-500">Переходы</div><div className="text-xl font-bold text-white">{detailLink.clicks}</div></div>
+                            <div className="bg-gray-950 rounded-xl p-3 border border-gray-800"><div className="text-xs text-gray-500">Уникальные</div><div className="text-xl font-bold text-white">{detailLink.unique_users}</div></div>
+                            <div className="bg-gray-950 rounded-xl p-3 border border-gray-800"><div className="text-xs text-gray-500">Доход</div><div className="text-xl font-bold text-green-400">{fmtMoney(detailLink.total_revenue)}</div></div>
+                            <div className="bg-gray-950 rounded-xl p-3 border border-gray-800"><div className="text-xs text-gray-500">Конверсия</div><div className="text-xl font-bold text-orange-400">{fmtPct(detailLink.conversion_rate)}</div></div>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-6">
+                            <h4 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">Пользователи по ссылке</h4>
+                            {detailLoading ? (
+                                <div className="text-center py-8 text-gray-500">Загрузка...</div>
+                            ) : !detailLink.users?.length ? (
+                                <div className="text-center py-8 text-gray-500">Пока никто не перешёл по этой ссылке</div>
+                            ) : (
+                                <table className="w-full text-left text-sm">
+                                    <thead>
+                                        <tr className="text-gray-500 text-xs uppercase border-b border-gray-800">
+                                            <th className="pb-2 pr-4">Пользователь</th>
+                                            <th className="pb-2 pr-4">Переход</th>
+                                            <th className="pb-2 pr-4 text-center">Новый</th>
+                                            <th className="pb-2 pr-4 text-center">Подписки</th>
+                                            <th className="pb-2 text-right">Потратил</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-800">
+                                        {detailLink.users.map(u => (
+                                            <tr key={u.user_id}>
+                                                <td className="py-2.5 pr-4">
+                                                    <div className="text-white">{u.full_name || u.username || `#${u.telegram_id}`}</div>
+                                                    <div className="text-xs text-gray-500 font-mono">{u.telegram_id}{u.username ? ` · @${u.username}` : ''}</div>
+                                                </td>
+                                                <td className="py-2.5 pr-4 text-gray-400">{fmtDate(u.visited_at)}</td>
+                                                <td className="py-2.5 pr-4 text-center">{u.is_new_user ? <span className="text-green-400">да</span> : <span className="text-gray-600">—</span>}</td>
+                                                <td className="py-2.5 pr-4 text-center">
+                                                    {u.active_keys > 0 ? <span className="text-green-400">{u.active_keys} акт.</span> : u.has_paid ? <span className="text-yellow-400">была</span> : u.trial_used ? <span className="text-blue-400">триал</span> : <span className="text-gray-600">—</span>}
+                                                </td>
+                                                <td className="py-2.5 text-right text-white font-medium">{u.total_spent > 0 ? fmtMoney(u.total_spent) : '—'}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
                         </div>
                     </div>
                 </div>

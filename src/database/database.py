@@ -4,6 +4,7 @@
 import sqlite3
 import os
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import hashlib
@@ -169,7 +170,26 @@ def init_database():
                 name TEXT,
                 promocode TEXT,
                 clicks INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        try:
+            cursor.execute("ALTER TABLE tracking_links ADD COLUMN is_active INTEGER DEFAULT 1")
+        except Exception:
+            pass
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tracking_link_visits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tracking_link_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                is_new_user INTEGER DEFAULT 0,
+                visited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (tracking_link_id) REFERENCES tracking_links(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                UNIQUE(tracking_link_id, user_id)
             )
         """)
         
@@ -1913,6 +1933,361 @@ def panel_reset_login_failures(ip_address: str) -> None:
             (ip_address,),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ─── Специальные (tracking) ссылки ───────────────────────────────────────────
+
+_TRACKING_CODE_RE = re.compile(r'^[A-Za-z0-9_-]{1,32}$')
+
+_REVENUE_DEPOSIT_FILTER = """
+    t.type = 'deposit'
+    AND t.status = 'Success'
+    AND t.amount > 0
+    AND (t.description IS NULL OR LOWER(t.description) NOT LIKE '%администрац%')
+"""
+
+
+def normalize_tracking_link_code(code: str) -> str:
+    return str(code or '').strip()
+
+
+def is_valid_tracking_link_code(code: str) -> bool:
+    return bool(_TRACKING_CODE_RE.match(normalize_tracking_link_code(code)))
+
+
+def record_tracking_link_visit(code: str, user_id: int, is_new_user: bool) -> str | None:
+    """Зафиксировать переход по ссылке. Возвращает привязанный промокод или None."""
+    code = normalize_tracking_link_code(code)
+    if not code or not user_id:
+        return None
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT id, promocode FROM tracking_links
+            WHERE code = ? AND COALESCE(is_active, 1) = 1
+            """,
+            (code,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        link_id = row['id']
+        cursor.execute(
+            "UPDATE tracking_links SET clicks = clicks + 1 WHERE id = ?",
+            (link_id,),
+        )
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO tracking_link_visits (tracking_link_id, user_id, is_new_user)
+            VALUES (?, ?, ?)
+            """,
+            (link_id, user_id, 1 if is_new_user else 0),
+        )
+        conn.commit()
+        return row['promocode']
+    except Exception:
+        conn.rollback()
+        return None
+    finally:
+        conn.close()
+
+
+def _tracking_link_stats_for_id(cursor, link_id: int) -> dict:
+    cursor.execute(
+        """
+        SELECT
+            COUNT(DISTINCT tlv.user_id) AS unique_users,
+            COALESCE(SUM(CASE WHEN tlv.is_new_user = 1 THEN 1 ELSE 0 END), 0) AS new_users
+        FROM tracking_link_visits tlv
+        WHERE tlv.tracking_link_id = ?
+        """,
+        (link_id,),
+    )
+    visit_row = cursor.fetchone()
+    unique_users = int(visit_row['unique_users'] or 0)
+    new_users = int(visit_row['new_users'] or 0)
+
+    cursor.execute(
+        f"""
+        SELECT COALESCE(SUM(t.amount), 0) AS total
+        FROM transactions t
+        INNER JOIN tracking_link_visits tlv ON tlv.user_id = t.user_id
+        WHERE tlv.tracking_link_id = ?
+          AND {_REVENUE_DEPOSIT_FILTER}
+        """,
+        (link_id,),
+    )
+    total_revenue = float(cursor.fetchone()['total'] or 0)
+
+    cursor.execute(
+        """
+        SELECT COUNT(DISTINCT tlv.user_id) AS cnt
+        FROM tracking_link_visits tlv
+        INNER JOIN transactions t ON t.user_id = tlv.user_id
+        WHERE tlv.tracking_link_id = ?
+          AND t.type IN ('subscription', 'subscription_extend')
+        """,
+        (link_id,),
+    )
+    paid_users = int(cursor.fetchone()['cnt'] or 0)
+
+    cursor.execute(
+        """
+        SELECT COUNT(DISTINCT tlv.user_id) AS cnt
+        FROM tracking_link_visits tlv
+        INNER JOIN vpn_keys vk ON vk.user_id = tlv.user_id
+        WHERE tlv.tracking_link_id = ?
+          AND vk.status = 'Active'
+          AND vk.expiry_date > datetime('now')
+        """,
+        (link_id,),
+    )
+    active_subscriptions = int(cursor.fetchone()['cnt'] or 0)
+
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS cnt
+        FROM vpn_keys vk
+        INNER JOIN tracking_link_visits tlv ON tlv.user_id = vk.user_id
+        WHERE tlv.tracking_link_id = ?
+        """,
+        (link_id,),
+    )
+    total_keys = int(cursor.fetchone()['cnt'] or 0)
+
+    conversion_rate = round((paid_users / unique_users) * 100, 1) if unique_users else 0.0
+
+    return {
+        'unique_users': unique_users,
+        'new_users': new_users,
+        'total_revenue': total_revenue,
+        'paid_users': paid_users,
+        'active_subscriptions': active_subscriptions,
+        'total_keys': total_keys,
+        'conversion_rate': conversion_rate,
+    }
+
+
+def get_tracking_links_with_stats() -> list:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT id, code, name, promocode, clicks, COALESCE(is_active, 1) AS is_active, created_at
+            FROM tracking_links
+            ORDER BY id DESC
+            """
+        )
+        rows = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            item.update(_tracking_link_stats_for_id(cursor, item['id']))
+            rows.append(item)
+        return rows
+    finally:
+        conn.close()
+
+
+def get_tracking_links_aggregate_stats() -> dict:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) AS cnt FROM tracking_links")
+        total_links = int(cursor.fetchone()['cnt'] or 0)
+
+        cursor.execute("SELECT COALESCE(SUM(clicks), 0) AS total FROM tracking_links")
+        total_clicks = int(cursor.fetchone()['total'] or 0)
+
+        cursor.execute("SELECT COUNT(DISTINCT user_id) AS cnt FROM tracking_link_visits")
+        total_unique = int(cursor.fetchone()['cnt'] or 0)
+
+        cursor.execute(
+            f"""
+            SELECT COALESCE(SUM(t.amount), 0) AS total
+            FROM transactions t
+            INNER JOIN tracking_link_visits tlv ON tlv.user_id = t.user_id
+            WHERE {_REVENUE_DEPOSIT_FILTER}
+            """
+        )
+        total_revenue = float(cursor.fetchone()['total'] or 0)
+
+        cursor.execute(
+            """
+            SELECT COUNT(DISTINCT tlv.user_id) AS cnt
+            FROM tracking_link_visits tlv
+            INNER JOIN transactions t ON t.user_id = tlv.user_id
+            WHERE t.type IN ('subscription', 'subscription_extend')
+            """
+        )
+        paid_users = int(cursor.fetchone()['cnt'] or 0)
+
+        return {
+            'total_links': total_links,
+            'total_clicks': total_clicks,
+            'total_unique_users': total_unique,
+            'total_revenue': total_revenue,
+            'paid_users': paid_users,
+        }
+    finally:
+        conn.close()
+
+
+def get_tracking_link_detail(link_id: int) -> dict | None:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT id, code, name, promocode, clicks, COALESCE(is_active, 1) AS is_active, created_at
+            FROM tracking_links WHERE id = ?
+            """,
+            (link_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        link = dict(row)
+        link.update(_tracking_link_stats_for_id(cursor, link_id))
+
+        cursor.execute(
+            """
+            SELECT
+                tlv.user_id,
+                tlv.is_new_user,
+                tlv.visited_at,
+                u.telegram_id,
+                u.username,
+                u.full_name,
+                u.trial_used,
+                (
+                    SELECT COALESCE(SUM(t.amount), 0)
+                    FROM transactions t
+                    WHERE t.user_id = u.id
+                      AND t.type = 'deposit'
+                      AND t.status = 'Success'
+                      AND t.amount > 0
+                      AND (t.description IS NULL OR LOWER(t.description) NOT LIKE '%администрац%')
+                ) AS total_spent,
+                (
+                    SELECT COUNT(*) FROM vpn_keys vk WHERE vk.user_id = u.id
+                ) AS keys_count,
+                (
+                    SELECT COUNT(*) FROM vpn_keys vk
+                    WHERE vk.user_id = u.id
+                      AND vk.status = 'Active'
+                      AND vk.expiry_date > datetime('now')
+                ) AS active_keys,
+                (
+                    SELECT 1 FROM transactions t
+                    WHERE t.user_id = u.id
+                      AND t.type IN ('subscription', 'subscription_extend')
+                    LIMIT 1
+                ) AS has_paid
+            FROM tracking_link_visits tlv
+            JOIN users u ON u.id = tlv.user_id
+            WHERE tlv.tracking_link_id = ?
+            ORDER BY tlv.visited_at DESC
+            """,
+            (link_id,),
+        )
+        users = []
+        for u in cursor.fetchall():
+            users.append({
+                'user_id': u['user_id'],
+                'telegram_id': u['telegram_id'],
+                'username': u['username'],
+                'full_name': u['full_name'],
+                'is_new_user': bool(u['is_new_user']),
+                'visited_at': u['visited_at'],
+                'trial_used': bool(u['trial_used']),
+                'total_spent': float(u['total_spent'] or 0),
+                'keys_count': int(u['keys_count'] or 0),
+                'active_keys': int(u['active_keys'] or 0),
+                'has_paid': bool(u['has_paid']),
+            })
+        link['users'] = users
+        return link
+    finally:
+        conn.close()
+
+
+def create_tracking_link(code: str, name: str, promocode: str | None = None) -> dict:
+    code = normalize_tracking_link_code(code)
+    if not is_valid_tracking_link_code(code):
+        raise ValueError('Недопустимый код ссылки (1–32 символа: буквы, цифры, _, -)')
+
+    name = str(name or '').strip()
+    promocode = str(promocode or '').strip().upper() or None
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO tracking_links (code, name, promocode) VALUES (?, ?, ?)",
+            (code, name, promocode),
+        )
+        conn.commit()
+        return {'id': cursor.lastrowid, 'code': code}
+    finally:
+        conn.close()
+
+
+def update_tracking_link(link_id: int, data: dict) -> bool:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id FROM tracking_links WHERE id = ?", (link_id,))
+        if not cursor.fetchone():
+            return False
+
+        fields = []
+        values = []
+        if 'name' in data:
+            fields.append('name = ?')
+            values.append(str(data['name'] or '').strip())
+        if 'promocode' in data:
+            promo = str(data['promocode'] or '').strip().upper() or None
+            fields.append('promocode = ?')
+            values.append(promo)
+        if 'is_active' in data:
+            fields.append('is_active = ?')
+            values.append(1 if data['is_active'] else 0)
+        if 'code' in data:
+            code = normalize_tracking_link_code(data['code'])
+            if not is_valid_tracking_link_code(code):
+                raise ValueError('Недопустимый код ссылки')
+            fields.append('code = ?')
+            values.append(code)
+
+        if not fields:
+            return True
+
+        values.append(link_id)
+        cursor.execute(
+            f"UPDATE tracking_links SET {', '.join(fields)} WHERE id = ?",
+            values,
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def delete_tracking_link(link_id: int) -> bool:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM tracking_links WHERE id = ?", (link_id,))
+        conn.commit()
+        return cursor.rowcount > 0
     finally:
         conn.close()
 
