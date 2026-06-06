@@ -5170,12 +5170,33 @@ def mass_user_action():
                 
             elif action_type == 'MASS_ADD_DAYS':
                 days = int(value)
+                # Получаем все ключи пользователя перед обновлением, чтобы знать новые даты
+                cursor.execute("""
+                    SELECT id, key_uuid,
+                        CASE WHEN expiry_date > datetime('now') THEN expiry_date ELSE datetime('now') END AS base_date
+                    FROM vpn_keys WHERE user_id = ?
+                """, (user_id,))
+                user_keys = cursor.fetchall()
                 cursor.execute("""
                     UPDATE vpn_keys SET expiry_date = datetime(
                         CASE WHEN expiry_date > datetime('now') THEN expiry_date ELSE datetime('now') END,
                         '+' || ? || ' days'
                     ) WHERE user_id = ?
                 """, (days, user_id))
+                # Синхронизируем каждый ключ с Remnawave
+                for key_row in user_keys:
+                    if key_row['key_uuid']:
+                        try:
+                            from datetime import datetime as _dt, timedelta as _td
+                            base_dt = _dt.fromisoformat(str(key_row['base_date']).replace('Z', ''))
+                            new_expiry = base_dt + _td(days=days)
+                            remnawave.remnawave_api.update_user_sync(
+                                uuid=key_row['key_uuid'],
+                                expire_at=new_expiry,
+                                status=remnawave.UserStatus.ACTIVE,
+                            )
+                        except Exception as e:
+                            logger.error(f"MASS_ADD_DAYS: failed to sync key {key_row['key_uuid']} with Remnawave: {e}")
                 if notify:
                     notifications.append((telegram_id, notify_msgs.build_admin_subscription_extended_message(days)))
                 affected += 1
