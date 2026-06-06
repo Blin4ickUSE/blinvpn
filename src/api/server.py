@@ -2423,150 +2423,186 @@ def panel_delete_tracking_link(link_id):
         return jsonify({'success': False, 'error': 'Link not found'}), 404
     return jsonify({'success': True})
 
+def _build_mailing_reply_markup(button_type, button_value):
+    """Собирает reply_markup для рассылки по типу кнопки."""
+    if not button_type or not button_value:
+        return None
+    miniapp_url = os.getenv('MINIAPP_URL', 'https://your-domain.com/miniapp')
+    if button_type == 'external_link' or button_type == 'url':
+        if '|' in button_value:
+            btn_text, btn_url = button_value.split('|', 1)
+            btn_text = (btn_text or '').strip() or 'Перейти'
+            btn_url = (btn_url or '').strip()
+        else:
+            btn_text = 'Перейти'
+            btn_url = button_value.strip()
+        return {'inline_keyboard': [[{'text': btn_text, 'url': btn_url}]]}
+    elif button_type == 'open_miniapp' or button_type == 'webapp':
+        if '|' in button_value:
+            btn_text, btn_url = button_value.split('|', 1)
+            btn_text = btn_text.strip() or 'Открыть приложение'
+            btn_url = btn_url.strip() or miniapp_url
+        else:
+            btn_text = 'Открыть приложение'
+            btn_url = button_value.strip() or miniapp_url
+        return {'inline_keyboard': [[{'text': btn_text, 'web_app': {'url': btn_url}}]]}
+    elif button_type == 'activate_promo':
+        bot_username = os.getenv('BOT_USERNAME') or os.getenv('BOT_USERNAME_MINI') or 'blinvpn_bot'
+        promo_url = f"https://t.me/{bot_username}?start=promo_{button_value}"
+        return {'inline_keyboard': [[{'text': f'🎁 Активировать промокод {button_value}', 'url': promo_url}]]}
+    elif button_type == 'add_balance':
+        balance_url = f"{miniapp_url}?view=topup&amount={button_value}"
+        return {'inline_keyboard': [[{'text': f'💰 Пополнить на {button_value}₽', 'web_app': {'url': balance_url}}]]}
+    return None
+
+
+def _get_mailing_recipients(cursor, target_users):
+    """Возвращает список получателей рассылки."""
+    if target_users == 'all':
+        cursor.execute("SELECT id, telegram_id FROM users WHERE is_banned = 0 OR is_banned IS NULL")
+    elif target_users == 'active':
+        cursor.execute("""
+            SELECT DISTINCT u.id, u.telegram_id FROM users u
+            JOIN vpn_keys vk ON u.id = vk.user_id
+            WHERE (u.is_banned = 0 OR u.is_banned IS NULL)
+              AND vk.status = 'Active' AND vk.expiry_date > datetime('now')
+        """)
+    elif target_users == 'expired':
+        cursor.execute("""
+            SELECT DISTINCT u.id, u.telegram_id FROM users u
+            JOIN vpn_keys vk ON u.id = vk.user_id
+            WHERE (u.is_banned = 0 OR u.is_banned IS NULL)
+              AND (vk.status = 'Expired' OR vk.expiry_date < datetime('now'))
+        """)
+    elif target_users == 'no_subscription':
+        cursor.execute("""
+            SELECT u.id, u.telegram_id FROM users u
+            WHERE (u.is_banned = 0 OR u.is_banned IS NULL)
+              AND u.id NOT IN (SELECT DISTINCT user_id FROM vpn_keys)
+        """)
+    elif isinstance(target_users, list):
+        placeholders = ",".join("?" for _ in target_users)
+        cursor.execute(
+            f"SELECT id, telegram_id FROM users WHERE id IN ({placeholders}) AND (is_banned = 0 OR is_banned IS NULL)",
+            tuple(target_users),
+        )
+    else:
+        return []
+    return cursor.fetchall()
+
+
+def _run_mailing_background(mailing_id: int, user_rows: list, message: str, parse_mode: str,
+                             reply_markup, image_url: str | None):
+    """Отправляет рассылку в фоновом потоке. Перед каждым сообщением проверяет флаг отмены."""
+    import time
+    sent = 0
+    errors = 0
+    for row in user_rows:
+        # Проверяем флаг отмены перед каждым сообщением
+        try:
+            chk_conn = database.get_db_connection()
+            chk_cur = chk_conn.cursor()
+            chk_cur.execute("SELECT status FROM mailings WHERE id = ?", (mailing_id,))
+            chk_row = chk_cur.fetchone()
+            chk_conn.close()
+            if not chk_row or chk_row['status'] == 'Cancelled':
+                logger.info(f"Mailing {mailing_id} cancelled, stopping at sent={sent}")
+                return
+        except Exception as e:
+            logger.error(f"Mailing {mailing_id}: failed to check cancellation flag: {e}")
+
+        telegram_id = row['telegram_id']
+        try:
+            message_result = None
+            if image_url:
+                message_result = telegram_send_photo(telegram_id, image_url, message, parse_mode, reply_markup)
+            else:
+                message_result = telegram_send_message(telegram_id, message, parse_mode, reply_markup)
+
+            if message_result:
+                sent += 1
+                try:
+                    ins_conn = database.get_db_connection()
+                    ins_cur = ins_conn.cursor()
+                    ins_cur.execute(
+                        "INSERT INTO mailing_messages (mailing_id, telegram_id, telegram_message_id) VALUES (?, ?, ?)",
+                        (mailing_id, int(telegram_id), int(message_result.get('message_id', 0))),
+                    )
+                    ins_conn.commit()
+                    ins_conn.close()
+                except Exception as e:
+                    logger.error(f"Mailing {mailing_id}: failed to save message record for {telegram_id}: {e}")
+            else:
+                errors += 1
+        except Exception as e:
+            logger.error(f"Mailing {mailing_id}: error sending to {telegram_id}: {e}")
+            errors += 1
+
+        # Задержка 50мс между сообщениями — Telegram лимит ~20 msg/s
+        time.sleep(0.05)
+
+    # Обновляем статус и счётчик по завершении
+    try:
+        fin_conn = database.get_db_connection()
+        fin_cur = fin_conn.cursor()
+        fin_cur.execute(
+            "UPDATE mailings SET status = 'Completed', sent_count = ?, sent_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'Cancelled'",
+            (sent, mailing_id),
+        )
+        fin_conn.commit()
+        fin_conn.close()
+        logger.info(f"Mailing {mailing_id} completed: sent={sent}, errors={errors}")
+    except Exception as e:
+        logger.error(f"Mailing {mailing_id}: failed to finalize status: {e}")
+
+
 @app.route('/api/panel/mailing', methods=['POST'])
 @require_auth
 def send_mailing():
-    """Отправить рассылку с поддержкой HTML/Markdown форматирования"""
+    """Создаёт рассылку и запускает отправку в фоне. Отвечает сразу."""
     data = request.json
     message = data.get('message')
-    target_users = data.get('target_users', 'all')  # 'all' or list/int user_ids
+    target_users = data.get('target_users', 'all')
     button_type = data.get('button_type')
     button_value = data.get('button_value')
     image_url = data.get('image_url')
-    parse_mode = data.get('parse_mode', 'HTML')  # normalized to HTML
+    parse_mode = data.get('parse_mode', 'HTML')
 
     if not message:
         return jsonify({'success': False, 'error': 'Message is required'}), 400
     message, parse_mode = _normalize_mailing_markup(message, parse_mode)
 
+    reply_markup = _build_mailing_reply_markup(button_type, button_value)
+
     conn = database.get_db_connection()
     cursor = conn.cursor()
-
     try:
-        # Определяем список получателей
-        user_rows = []
-        if target_users == 'all':
-            cursor.execute("SELECT id, telegram_id FROM users WHERE is_banned = 0 OR is_banned IS NULL")
-            user_rows = cursor.fetchall()
-        elif target_users == 'active':
-            # Пользователи с активными подписками
-            cursor.execute("""
-                SELECT DISTINCT u.id, u.telegram_id FROM users u
-                JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE (u.is_banned = 0 OR u.is_banned IS NULL)
-                  AND vk.status = 'Active' AND vk.expiry_date > datetime('now')
-            """)
-            user_rows = cursor.fetchall()
-        elif target_users == 'expired':
-            # Пользователи с истёкшими подписками
-            cursor.execute("""
-                SELECT DISTINCT u.id, u.telegram_id FROM users u
-                JOIN vpn_keys vk ON u.id = vk.user_id
-                WHERE (u.is_banned = 0 OR u.is_banned IS NULL)
-                  AND (vk.status = 'Expired' OR vk.expiry_date < datetime('now'))
-            """)
-            user_rows = cursor.fetchall()
-        elif target_users == 'no_subscription':
-            # Пользователи без подписок
-            cursor.execute("""
-                SELECT u.id, u.telegram_id FROM users u
-                WHERE (u.is_banned = 0 OR u.is_banned IS NULL)
-                  AND u.id NOT IN (SELECT DISTINCT user_id FROM vpn_keys)
-            """)
-            user_rows = cursor.fetchall()
-        elif isinstance(target_users, list):
-            placeholders = ",".join("?" for _ in target_users)
-            cursor.execute(
-                f"SELECT id, telegram_id FROM users WHERE id IN ({placeholders}) AND (is_banned = 0 OR is_banned IS NULL)",
-                tuple(target_users),
-            )
-            user_rows = cursor.fetchall()
-
-        # Формируем кнопки если есть
-        reply_markup = None
-        miniapp_url = os.getenv('MINIAPP_URL', 'https://your-domain.com/miniapp')
-        
-        if button_type and button_value:
-            if button_type == 'external_link' or button_type == 'url':
-                # Внешняя ссылка: значение может быть "Текст|URL" или просто URL
-                if '|' in button_value:
-                    btn_text, btn_url = button_value.split('|', 1)
-                    btn_text = (btn_text or '').strip() or 'Перейти'
-                    btn_url = (btn_url or '').strip()
-                else:
-                    btn_text = 'Перейти'
-                    btn_url = button_value.strip()
-                reply_markup = {
-                    'inline_keyboard': [[{'text': btn_text, 'url': btn_url}]]
-                }
-            elif button_type == 'open_miniapp' or button_type == 'webapp':
-                # Мини-приложение: значение «Текст|URL» или только URL
-                if '|' in button_value:
-                    btn_text, btn_url = button_value.split('|', 1)
-                    btn_text = btn_text.strip() or 'Открыть приложение'
-                    btn_url = btn_url.strip() or miniapp_url
-                else:
-                    btn_text = 'Открыть приложение'
-                    btn_url = button_value.strip() or miniapp_url
-                reply_markup = {
-                    'inline_keyboard': [[{'text': btn_text, 'web_app': {'url': btn_url}}]]
-                }
-            elif button_type == 'activate_promo':
-                # Кнопка с промокодом - добавляет промокод в deep link
-                bot_username = os.getenv('BOT_USERNAME') or os.getenv('BOT_USERNAME_MINI') or 'blinvpn_bot'
-                promo_url = f"https://t.me/{bot_username}?start=promo_{button_value}"
-                reply_markup = {
-                    'inline_keyboard': [[{'text': f'🎁 Активировать промокод {button_value}', 'url': promo_url}]]
-                }
-            elif button_type == 'add_balance':
-                # Кнопка пополнения баланса - открывает мини-приложение на странице пополнения
-                balance_url = f"{miniapp_url}?view=topup&amount={button_value}"
-                reply_markup = {
-                    'inline_keyboard': [[{'text': f'💰 Пополнить на {button_value}₽', 'web_app': {'url': balance_url}}]]
-                }
-
-        sent = 0
-        errors = 0
+        user_rows = _get_mailing_recipients(cursor, target_users)
         total_targeted = len(user_rows)
 
+        # Создаём запись со статусом 'Sending' — фон будет менять на 'Completed'
         cursor.execute(
             """
             INSERT INTO mailings (title, message_text, target_users, sent_count, status, sent_at, button_type, button_value, image_url)
-            VALUES (?, ?, ?, ?, 'Completed', CURRENT_TIMESTAMP, ?, ?, ?)
+            VALUES (?, ?, ?, ?, 'Sending', CURRENT_TIMESTAMP, ?, ?, ?)
             """,
             (data.get('title', ''), message, str(target_users), total_targeted, button_type, button_value, image_url),
         )
         mailing_id = cursor.lastrowid
-
-        for row in user_rows:
-            telegram_id = row['telegram_id']
-            try:
-                message_result = None
-                if image_url:
-                    message_result = telegram_send_photo(telegram_id, image_url, message, parse_mode, reply_markup)
-                else:
-                    message_result = telegram_send_message(telegram_id, message, parse_mode, reply_markup)
-
-                if message_result:
-                    sent += 1
-                    cursor.execute(
-                        """
-                        INSERT INTO mailing_messages (mailing_id, telegram_id, telegram_message_id)
-                        VALUES (?, ?, ?)
-                        """,
-                        (mailing_id, int(telegram_id), int(message_result.get('message_id'))),
-                    )
-                else:
-                    errors += 1
-            except Exception as e:
-                logger.error(f"Error sending mailing to {telegram_id}: {e}")
-                errors += 1
-
         conn.commit()
     finally:
         conn.close()
 
-    return jsonify({'success': True, 'sent': sent, 'errors': errors, 'total': total_targeted})
+    # Запускаем отправку в фоне и сразу отвечаем клиенту
+    from threading import Thread
+    t = Thread(
+        target=_run_mailing_background,
+        args=(mailing_id, list(user_rows), message, parse_mode, reply_markup, image_url),
+        daemon=True,
+    )
+    t.start()
+
+    return jsonify({'success': True, 'mailing_id': mailing_id, 'total': total_targeted})
 
 @app.route('/api/panel/mailing/stats', methods=['GET'])
 @require_auth
@@ -2577,7 +2613,7 @@ def get_mailing_stats():
     
     try:
         # Общее количество отправленных сообщений
-        cursor.execute("SELECT COALESCE(SUM(sent_count), 0) AS total FROM mailings WHERE status = 'Completed'")
+        cursor.execute("SELECT COALESCE(SUM(sent_count), 0) AS total FROM mailings WHERE status IN ('Completed', 'Sending')")
         total_sent = cursor.fetchone()['total'] or 0
         
         return jsonify({
@@ -2634,15 +2670,21 @@ def get_mailing_history():
 @app.route('/api/panel/mailing/<int:mailing_id>', methods=['DELETE'])
 @require_auth
 def delete_mailing(mailing_id: int):
-    """Удалить рассылку и попытаться удалить ранее отправленные сообщения у пользователей"""
+    """Останавливает рассылку (если она ещё идёт), удаляет сообщения у пользователей и запись из БД."""
     conn = database.get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id FROM mailings WHERE id = ?", (mailing_id,))
+        cursor.execute("SELECT id, status FROM mailings WHERE id = ?", (mailing_id,))
         row = cursor.fetchone()
         if not row:
             return jsonify({'error': 'Mailing not found'}), 404
 
+        # Сначала выставляем Cancelled — фоновый поток остановится перед следующим сообщением
+        if row['status'] == 'Sending':
+            cursor.execute("UPDATE mailings SET status = 'Cancelled' WHERE id = ?", (mailing_id,))
+            conn.commit()
+
+        # Читаем уже отправленные сообщения и удаляем их у пользователей
         cursor.execute(
             "SELECT telegram_id, telegram_message_id FROM mailing_messages WHERE mailing_id = ?",
             (mailing_id,),
