@@ -1179,11 +1179,11 @@ export default function App() {
   // Extend subscription state - для продления существующего ключа
   const [extendingDevice, setExtendingDevice] = useState<Device | null>(null);
   const [extendPlan, setExtendPlan] = useState<Plan | null>(null);
-  const [extendDeviceCount, setExtendDeviceCount] = useState(2);
+  const [extendDeviceCount, setExtendDeviceCount] = useState(1);
 
   useEffect(() => {
     if (extendingDevice) {
-      setExtendDeviceCount(normalizedDevicesCount(extendingDevice.devices_limit || 2));
+      setExtendDeviceCount(normalizedDevicesCount(extendingDevice.devices_limit || 1));
     }
   }, [extendingDevice]);
 
@@ -1842,7 +1842,7 @@ export default function App() {
 
   // Функция продления существующей подписки
   const extendSubscription = async (device: Device, plan: Plan) => {
-    const minDevs = normalizedDevicesCount(device.devices_limit || 2);
+    const minDevs = normalizedDevicesCount(device.devices_limit || 1);
     const devs = Math.max(minDevs, extendDeviceCount);
     const price = priceFinal(plan, devs);
     const currentUserId = await ensureUserId();
@@ -2442,25 +2442,12 @@ export default function App() {
 
   const resetDeviceKey = async (device: Device) => {
     setDeviceMenuOpenId(null);
+    if (!window.confirm('Сбросить ключ? Все подключённые устройства будут отвязаны, и вы сможете подключиться заново.')) return;
     setResetKeyLoading(device.id);
     try {
       const data = await miniApiFetch(`/user/devices/${device.id}/reset-key?telegram_id=${telegramId}`, { method: 'POST' });
       if (data?.success) {
-        // Обновляем ключ локально и переходим на страницу успеха
-        const newKey = data.subscription_url || data.key_config || '';
-        if (newKey) {
-          setDeviceKeys(prev => {
-            const next = new Map(prev);
-            next.set(device.id, newKey);
-            return next;
-          });
-        }
-        await refreshDevices();
-        setSuccessInstructionPlatform(device.type as PlatformId || 'android');
-        setWizardSuccessPlainDevice(false);
-        setInstructionSourceDeviceId(device.id);
-        setWizardStep(4);
-        setView('wizard');
+        alert('Ключ сброшен. Подключённые устройства отвязаны — подключитесь заново по инструкции.');
       } else {
         alert(data?.error || 'Не удалось сбросить ключ');
       }
@@ -2613,62 +2600,13 @@ export default function App() {
           <Plus size={20} /> Добавить устройство
         </Button>
       </div>
-
-      {/* HWID Devices Modal */}
-      {hwidModal && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70" onClick={() => setHwidModal(null)}>
-          <div className="w-full max-w-md bg-zinc-900 rounded-t-3xl p-6 pb-8 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-5">
-              <h3 className="text-lg font-bold text-white">Устройства в подписке</h3>
-              <button onClick={() => setHwidModal(null)} className="text-zinc-400 hover:text-white transition-colors">
-                <X size={22} />
-              </button>
-            </div>
-            {hwidModal.loading ? (
-              <div className="flex justify-center py-8">
-                <div className="w-8 h-8 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
-              </div>
-            ) : hwidModal.devices.length === 0 ? (
-              <div className="text-center py-8 text-zinc-500 text-sm">
-                Нет подключённых устройств.<br/>Устройства появляются при первом подключении.
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {hwidModal.devices.map((d: any) => {
-                  const deviceId = d.id || d.uuid || d.hwid;
-                  const deviceName = d.name || d.user_agent || d.hwid || deviceId || 'Устройство';
-                  const connectedAt = d.created_at || d.connectedAt || d.connected_at;
-                  return (
-                    <div key={deviceId} className="flex items-center justify-between bg-zinc-800 rounded-xl px-4 py-3 border border-zinc-700">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-white truncate">{deviceName}</div>
-                        {connectedAt && (
-                          <div className="text-xs text-zinc-500 mt-0.5">
-                            {new Date(connectedAt).toLocaleDateString('ru-RU')}
-                          </div>
-                        )}
-                      </div>
-                      <button
-                        onClick={() => deleteHwidDevice(deviceId)}
-                        className="ml-3 p-2 rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 
   // View для продления подписки - выбор тарифа
   const ExtendSubscriptionView = () => {
     const plansForExtend = vpnPlans.filter(p => !p.isTrial); // Без триала
-    const extMinCnt = extendingDevice ? normalizedDevicesCount(extendingDevice.devices_limit || 2) : 2;
+    const extMinCnt = extendingDevice ? normalizedDevicesCount(extendingDevice.devices_limit || 1) : 1;
     const extPricingCnt = Math.max(extMinCnt, extendDeviceCount);
     const priceForExtend = (p: Plan) => priceFinal(p, extPricingCnt);
 
@@ -3042,7 +2980,7 @@ export default function App() {
             const currentUserId = await ensureUserId();
             if (currentUserId) {
               if (action.type === 'extend' && payload.device && payload.plan) {
-                const extDevices = payload.devices ?? normalizedDevicesCount(payload.device.devices_limit || 2);
+                const extDevices = payload.devices ?? normalizedDevicesCount(payload.device.devices_limit || 1);
                 const res = await miniApiFetch('/subscription/extend', {
                   method: 'POST',
                   body: JSON.stringify({
@@ -3961,6 +3899,55 @@ export default function App() {
       )}
 
       {/* MODALS */}
+
+      {/* HWID Devices Modal */}
+      {hwidModal && (
+        <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/70" onClick={() => setHwidModal(null)}>
+          <div className="w-full max-w-md bg-zinc-900 rounded-t-3xl p-6 pb-10 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-lg font-bold text-white">Устройства в подписке</h3>
+              <button onClick={() => setHwidModal(null)} className="text-zinc-400 hover:text-white transition-colors">
+                <X size={22} />
+              </button>
+            </div>
+            {hwidModal.loading ? (
+              <div className="flex justify-center py-8">
+                <div className="w-8 h-8 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : hwidModal.devices.length === 0 ? (
+              <div className="text-center py-8 text-zinc-500 text-sm">
+                Нет подключённых устройств.<br/>Устройства появляются при первом подключении.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {hwidModal.devices.map((d: any) => {
+                  const deviceId = d.id || d.uuid || d.hwid;
+                  const deviceName = d.name || d.userAgent || d.user_agent || d.hwid || String(deviceId) || 'Устройство';
+                  const connectedAt = d.createdAt || d.created_at || d.connectedAt || d.connected_at;
+                  return (
+                    <div key={deviceId} className="flex items-center justify-between bg-zinc-800 rounded-xl px-4 py-3 border border-zinc-700">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-white truncate">{deviceName}</div>
+                        {connectedAt && (
+                          <div className="text-xs text-zinc-500 mt-0.5">
+                            {new Date(connectedAt).toLocaleDateString('ru-RU')}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => deleteHwidDevice(deviceId)}
+                        className="ml-3 p-2 rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       
       <Modal 
         title="Удалить устройство" 
@@ -4250,4 +4237,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-  }
+}
