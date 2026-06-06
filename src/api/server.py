@@ -6126,6 +6126,124 @@ def cleanup_expired_keys():
     finally:
         conn.close()
 
+# ========== Мониторинг нод ==========
+
+def _sanitize_monitoring_node(node: dict) -> dict:
+    """Не отдаём SSH-пароль в API."""
+    safe = dict(node)
+    safe.pop('ssh_password', None)
+    safe['has_password'] = bool(node.get('ssh_password'))
+    return safe
+
+
+@app.route('/api/panel/monitoring/nodes', methods=['GET'])
+@require_auth
+def list_monitoring_nodes():
+    nodes = database.get_monitoring_nodes()
+    return jsonify({'nodes': [_sanitize_monitoring_node(n) for n in nodes]})
+
+
+@app.route('/api/panel/monitoring/nodes', methods=['POST'])
+@require_auth
+def create_monitoring_node():
+    data = request.get_json() or {}
+    try:
+        node = database.create_monitoring_node(data)
+        from src.monitoring.monitoring import monitoring_service
+        monitoring_service.reload_node(node['id'])
+        return jsonify({'success': True, 'node': _sanitize_monitoring_node(node)})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f'Create monitoring node error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/panel/monitoring/nodes/<int:node_id>', methods=['PUT'])
+@require_auth
+def update_monitoring_node(node_id):
+    data = request.get_json() or {}
+    if not data.get('ssh_password'):
+        data.pop('ssh_password', None)
+    try:
+        node = database.update_monitoring_node(node_id, data)
+        if not node:
+            return jsonify({'error': 'Node not found'}), 404
+        from src.monitoring.monitoring import monitoring_service
+        monitoring_service.reload_node(node_id)
+        return jsonify({'success': True, 'node': _sanitize_monitoring_node(node)})
+    except Exception as e:
+        logger.error(f'Update monitoring node error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/panel/monitoring/nodes/<int:node_id>', methods=['DELETE'])
+@require_auth
+def delete_monitoring_node(node_id):
+    from src.monitoring.monitoring import monitoring_service
+    monitoring_service.stop_worker(node_id)
+    if database.delete_monitoring_node(node_id):
+        return jsonify({'success': True})
+    return jsonify({'error': 'Node not found'}), 404
+
+
+@app.route('/api/panel/monitoring/status', methods=['GET'])
+@require_auth
+def monitoring_status():
+    from src.monitoring.monitoring import monitoring_service
+    return jsonify(monitoring_service.get_status())
+
+
+@app.route('/api/panel/monitoring/nodes/<int:node_id>/history', methods=['GET'])
+@require_auth
+def monitoring_node_history(node_id):
+    metric_type = request.args.get('type')
+    limit = min(int(request.args.get('limit', 200)), 1000)
+    from src.monitoring.monitoring import monitoring_service
+    history = monitoring_service.get_history(node_id, metric_type, limit)
+    return jsonify({'history': history})
+
+
+@app.route('/api/panel/monitoring/events', methods=['GET'])
+@require_auth
+def monitoring_events():
+    node_id = request.args.get('node_id', type=int)
+    limit = min(int(request.args.get('limit', 100)), 500)
+    events = database.get_monitoring_events(node_id=node_id, limit=limit)
+    return jsonify({'events': events})
+
+
+@app.route('/api/panel/monitoring/nodes/<int:node_id>/test-ssh', methods=['POST'])
+@require_auth
+def monitoring_test_ssh(node_id):
+    node = database.get_monitoring_node(node_id)
+    if not node:
+        return jsonify({'error': 'Node not found'}), 404
+    try:
+        from src.monitoring.monitoring import SSHClient
+        ssh = SSHClient(
+            host=node['host'],
+            port=int(node.get('ssh_port') or 22),
+            username=node['ssh_user'],
+            password=node['ssh_password'],
+        )
+        metrics = ssh.collect_metrics()
+        tool = ssh.ensure_speedtest()
+        return jsonify({'success': True, 'metrics': metrics, 'speedtest_tool': tool})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+
+
+def start_monitoring_service():
+    """Запустить фоновый мониторинг нод."""
+    try:
+        from src.monitoring.monitoring import monitoring_service
+        monitoring_service.start()
+        logger.info('Monitoring service initialized')
+    except Exception as e:
+        logger.error(f'Failed to start monitoring service: {e}')
+
+
 # Запуск планировщика для автоматических бэкапов
 def start_backup_scheduler():
     """Запустить планировщик периодических бэкапов"""
@@ -6161,5 +6279,8 @@ if __name__ == '__main__':
 
     # Запускаем поллер платежей (перестрахование от потерянных вебхуков)
     start_payment_poller()
+
+    # Мониторинг VPN-нод
+    start_monitoring_service()
 
     app.run(host='0.0.0.0', port=int(os.getenv('API_PORT', 8000)))

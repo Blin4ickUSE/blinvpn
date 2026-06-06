@@ -407,8 +407,8 @@ VITE_BOT_USERNAME=blinvpn_bot
 SUPPORT_BOT_TOKEN=${SUPPORT_BOT_TOKEN}
 SUPPORT_GROUP_ID=${SUPPORT_GROUP_ID}
 SUPPORT_ADMIN_USERNAME=${SUPPORT_ADMIN_USERNAME}
-SUPPORT_URL=https://t.me/blinteambot
-VITE_SUPPORT_URL=https://t.me/blinteambot
+SUPPORT_URL=https://t.me/blinteams
+VITE_SUPPORT_URL=https://t.me/blinteams
 
 # ===== remnawave =====
 REMWAVE_PANEL_URL=${REMWAVE_PANEL_URL}

@@ -2101,7 +2101,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
                 { category: "Главное", items: [{ name: "Главная страница", icon: Home }, { name: "Финансы", icon: DollarSign }] },
                 { category: "Пользователи", items: [{ name: "Пользователи", icon: Users }, { name: "Подписки", icon: Key }] },
                 { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Промокоды", icon: Gift }, { name: "Специальные ссылки", icon: Link }] },
-                { category: "Другое", items: [{ name: "Настройки", icon: Settings }] }
+                { category: "Другое", items: [{ name: "Мониторинг", icon: Activity }, { name: "Настройки", icon: Settings }] }
             ].map((section, idx) => (
                 <div key={idx}>
                     <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">{section.category}</h3>
@@ -2127,6 +2127,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             {activePage === 'Рассылка' && <MailingPage onToast={addToast} />}
             {activePage === 'Промокоды' && <PromocodesPage promos={promos} onToast={addToast} />}
             {activePage === 'Специальные ссылки' && <TrackingLinksPage onToast={addToast} />}
+            {activePage === 'Мониторинг' && <MonitoringPage onToast={addToast} />}
             {activePage === 'Настройки' && <SettingsPage onToast={addToast} />}
         </div>
       </main>
@@ -4658,6 +4659,351 @@ const ToolsPage: React.FC<ToolsPageProps> = ({ onToast }) => {
                     )}
                 </div>
             )}
+        </div>
+    );
+};
+
+// ==========================================
+// MONITORING PAGE
+// ==========================================
+
+interface MonitoringNodeConfig {
+    id: number;
+    name: string;
+    host: string;
+    ssh_port: number;
+    ssh_user: string;
+    has_password?: boolean;
+    is_active: boolean;
+}
+
+interface MonitoringNodeStatus {
+    node_id: number;
+    name: string;
+    host: string;
+    online: boolean;
+    ping_ms: number | null;
+    ping_failures: number;
+    cpu_percent: number | null;
+    mem_percent: number | null;
+    disk_percent: number | null;
+    rx_mbps: number | null;
+    tx_mbps: number | null;
+    iface: string | null;
+    speedtest: { download_mbps: number; upload_mbps: number; ping_ms: number | null } | null;
+    last_speedtest_at: string | null;
+    ssh_ok: boolean;
+    ssh_error: string | null;
+    updated_at: string;
+}
+
+interface MonitoringEvent {
+    id: number;
+    node_id: number;
+    node_name: string;
+    node_host: string;
+    event_type: string;
+    message: string;
+    created_at: string;
+}
+
+const MonitoringPage: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
+    const [nodes, setNodes] = useState<MonitoringNodeConfig[]>([]);
+    const [statusMap, setStatusMap] = useState<Record<number, MonitoringNodeStatus>>({});
+    const [events, setEvents] = useState<MonitoringEvent[]>([]);
+    const [storage, setStorage] = useState<{ used_bytes: number; max_bytes: number; used_percent: number } | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [showForm, setShowForm] = useState(false);
+    const [editingNode, setEditingNode] = useState<MonitoringNodeConfig | null>(null);
+    const [form, setForm] = useState({ name: '', host: '', ssh_port: 22, ssh_user: 'root', ssh_password: '' });
+    const [saving, setSaving] = useState(false);
+    const [testingId, setTestingId] = useState<number | null>(null);
+    const [selectedNode, setSelectedNode] = useState<number | null>(null);
+    const [history, setHistory] = useState<any[]>([]);
+
+    const loadNodes = async () => {
+        const data = await apiFetch('/panel/monitoring/nodes');
+        setNodes(data?.nodes || []);
+    };
+
+    const loadStatus = async () => {
+        const data = await apiFetch('/panel/monitoring/status');
+        const map: Record<number, MonitoringNodeStatus> = {};
+        (data?.nodes || []).forEach((n: MonitoringNodeStatus) => { map[n.node_id] = n; });
+        setStatusMap(map);
+        setStorage(data?.storage || null);
+    };
+
+    const loadEvents = async () => {
+        const data = await apiFetch('/panel/monitoring/events?limit=50');
+        setEvents(data?.events || []);
+    };
+
+    const refresh = async () => {
+        try {
+            await Promise.all([loadNodes(), loadStatus(), loadEvents()]);
+        } catch {
+            onToast('Ошибка', 'Не удалось загрузить данные мониторинга', 'error');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        refresh();
+        const interval = setInterval(() => { loadStatus(); loadEvents(); }, 15000);
+        return () => clearInterval(interval);
+    }, []);
+
+    useEffect(() => {
+        if (!selectedNode) { setHistory([]); return; }
+        apiFetch(`/panel/monitoring/nodes/${selectedNode}/history?limit=100`)
+            .then(d => setHistory(d?.history || []))
+            .catch(() => setHistory([]));
+    }, [selectedNode]);
+
+    const resetForm = () => {
+        setForm({ name: '', host: '', ssh_port: 22, ssh_user: 'root', ssh_password: '' });
+        setEditingNode(null);
+        setShowForm(false);
+    };
+
+    const handleSave = async () => {
+        if (!form.name || !form.host || !form.ssh_user) {
+            onToast('Ошибка', 'Заполните имя, хост и SSH-пользователя', 'error');
+            return;
+        }
+        if (!editingNode && !form.ssh_password) {
+            onToast('Ошибка', 'Укажите SSH-пароль', 'error');
+            return;
+        }
+        setSaving(true);
+        try {
+            const body: any = { ...form };
+            if (editingNode && !body.ssh_password) delete body.ssh_password;
+            if (editingNode) {
+                await apiFetch(`/panel/monitoring/nodes/${editingNode.id}`, { method: 'PUT', body: JSON.stringify(body) });
+                onToast('Успех', 'Нода обновлена', 'success');
+            } else {
+                await apiFetch('/panel/monitoring/nodes', { method: 'POST', body: JSON.stringify(body) });
+                onToast('Успех', 'Нода добавлена, мониторинг запущен', 'success');
+            }
+            resetForm();
+            refresh();
+        } catch (e: any) {
+            onToast('Ошибка', e?.message || 'Не удалось сохранить', 'error');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleDelete = async (id: number) => {
+        if (!confirm('Удалить ноду из мониторинга?')) return;
+        try {
+            await apiFetch(`/panel/monitoring/nodes/${id}`, { method: 'DELETE' });
+            onToast('Успех', 'Нода удалена', 'success');
+            if (selectedNode === id) setSelectedNode(null);
+            refresh();
+        } catch {
+            onToast('Ошибка', 'Не удалось удалить', 'error');
+        }
+    };
+
+    const handleTestSSH = async (id: number) => {
+        setTestingId(id);
+        try {
+            const res = await apiFetch(`/panel/monitoring/nodes/${id}/test-ssh`, { method: 'POST' });
+            if (res?.success) {
+                onToast('SSH OK', `Speedtest: ${res.speedtest_tool}, CPU: ${res.metrics?.cpu}%`, 'success');
+            } else {
+                onToast('Ошибка SSH', res?.error || 'Подключение не удалось', 'error');
+            }
+        } catch (e: any) {
+            onToast('Ошибка SSH', e?.message || 'Подключение не удалось', 'error');
+        } finally {
+            setTestingId(null);
+        }
+    };
+
+    const formatBytes = (b: number) => {
+        if (b >= 1e9) return `${(b / 1e9).toFixed(2)} ГБ`;
+        if (b >= 1e6) return `${(b / 1e6).toFixed(1)} МБ`;
+        return `${b} Б`;
+    };
+
+    const eventIcon = (type: string) => {
+        if (type === 'downtime') return <XCircle size={16} className="text-red-400" />;
+        if (type === 'recovery') return <CheckCircle size={16} className="text-green-400" />;
+        if (type === 'ping_spike') return <TrendingUp size={16} className="text-yellow-400" />;
+        if (type === 'traffic_spike') return <AlertTriangle size={16} className="text-orange-400" />;
+        return <Bell size={16} className="text-gray-400" />;
+    };
+
+    const MetricBar = ({ label, value, color }: { label: string; value: number | null; color: string }) => (
+        <div>
+            <div className="flex justify-between text-xs text-gray-400 mb-1">
+                <span>{label}</span>
+                <span>{value != null ? `${value}%` : '—'}</span>
+            </div>
+            <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+                <div className={`h-full ${color} transition-all duration-500`} style={{ width: `${Math.min(value || 0, 100)}%` }} />
+            </div>
+        </div>
+    );
+
+    if (loading) {
+        return <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-orange-500" size={32} /></div>;
+    }
+
+    return (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div>
+                    <h1 className="text-2xl font-bold text-white">Мониторинг нод</h1>
+                    <p className="text-gray-400 mt-1">Ping, нагрузка, трафик и speedtest ваших серверов</p>
+                </div>
+                <div className="flex items-center gap-3">
+                    {storage && (
+                        <div className="text-xs text-gray-500 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
+                            Логи: {formatBytes(storage.used_bytes)} / {formatBytes(storage.max_bytes)} ({storage.used_percent}%)
+                        </div>
+                    )}
+                    <button onClick={refresh} className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-300 transition-colors">
+                        <RefreshCw size={18} />
+                    </button>
+                    <button onClick={() => { resetForm(); setShowForm(true); }} className="flex items-center px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg font-medium transition-colors">
+                        <Plus size={18} className="mr-2" /> Добавить ноду
+                    </button>
+                </div>
+            </div>
+
+            {showForm && (
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                    <h3 className="text-lg font-semibold text-white mb-4">{editingNode ? 'Редактировать ноду' : 'Новая нода'}</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <input placeholder="Название" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white" />
+                        <input placeholder="IP / хост" value={form.host} onChange={e => setForm(f => ({ ...f, host: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white" />
+                        <input type="number" placeholder="SSH порт" value={form.ssh_port} onChange={e => setForm(f => ({ ...f, ssh_port: parseInt(e.target.value) || 22 }))} className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white" />
+                        <input placeholder="SSH пользователь" value={form.ssh_user} onChange={e => setForm(f => ({ ...f, ssh_user: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white" />
+                        <input type="password" placeholder={editingNode ? 'Пароль (оставьте пустым чтобы не менять)' : 'SSH пароль'} value={form.ssh_password} onChange={e => setForm(f => ({ ...f, ssh_password: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white md:col-span-2" />
+                    </div>
+                    <div className="flex gap-3 mt-4">
+                        <button onClick={handleSave} disabled={saving} className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white rounded-lg font-medium">
+                            {saving ? <Loader className="animate-spin inline" size={16} /> : 'Сохранить'}
+                        </button>
+                        <button onClick={resetForm} className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg">Отмена</button>
+                    </div>
+                </div>
+            )}
+
+            {nodes.length === 0 ? (
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-12 text-center">
+                    <Server size={48} className="mx-auto text-gray-600 mb-4" />
+                    <p className="text-gray-400">Добавьте первую ноду для начала мониторинга</p>
+                </div>
+            ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {nodes.map(node => {
+                        const st = statusMap[node.id];
+                        const online = st?.online;
+                        return (
+                            <div key={node.id} className={`bg-gray-900 border rounded-2xl p-5 transition-colors cursor-pointer ${selectedNode === node.id ? 'border-orange-500/50' : 'border-gray-800 hover:border-gray-700'}`} onClick={() => setSelectedNode(node.id)}>
+                                <div className="flex justify-between items-start mb-4">
+                                    <div>
+                                        <h3 className="font-semibold text-white">{node.name}</h3>
+                                        <p className="text-sm text-gray-500">{node.host}:{node.ssh_port}</p>
+                                    </div>
+                                    <span className={`flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full ${online ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                                        <span className={`w-2 h-2 rounded-full ${online ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
+                                        {online ? 'Online' : 'Offline'}
+                                    </span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-3 mb-4 text-sm">
+                                    <div className="bg-gray-800/50 rounded-lg p-3">
+                                        <div className="text-gray-500 text-xs">Ping</div>
+                                        <div className={`font-bold ${st?.ping_ms && st.ping_ms > 100 ? 'text-yellow-400' : 'text-white'}`}>
+                                            {st?.ping_ms != null ? `${st.ping_ms} мс` : '—'}
+                                        </div>
+                                    </div>
+                                    <div className="bg-gray-800/50 rounded-lg p-3">
+                                        <div className="text-gray-500 text-xs">Трафик ↓/↑</div>
+                                        <div className="font-bold text-white text-xs">
+                                            {st?.rx_mbps != null ? `${st.rx_mbps}` : '—'} / {st?.tx_mbps != null ? `${st.tx_mbps}` : '—'} Мбит/с
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="space-y-2 mb-4">
+                                    <MetricBar label="CPU" value={st?.cpu_percent ?? null} color="bg-orange-500" />
+                                    <MetricBar label="RAM" value={st?.mem_percent ?? null} color="bg-blue-500" />
+                                    <MetricBar label="Диск" value={st?.disk_percent ?? null} color="bg-purple-500" />
+                                </div>
+                                {st?.speedtest && (
+                                    <div className="bg-gray-800/30 rounded-lg p-3 mb-4 text-xs">
+                                        <div className="text-gray-500 mb-1">Speedtest {st.last_speedtest_at ? `(${new Date(st.last_speedtest_at).toLocaleString('ru-RU')})` : ''}</div>
+                                        <div className="text-white">↓ {st.speedtest.download_mbps} Мбит/с · ↑ {st.speedtest.upload_mbps} Мбит/с · {st.speedtest.ping_ms} мс</div>
+                                    </div>
+                                )}
+                                {st?.ssh_error && !st.ssh_ok && (
+                                    <div className="text-xs text-red-400 mb-3 flex items-center gap-1"><AlertCircle size={12} /> SSH: {st.ssh_error}</div>
+                                )}
+                                <div className="flex gap-2" onClick={e => e.stopPropagation()}>
+                                    <button onClick={() => handleTestSSH(node.id)} disabled={testingId === node.id} className="flex-1 text-xs py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors">
+                                        {testingId === node.id ? <Loader className="animate-spin mx-auto" size={14} /> : 'Тест SSH'}
+                                    </button>
+                                    <button onClick={() => { setEditingNode(node); setForm({ name: node.name, host: node.host, ssh_port: node.ssh_port, ssh_user: node.ssh_user, ssh_password: '' }); setShowForm(true); }} className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg"><Edit2 size={14} /></button>
+                                    <button onClick={() => handleDelete(node.id)} className="p-2 bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg"><Trash2 size={14} /></button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+
+            {selectedNode && history.length > 0 && (
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                    <h3 className="text-lg font-semibold text-white mb-4">История метрик</h3>
+                    <div className="max-h-64 overflow-y-auto custom-scrollbar space-y-1">
+                        {history.slice(0, 30).map((h, i) => (
+                            <div key={i} className="flex items-center justify-between text-xs py-2 border-b border-gray-800/50">
+                                <span className="text-gray-500">{new Date(h.ts).toLocaleString('ru-RU')}</span>
+                                <span className={`px-2 py-0.5 rounded ${h.type === 'ping' ? 'bg-blue-500/10 text-blue-400' : h.type === 'speedtest' ? 'bg-green-500/10 text-green-400' : h.type === 'system' ? 'bg-orange-500/10 text-orange-400' : 'bg-red-500/10 text-red-400'}`}>{h.type}</span>
+                                <span className="text-gray-300 font-mono truncate max-w-[50%] text-right">
+                                    {h.type === 'ping' && (h.data?.ok ? `${h.data.ping_ms} мс` : 'fail')}
+                                    {h.type === 'speedtest' && `↓${h.data?.download_mbps} ↑${h.data?.upload_mbps} Мбит/с`}
+                                    {h.type === 'system' && `CPU ${h.data?.cpu}% RAM ${h.data?.mem_used_percent}%`}
+                                    {h.type === 'ssh_error' && h.data?.error}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2"><Bell size={18} className="text-orange-400" /> События и алерты</h3>
+                {events.length === 0 ? (
+                    <p className="text-gray-500 text-sm">Событий пока нет</p>
+                ) : (
+                    <div className="space-y-2 max-h-80 overflow-y-auto custom-scrollbar">
+                        {events.map(ev => (
+                            <div key={ev.id} className="flex items-start gap-3 p-3 bg-gray-800/30 rounded-lg">
+                                {eventIcon(ev.event_type)}
+                                <div className="flex-1 min-w-0">
+                                    <div className="text-sm text-white">{ev.message}</div>
+                                    <div className="text-xs text-gray-500 mt-0.5">{ev.node_name} · {new Date(ev.created_at).toLocaleString('ru-RU')}</div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            <div className="text-xs text-gray-600 flex flex-wrap gap-4">
+                <span>Ping: каждые 30 сек</span>
+                <span>Метрики SSH: каждые 60 сек</span>
+                <span>Speedtest: каждые 5 мин</span>
+                <span>Логи хранятся до 15 ГБ, старые удаляются автоматически</span>
+            </div>
         </div>
     );
 };

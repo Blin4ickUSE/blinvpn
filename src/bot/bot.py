@@ -307,7 +307,7 @@ async def cmd_start(message: types.Message):
             notify_msgs.build_ban_message(ban_reason),
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Служба поддержки", url=os.getenv("SUPPORT_URL", "https://t.me/blinteambot"))
+                InlineKeyboardButton(text="Служба поддержки", url=os.getenv("SUPPORT_URL", "https://t.me/blinteams"))
             ]])
         )
         return
@@ -411,7 +411,7 @@ async def cmd_support(message: types.Message):
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
                 text=notify_msgs.BUTTON_SUPPORT,
-                url=os.getenv("SUPPORT_URL", "https://t.me/blinteambot"),
+                url=os.getenv("SUPPORT_URL", "https://t.me/blinteams"),
             )
         ]])
     )
@@ -426,7 +426,7 @@ async def unknown_command_handler(message: types.Message):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(
                     text=notify_msgs.BUTTON_SUPPORT,
-                    url=os.getenv("SUPPORT_URL", "https://t.me/blinteambot"),
+                    url=os.getenv("SUPPORT_URL", "https://t.me/blinteams"),
                 )
             ]])
         )

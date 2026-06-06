@@ -443,6 +443,34 @@ def init_database():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Ноды для мониторинга
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS monitoring_nodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                host TEXT NOT NULL,
+                ssh_port INTEGER DEFAULT 22,
+                ssh_user TEXT NOT NULL,
+                ssh_password TEXT NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # События мониторинга (downtime, ping spike, traffic spike)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS monitoring_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                message TEXT,
+                details TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (node_id) REFERENCES monitoring_nodes(id) ON DELETE CASCADE
+            )
+        """)
         
         # Индексы
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)")
@@ -454,6 +482,8 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_traffic_stats_date ON traffic_stats(date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_telegram_id ON blacklist(telegram_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_panel_ip_blocks_ip ON panel_ip_blocks(ip_address)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_monitoring_events_node ON monitoring_events(node_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_monitoring_events_created ON monitoring_events(created_at)")
         
         conn.commit()
         
@@ -2288,6 +2318,184 @@ def delete_tracking_link(link_id: int) -> bool:
         cursor.execute("DELETE FROM tracking_links WHERE id = ?", (link_id,))
         conn.commit()
         return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ========== Мониторинг нод ==========
+
+def _monitoring_node_row(row) -> Dict[str, Any]:
+    return {
+        'id': row['id'],
+        'name': row['name'],
+        'host': row['host'],
+        'ssh_port': row['ssh_port'],
+        'ssh_user': row['ssh_user'],
+        'ssh_password': row['ssh_password'],
+        'is_active': bool(row['is_active']),
+        'created_at': row['created_at'],
+        'updated_at': row['updated_at'],
+    }
+
+
+def get_monitoring_nodes(active_only: bool = False) -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        query = "SELECT * FROM monitoring_nodes"
+        if active_only:
+            query += " WHERE is_active = 1"
+        query += " ORDER BY id ASC"
+        cursor.execute(query)
+        return [_monitoring_node_row(r) for r in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_monitoring_node(node_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT * FROM monitoring_nodes WHERE id = ?", (node_id,))
+        row = cursor.fetchone()
+        return _monitoring_node_row(row) if row else None
+    finally:
+        conn.close()
+
+
+def create_monitoring_node(data: dict) -> Dict[str, Any]:
+    name = str(data.get('name') or '').strip()
+    host = str(data.get('host') or '').strip()
+    ssh_user = str(data.get('ssh_user') or '').strip()
+    ssh_password = str(data.get('ssh_password') or '')
+    ssh_port = int(data.get('ssh_port') or 22)
+    if not name or not host or not ssh_user or not ssh_password:
+        raise ValueError('Заполните имя, хост, SSH-пользователя и пароль')
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """INSERT INTO monitoring_nodes (name, host, ssh_port, ssh_user, ssh_password, is_active)
+               VALUES (?, ?, ?, ?, ?, 1)""",
+            (name, host, ssh_port, ssh_user, ssh_password),
+        )
+        conn.commit()
+        return get_monitoring_node(cursor.lastrowid)  # type: ignore
+    finally:
+        conn.close()
+
+
+def update_monitoring_node(node_id: int, data: dict) -> Optional[Dict[str, Any]]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id FROM monitoring_nodes WHERE id = ?", (node_id,))
+        if not cursor.fetchone():
+            return None
+        fields = []
+        values = []
+        for key, col in [
+            ('name', 'name'), ('host', 'host'), ('ssh_port', 'ssh_port'),
+            ('ssh_user', 'ssh_user'), ('ssh_password', 'ssh_password'),
+            ('is_active', 'is_active'),
+        ]:
+            if key in data:
+                val = data[key]
+                if key == 'is_active':
+                    val = 1 if val else 0
+                elif key in ('name', 'host', 'ssh_user'):
+                    val = str(val or '').strip()
+                elif key == 'ssh_port':
+                    val = int(val or 22)
+                fields.append(f'{col} = ?')
+                values.append(val)
+        if fields:
+            fields.append('updated_at = CURRENT_TIMESTAMP')
+            values.append(node_id)
+            cursor.execute(
+                f"UPDATE monitoring_nodes SET {', '.join(fields)} WHERE id = ?",
+                values,
+            )
+            conn.commit()
+        return get_monitoring_node(node_id)
+    finally:
+        conn.close()
+
+
+def delete_monitoring_node(node_id: int) -> bool:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM monitoring_nodes WHERE id = ?", (node_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def create_monitoring_event(
+    node_id: int,
+    event_type: str,
+    message: str,
+    details: Optional[Dict[str, Any]] = None,
+) -> None:
+    import json as _json
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """INSERT INTO monitoring_events (node_id, event_type, message, details)
+               VALUES (?, ?, ?, ?)""",
+            (node_id, event_type, message, _json.dumps(details or {}, ensure_ascii=False)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_monitoring_events(
+    node_id: Optional[int] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    import json as _json
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        if node_id:
+            cursor.execute(
+                """SELECT e.*, n.name as node_name, n.host as node_host
+                   FROM monitoring_events e
+                   JOIN monitoring_nodes n ON n.id = e.node_id
+                   WHERE e.node_id = ?
+                   ORDER BY e.created_at DESC LIMIT ?""",
+                (node_id, limit),
+            )
+        else:
+            cursor.execute(
+                """SELECT e.*, n.name as node_name, n.host as node_host
+                   FROM monitoring_events e
+                   JOIN monitoring_nodes n ON n.id = e.node_id
+                   ORDER BY e.created_at DESC LIMIT ?""",
+                (limit,),
+            )
+        events = []
+        for row in cursor.fetchall():
+            details = {}
+            try:
+                details = _json.loads(row['details'] or '{}')
+            except Exception:
+                pass
+            events.append({
+                'id': row['id'],
+                'node_id': row['node_id'],
+                'node_name': row['node_name'],
+                'node_host': row['node_host'],
+                'event_type': row['event_type'],
+                'message': row['message'],
+                'details': details,
+                'created_at': row['created_at'],
+            })
+        return events
     finally:
         conn.close()
 

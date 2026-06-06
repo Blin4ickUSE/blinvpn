@@ -38,8 +38,11 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+      - ./src/monitoring/logs:/app/src/monitoring/logs
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
+    cap_add:
+      - NET_RAW
 
   # Мини-приложение (React)
   miniapp:
@@ -69,21 +72,19 @@ services:
     depends_on:
       - api
 
-  # Добавь этот сервис в docker-compose.yml (в секцию services:)
-
-  # Бот поддержки
-  support_bot:
-    build:
-      context: .
-      dockerfile: deploy/docker/Dockerfile.support_bot
-    container_name: blinvpn_support_bot
-    restart: unless-stopped
-    env_file:
-      - .env
-    volumes:
-      - ./data:/app/data
-    depends_on:
-      - webhook
+  # Бот поддержки — временно отключён (код и Dockerfile сохранены)
+  # support_bot:
+  #   build:
+  #     context: .
+  #     dockerfile: deploy/docker/Dockerfile.support_bot
+  #   container_name: blinvpn_support_bot
+  #   restart: unless-stopped
+  #   env_file:
+  #     - .env
+  #   volumes:
+  #     - ./data:/app/data
+  #   depends_on:
+  #     - webhook
 
   # Certbot для SSL сертификатов (запускается только при необходимости)
   # certbot:
