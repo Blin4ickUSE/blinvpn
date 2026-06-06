@@ -1621,27 +1621,69 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
                          )}
                     </div>
                     {/* PARTNER SECTION */}
-                    {user.isPartner && (
-                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                            <h3 className="text-lg font-bold text-gray-200 flex items-center mb-4"><Users size={18} className="mr-2 text-indigo-400"/> Партнёрская программа</h3>
-                            <div className="grid grid-cols-2 gap-4 mb-4">
-                                <div className="bg-gray-950 p-3 rounded-xl border border-gray-800">
-                                    <div className="text-xs text-gray-500">Баланс</div>
-                                    <div className="text-xl font-bold text-white">{user.partnerBalance} ₽</div>
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                        <h3 className="text-lg font-bold text-gray-200 flex items-center mb-4"><UserPlus size={18} className="mr-2 text-indigo-400"/> Партнёрская программа</h3>
+                        {user.isPartner ? (
+                            <>
+                                <div className="grid grid-cols-2 gap-4 mb-4">
+                                    <div className="bg-gray-950 p-3 rounded-xl border border-gray-800">
+                                        <div className="text-xs text-gray-500">Баланс</div>
+                                        <div className="text-xl font-bold text-white">{user.partnerBalance} ₽</div>
+                                    </div>
+                                    <div className="bg-gray-950 p-3 rounded-xl border border-gray-800">
+                                        <div className="text-xs text-gray-500">Рефералов</div>
+                                        <div className="text-xl font-bold text-white">{user.referrals}</div>
+                                    </div>
                                 </div>
-                                <div className="bg-gray-950 p-3 rounded-xl border border-gray-800">
-                                    <div className="text-xs text-gray-500">Рефералов</div>
-                                    <div className="text-xl font-bold text-white">{user.referrals}</div>
+                                <div className="space-y-3">
+                                    <div><label className="text-xs text-gray-500 block mb-1">Реф. код</label><input type="text" readOnly value={user.refCode} className="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 font-mono"/></div>
+                                    <div><label className="text-xs text-gray-500 block mb-1">1-я линия (%)</label><input type="number" value={partnerRateDraft} onChange={e => setPartnerRateDraft(Number(e.target.value) || 0)} className="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2"/></div>
+                                    <div><label className="text-xs text-gray-500 block mb-1">2-я линия (%)</label><input type="number" value={secondLevelRateDraft} onChange={e => setSecondLevelRateDraft(Number(e.target.value) || 0)} className="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2"/></div>
+                                    <button onClick={saveReferralRates} className="w-full mt-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-600/20 py-2 rounded-lg text-sm font-bold transition-colors">Сохранить реферальные ставки</button>
+                                    <button onClick={async () => {
+                                        if (!confirm('Убрать партнёрский статус у этого пользователя?')) return;
+                                        try {
+                                            await apiFetch(`/panel/users/${user.id}/action`, {
+                                                method: 'POST',
+                                                body: JSON.stringify({ action: 'SET_PARTNER_RATE', value: '0', notify: false }),
+                                            });
+                                            // Сбрасываем is_partner через mass-action на одного пользователя
+                                            await apiFetch('/panel/users/mass-action', {
+                                                method: 'POST',
+                                                body: JSON.stringify({ action: 'MASS_REMOVE_PARTNER', value: '', notify: false, user_ids: [user.id] }),
+                                            });
+                                            onToast('Успех', 'Партнёрский статус снят', 'success');
+                                            onClose();
+                                        } catch (e) {
+                                            onToast('Ошибка', 'Не удалось снять статус', 'error');
+                                        }
+                                    }} className="w-full bg-red-600/10 hover:bg-red-600/20 text-red-400 border border-red-600/20 py-2 rounded-lg text-sm font-medium transition-colors">Снять партнёрский статус</button>
                                 </div>
-                            </div>
+                            </>
+                        ) : (
                             <div className="space-y-3">
-                                <div><label className="text-xs text-gray-500 block mb-1">Реф. код</label><input type="text" readOnly value={user.refCode} className="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 font-mono"/></div>
-                                <div><label className="text-xs text-gray-500 block mb-1">1-я линия (%)</label><input type="number" value={partnerRateDraft} onChange={e => setPartnerRateDraft(Number(e.target.value) || 0)} className="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2"/></div>
-                                <div><label className="text-xs text-gray-500 block mb-1">2-я линия (%)</label><input type="number" value={secondLevelRateDraft} onChange={e => setSecondLevelRateDraft(Number(e.target.value) || 0)} className="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2"/></div>
-                                <button onClick={saveReferralRates} className="w-full mt-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-600/20 py-2 rounded-lg text-sm font-bold transition-colors">Сохранить реферальные ставки</button>
+                                <p className="text-sm text-gray-500">Пользователь не является партнёром.</p>
+                                <div><label className="text-xs text-gray-500 block mb-1">Процент 1-й линии (%)</label><input type="number" value={partnerRateDraft} onChange={e => setPartnerRateDraft(Number(e.target.value) || 0)} className="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2" min="0" max="100"/></div>
+                                <div><label className="text-xs text-gray-500 block mb-1">Процент 2-й линии (%)</label><input type="number" value={secondLevelRateDraft} onChange={e => setSecondLevelRateDraft(Number(e.target.value) || 0)} className="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2" min="0" max="100"/></div>
+                                <button onClick={async () => {
+                                    try {
+                                        await apiFetch(`/panel/users/${user.id}/action`, {
+                                            method: 'POST',
+                                            body: JSON.stringify({ action: 'SET_PARTNER_RATE', value: String(partnerRateDraft), notify: true }),
+                                        });
+                                        await apiFetch(`/panel/users/${user.id}/action`, {
+                                            method: 'POST',
+                                            body: JSON.stringify({ action: 'SET_SECOND_LEVEL_RATE', value: String(secondLevelRateDraft), notify: false }),
+                                        });
+                                        onToast('Успех', `Пользователь стал партнёром (${partnerRateDraft}%)`, 'success');
+                                        onClose();
+                                    } catch (e) {
+                                        onToast('Ошибка', 'Не удалось назначить партнёра', 'error');
+                                    }
+                                }} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2.5 rounded-lg text-sm font-bold transition-colors flex items-center justify-center"><UserPlus size={15} className="mr-2"/> Сделать партнёром</button>
                             </div>
-                        </div>
-                    )}
+                        )}
+                    </div>
                 </div>
                 <div className="space-y-6">
                     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
