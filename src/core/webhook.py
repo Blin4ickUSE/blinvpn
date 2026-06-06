@@ -88,7 +88,7 @@ def credit_deposit_from_payment(
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT id, status FROM transactions
+        SELECT id, status, amount FROM transactions
         WHERE payment_id = ? AND payment_provider = ?
         ORDER BY id DESC
         LIMIT 1
@@ -102,11 +102,18 @@ def credit_deposit_from_payment(
         return False
 
     pending_tx_id = None
+    credit_amount = float(amount)
     if existing and str(existing["status"] or "") == "Pending":
         pending_tx_id = int(existing["id"])
+        try:
+            pending_amount = float(existing["amount"])
+            if pending_amount > 0:
+                credit_amount = pending_amount
+        except (TypeError, ValueError):
+            pass
 
-    bonus_amount, bonus_name = _calc_deposit_bonus(amount, method_name)
-    total_amount = amount + bonus_amount
+    bonus_amount, bonus_name = _calc_deposit_bonus(credit_amount, method_name)
+    total_amount = credit_amount + bonus_amount
     database.update_user_balance(user_id, total_amount)
 
     if pending_tx_id is not None:
@@ -140,12 +147,12 @@ def credit_deposit_from_payment(
             user['telegram_id'],
             notify_msgs.build_balance_deposit_message(float(total_amount)),
         )
-        notify_admin_about_deposit(user, amount, method_name, provider)
+        notify_admin_about_deposit(user, credit_amount, method_name, provider)
     logger.info(
         "%s платёж %s успешно обработан: %s₽ для user %s",
         provider,
         payment_id,
-        amount,
+        credit_amount,
         user_id,
     )
     payment_wait.notify_payment_completed(int(user_id))
@@ -168,70 +175,20 @@ def heleket_webhook():
         order_id = data.get('order_id', '')
         uuid = data.get('uuid', '')
         amount = float(data.get('amount', 0))
-        payer_amount = data.get('payer_amount')
-        payer_currency = data.get('payer_currency')
         
         if status in ('paid', 'paid_over'):
             # Извлекаем user_id из order_id (формат: heleket_{user_id}_{timestamp}_{hex})
             parts = order_id.split('_')
             if len(parts) >= 2 and parts[0] == 'heleket':
                 user_id = int(parts[1])
-                
                 payment_ref = uuid or order_id
-                # Проверяем, не был ли уже обработан этот платеж (только Success, Pending не считается)
-                conn = database.get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT id FROM transactions WHERE payment_id = ? AND payment_provider = 'Heleket' AND status = 'Success'",
-                    (payment_ref,)
+                credit_deposit_from_payment(
+                    user_id=user_id,
+                    amount=amount,
+                    payment_id=payment_ref,
+                    provider="Heleket",
+                    method_name="Crypto",
                 )
-                existing = cursor.fetchone()
-                conn.close()
-                
-                if existing:
-                    logger.info(f"Heleket платеж {payment_ref} уже обработан")
-                    return jsonify({'status': 'ok'}), 200
-                
-                # Обновляем баланс
-                database.update_user_balance(user_id, amount)
-                
-                # Обновляем существующую Pending-транзакцию или создаём новую
-                conn = database.get_db_connection()
-                cursor = conn.cursor()
-                description = f"Пополнение через Heleket"
-                if payer_amount and payer_currency:
-                    description += f" ({payer_amount} {payer_currency})"
-                cursor.execute(
-                    "SELECT id FROM transactions WHERE payment_id = ? AND payment_provider = 'Heleket' AND status = 'Pending'",
-                    (payment_ref,)
-                )
-                pending = cursor.fetchone()
-                if pending:
-                    cursor.execute("""
-                        UPDATE transactions SET status = 'Success', amount = ?, description = ?
-                        WHERE id = ?
-                    """, (amount, description, pending['id']))
-                else:
-                    cursor.execute("""
-                        INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
-                        VALUES (?, 'deposit', ?, 'Success', 'Crypto', 'Heleket', ?, ?)
-                    """, (user_id, amount, payment_ref, description))
-                conn.commit()
-                conn.close()
-                
-                # Уведомление пользователю
-                user = database.get_user_by_id(user_id)
-                if user:
-                    core.send_notification_to_user(
-                        user['telegram_id'],
-                        notify_msgs.build_balance_deposit_message(float(amount)),
-                    )
-                    
-                    # Уведомление администратору о пополнении
-                    notify_admin_about_deposit(user, amount, 'Криптовалюта', 'Heleket')
-                
-                logger.info(f"Heleket платеж {uuid or order_id} успешно обработан: {amount}₽ для user {user_id}")
-                payment_wait.notify_payment_completed(user_id)
             else:
                 logger.error(f"Heleket webhook: некорректный order_id {order_id}")
         
@@ -294,7 +251,7 @@ def platega_webhook():
             if existing:
                 logger.info(f"Platega платеж {transaction_id} уже обработан")
                 return jsonify({'status': 'ok'}), 200
-            
+
             # Определяем метод оплаты из данных (по документации)
             payment_method = data.get('paymentMethod', 0)
             # 2=СБП QR, 10=Карты RUB, 11=Карточный, 12=Международный, 13=Крипто
@@ -306,89 +263,14 @@ def platega_webhook():
                 method_name = 'Крипто'
             else:
                 method_name = 'Platega'
-            
-            # Проверяем авто-скидки на пополнение
-            bonus_amount = 0
-            bonus_name = None
-            try:
-                conn = database.get_db_connection()
-                cursor = conn.cursor()
-                
-                # Проверяем скидки по сумме пополнения
-                cursor.execute("""
-                    SELECT * FROM auto_discounts 
-                    WHERE is_active = 1 AND condition_type = 'payment_amount'
-                    ORDER BY CAST(condition_value AS REAL) DESC
-                """)
-                discounts = cursor.fetchall()
-                
-                for discount in discounts:
-                    try:
-                        min_amount = float(discount['condition_value'])
-                        if amount >= min_amount:
-                            if discount['discount_type'] == 'percent':
-                                bonus_amount = round(amount * float(discount['discount_value']) / 100, 2)
-                            else:
-                                bonus_amount = float(discount['discount_value'])
-                            bonus_name = discount['name']
-                            break
-                    except (ValueError, TypeError):
-                        continue
-                
-                # Проверяем скидки по методу оплаты
-                if bonus_amount == 0:
-                    cursor.execute("""
-                        SELECT * FROM auto_discounts 
-                        WHERE is_active = 1 AND condition_type = 'payment_method'
-                          AND LOWER(condition_value) = LOWER(?)
-                    """, (method_name,))
-                    method_discount = cursor.fetchone()
-                    if method_discount:
-                        if method_discount['discount_type'] == 'percent':
-                            bonus_amount = round(amount * float(method_discount['discount_value']) / 100, 2)
-                        else:
-                            bonus_amount = float(method_discount['discount_value'])
-                        bonus_name = method_discount['name']
-                
-                conn.close()
-            except Exception as e:
-                logger.error(f"Error checking auto-discounts for Platega: {e}")
-            
-            # Обновляем баланс (с бонусом если есть)
-            total_amount = amount + bonus_amount
-            database.update_user_balance(user_id, total_amount)
-            
-            # Создаем транзакцию
-            conn = database.get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id)
-                VALUES (?, 'deposit', ?, 'Success', ?, 'Platega', ?)
-            """, (user_id, total_amount, method_name, transaction_id))
-            
-            # Если был бонус, создаем отдельную транзакцию для него
-            if bonus_amount > 0:
-                cursor.execute("""
-                    INSERT INTO transactions (user_id, type, amount, status, description)
-                    VALUES (?, 'bonus', ?, 'Success', ?)
-                """, (user_id, bonus_amount, f"Бонус: {bonus_name}"))
-            
-            conn.commit()
-            conn.close()
-            
-            # Уведомление пользователю
-            user = database.get_user_by_id(user_id)
-            if user:
-                core.send_notification_to_user(
-                    user['telegram_id'],
-                    notify_msgs.build_balance_deposit_message(float(total_amount)),
-                )
-                
-                # Уведомление администратору о пополнении
-                notify_admin_about_deposit(user, amount, method_name, 'Platega')
-            
-            logger.info(f"Platega платеж {transaction_id} успешно обработан: {amount}₽ для user {user_id}")
-            payment_wait.notify_payment_completed(user_id)
+
+            credit_deposit_from_payment(
+                user_id=user_id,
+                amount=amount,
+                payment_id=str(transaction_id),
+                provider="Platega",
+                method_name=method_name,
+            )
         
         return jsonify({'status': 'ok'}), 200
     except Exception as e:
@@ -548,54 +430,13 @@ def handle_cryptopay_webhook():
             invoice_id = payload_str  # fallback uniqueness
         payment_id = f"cryptopay:{invoice_id}"
 
-        # Idempotency: check existing transaction
-        conn = database.get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, status FROM transactions WHERE payment_id = ? AND payment_provider = 'CryptoPay' ORDER BY id DESC LIMIT 1",
-            (payment_id,),
+        credit_deposit_from_payment(
+            user_id=int(user_id),
+            amount=amount,
+            payment_id=payment_id,
+            provider="CryptoPay",
+            method_name="CryptoPay",
         )
-        existing = cursor.fetchone()
-        if existing and str(existing["status"]) == "Success":
-            conn.close()
-            logger.info("CryptoPay invoice %s already processed", payment_id)
-            return jsonify({"status": "ok"}), 200
-
-        if amount and amount > 0:
-            database.update_user_balance(int(user_id), float(amount))
-
-        if existing:
-            cursor.execute(
-                """
-                UPDATE transactions
-                SET status = 'Success',
-                    amount = ?,
-                    payment_method = 'CryptoPay',
-                    description = ?
-                WHERE id = ?
-                """,
-                (float(amount or 0), "Пополнение через CryptoPay (CryptoBot)", int(existing["id"])),
-            )
-        else:
-            cursor.execute(
-                """
-                INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
-                VALUES (?, 'deposit', ?, 'Success', 'CryptoPay', 'CryptoPay', ?, ?)
-                """,
-                (int(user_id), float(amount or 0), payment_id, f"Пополнение через CryptoPay (CryptoBot)"),
-            )
-        conn.commit()
-        conn.close()
-
-        user = database.get_user_by_id(int(user_id))
-        if user:
-            core.send_notification_to_user(
-                user["telegram_id"],
-                notify_msgs.build_balance_deposit_message(float(amount or 0)),
-            )
-            notify_admin_about_deposit(user, float(amount or 0), "CryptoPay", "CryptoPay")
-
-        payment_wait.notify_payment_completed(int(user_id))
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         logger.error("CryptoPay webhook error: %s", e)

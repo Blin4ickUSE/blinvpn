@@ -162,7 +162,7 @@ def _check_cryptopay(tx: Dict[str, Any]) -> None:
     if not result or not result.get("is_paid"):
         return
 
-    amount = float(result.get("amount") or tx.get("amount") or 0)
+    amount = float(tx.get("amount") or result.get("amount") or 0)
 
     payload_str = str(result.get("payload") or "")
     uid_from_payload = cryptopay.cryptopay_api.extract_user_id_from_payload(payload_str)
@@ -199,7 +199,7 @@ def _check_heleket(tx: Dict[str, Any]) -> None:
     if not result or not result.get("is_paid"):
         return
 
-    amount = float(result.get("amount") or tx.get("amount") or 0)
+    amount = float(tx.get("amount") or result.get("amount") or 0)
     _credit_if_paid(tx, provider="Heleket", method_name="Crypto", amount=amount, log_label="Heleket")
 
 
@@ -215,7 +215,7 @@ def _check_platega(tx: Dict[str, Any]) -> None:
     if not result or not result.get("is_paid"):
         return
 
-    amount = float(result.get("amount") or tx.get("amount") or 0)
+    amount = float(tx.get("amount") or result.get("amount") or 0)
     method_name = str(tx.get("payment_method") or "Platega")
     _credit_if_paid(tx, provider="Platega", method_name=method_name, amount=amount, log_label="Platega")
 
@@ -232,7 +232,7 @@ def _check_rollypay(tx: Dict[str, Any]) -> None:
     if not result or not result.get("is_paid"):
         return
 
-    amount = float(result.get("amount") or tx.get("amount") or 0)
+    amount = float(tx.get("amount") or result.get("amount") or 0)
     _credit_if_paid(tx, provider="RollyPay", method_name="СБП", amount=amount, log_label="RollyPay")
 
 

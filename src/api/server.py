@@ -214,52 +214,21 @@ def reconcile_pending_cryptopay_for_user(user_id: int) -> None:
                 amount = float(str(amount_raw).replace(",", "."))
             except Exception:
                 amount = 0.0
-            if amount <= 0:
-                continue
-            # Re-check status in DB to avoid duplicate credit in races.
-            conn2 = database.get_db_connection()
-            cur2 = conn2.cursor()
-            cur2.execute(
-                "SELECT status FROM transactions WHERE id = ? LIMIT 1",
-                (int(row["id"]),),
-            )
-            tx = cur2.fetchone()
-            if not tx or str(tx["status"]) == "Success":
-                conn2.close()
-                continue
-            database.update_user_balance(int(user_id), float(amount))
-            cur2.execute(
-                """
-                UPDATE transactions
-                SET status = 'Success',
-                    amount = ?,
-                    payment_method = 'CryptoPay',
-                    description = ?
-                WHERE id = ?
-                """,
-                (float(amount), "Пополнение через CryptoPay (reconciled)", int(row["id"])),
-            )
-            conn2.commit()
-            conn2.close()
-            user = database.get_user_by_id(int(user_id))
-            if user:
-                core.send_notification_to_user(
-                    user["telegram_id"],
-                    notify_msgs.build_balance_deposit_message(float(amount)),
-                )
-                core.send_notification_to_admin(
-                    notify_msgs.build_admin_deposit_notification(
-                        float(amount),
-                        user.get('username', 'N/A'),
-                        user.get('telegram_id', 'N/A'),
-                        'CryptoPay',
-                        'CryptoPay',
-                    )
-                )
-            logger.info("CryptoPay reconciled pending payment %s for user_id=%s amount=%s", payment_id, user_id, amount)
-            from src.core import payment_wait
+            from src.core.webhook import credit_deposit_from_payment
 
-            payment_wait.notify_payment_completed(int(user_id))
+            credited = credit_deposit_from_payment(
+                user_id=int(user_id),
+                amount=amount,
+                payment_id=payment_id,
+                provider="CryptoPay",
+                method_name="CryptoPay",
+            )
+            if credited:
+                logger.info(
+                    "CryptoPay reconciled pending payment %s for user_id=%s",
+                    payment_id,
+                    user_id,
+                )
     except Exception as e:
         logger.warning("CryptoPay reconcile failed for user_id=%s: %s", user_id, e)
         try:
@@ -990,6 +959,11 @@ def create_payment():
     
     if not user_id or not amount or not method:
         return jsonify({'error': 'Missing required fields'}), 400
+
+    # amount — сумма зачисления на баланс и сумма инвойса у провайдера (комиссию накладывает платёжка)
+    net_amount = round(float(amount), 2)
+    if net_amount <= 0:
+        return jsonify({'error': 'Invalid amount'}), 400
     
     user = database.get_user_by_id(user_id)
     if not user:
@@ -1015,7 +989,7 @@ def create_payment():
     try:
         if method == 'heleket':
             # Криптовалюта через Heleket
-            payment = heleket.heleket_api.create_payment(amount, user_id)
+            payment = heleket.heleket_api.create_payment(net_amount, user_id)
             if payment:
                 payment_id = payment.get('uuid') or payment.get('order_id')
                 try:
@@ -1026,7 +1000,7 @@ def create_payment():
                         INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
                         VALUES (?, 'deposit', ?, 'Pending', 'Crypto', 'Heleket', ?, ?)
                         """,
-                        (int(user_id), float(amount), payment_id, "Ожидание оплаты Heleket"),
+                        (int(user_id), net_amount, payment_id, "Ожидание оплаты Heleket"),
                     )
                     conn.commit()
                     conn.close()
@@ -1045,7 +1019,7 @@ def create_payment():
         elif method == 'platega_card':
             # Банковская карта через Platega (return_url/failed_url обязательны для редиректа после оплаты)
             payment = platega.platega_api.create_card_payment(
-                amount, user_id, return_url=return_url, failed_url=failed_url
+                net_amount, user_id, return_url=return_url, failed_url=failed_url
             )
             if payment:
                 try:
@@ -1056,7 +1030,7 @@ def create_payment():
                         INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
                         VALUES (?, 'deposit', ?, 'Pending', 'Карта', 'Platega', ?, ?)
                         """,
-                        (int(user_id), float(amount), payment.get('id'), "Ожидание оплаты Platega"),
+                        (int(user_id), net_amount, payment.get('id'), "Ожидание оплаты Platega"),
                     )
                     conn.commit()
                     conn.close()
@@ -1073,7 +1047,7 @@ def create_payment():
         elif method in ('platega_card_ru', 'platega_ru'):
             # Российские карты: Platega method 11 (карточный эквайринг)
             payment = platega.platega_api.create_payment(
-                float(amount),
+                net_amount,
                 int(user_id),
                 description="Пополнение баланса (карта РФ)",
                 payment_method=platega.PLATEGA_METHOD_CARD_RUB,
@@ -1089,7 +1063,7 @@ def create_payment():
                         INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
                         VALUES (?, 'deposit', ?, 'Pending', 'Карта', 'Platega', ?, ?)
                         """,
-                        (int(user_id), float(amount), payment.get('id'), "Ожидание оплаты Platega (карта РФ)"),
+                        (int(user_id), net_amount, payment.get('id'), "Ожидание оплаты Platega (карта РФ)"),
                     )
                     conn.commit()
                     conn.close()
@@ -1106,7 +1080,7 @@ def create_payment():
         elif method in ('platega_card_intl', 'platega_intl'):
             # Иностранные карты: Platega method 12 (международный эквайринг)
             payment = platega.platega_api.create_payment(
-                float(amount),
+                net_amount,
                 int(user_id),
                 description="Пополнение баланса (иностр. карта)",
                 payment_method=platega.PLATEGA_METHOD_INTL,
@@ -1122,7 +1096,7 @@ def create_payment():
                         INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
                         VALUES (?, 'deposit', ?, 'Pending', 'Карта', 'Platega', ?, ?)
                         """,
-                        (int(user_id), float(amount), payment.get('id'), "Ожидание оплаты Platega (иностр. карта)"),
+                        (int(user_id), net_amount, payment.get('id'), "Ожидание оплаты Platega (иностр. карта)"),
                     )
                     conn.commit()
                     conn.close()
@@ -1139,7 +1113,7 @@ def create_payment():
         elif method in ('platega_sbp', 'rollypay_sbp'):
             # СБП через Platega (rollypay_sbp — legacy id из старых клиентов)
             payment = platega.platega_api.create_sbp_payment(
-                float(amount),
+                net_amount,
                 int(user_id),
                 description="Пополнение баланса (СБП)",
                 return_url=return_url,
@@ -1154,7 +1128,7 @@ def create_payment():
                         INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
                         VALUES (?, 'deposit', ?, 'Pending', 'СБП', 'Platega', ?, ?)
                         """,
-                        (int(user_id), float(amount), payment.get('id'), "Ожидание оплаты Platega СБП"),
+                        (int(user_id), net_amount, payment.get('id'), "Ожидание оплаты Platega СБП"),
                     )
                     conn.commit()
                     conn.close()
@@ -1172,7 +1146,7 @@ def create_payment():
             # CryptoPay (CryptoBot): invoice link
             inv = cryptopay.cryptopay_api.create_invoice(
                 user_id=int(user_id),
-                amount_rub=float(amount),
+                amount_rub=net_amount,
                 description="Пополнение баланса (криптовалюта)",
             )
             if inv:
@@ -1187,7 +1161,7 @@ def create_payment():
                         """,
                         (
                             int(user_id),
-                            float(amount),
+                            net_amount,
                             f"cryptopay:{inv.invoice_id}",
                             "Ожидание оплаты CryptoPay",
                         ),
@@ -1212,7 +1186,7 @@ def create_payment():
             if not bot_token:
                 return jsonify({'error': 'Telegram bot token is not configured'}), 500
             # 1 ⭐ = 1 ₽ на баланс, в инвойсе — XTR (Telegram Stars)
-            stars = int(round(float(amount)))
+            stars = int(round(net_amount))
             if stars <= 0:
                 return jsonify({'error': 'Invalid amount'}), 400
             import requests

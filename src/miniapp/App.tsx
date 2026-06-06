@@ -2795,7 +2795,6 @@ export default function App() {
                   return;
                 }
                 try {
-                  const total = getPaymentTotal();
                   // Используем выбранный вариант если есть, иначе выбранный метод
                   const method = paymentMethods.find(m => m.id === selectedMethod);
                   let methodKey = selectedMethod || 'platega_sbp';
@@ -2812,7 +2811,7 @@ export default function App() {
                     method: 'POST',
                     body: JSON.stringify({
                       user_id: userId,
-                      amount: total,
+                      amount: topupAmount,
                       method: methodKey
                     }),
                   });

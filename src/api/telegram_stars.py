@@ -144,7 +144,7 @@ def process_successful_payment(successful: Dict[str, Any]) -> bool:
     try:
         cursor.execute(
             """
-            SELECT id, status, user_id FROM transactions
+            SELECT id, status, user_id, amount FROM transactions
             WHERE payment_id = ? AND payment_provider = 'Telegram'
             ORDER BY id DESC LIMIT 1
             """,
@@ -161,7 +161,16 @@ def process_successful_payment(successful: Dict[str, Any]) -> bool:
             logger.error("Stars payment: cannot resolve user_id for payload=%s", payload)
             return False
 
-        database.update_user_balance(int(user_id), float(total_amount))
+        credit_amount = float(total_amount)
+        if row and row["amount"] is not None:
+            try:
+                pending_amount = float(row["amount"])
+                if pending_amount > 0:
+                    credit_amount = pending_amount
+            except (TypeError, ValueError):
+                pass
+
+        database.update_user_balance(int(user_id), credit_amount)
 
         desc = f"Telegram Stars: {charge_ref}" if charge_ref else "Telegram Stars"
         if row:
@@ -171,7 +180,7 @@ def process_successful_payment(successful: Dict[str, Any]) -> bool:
                 SET status = 'Success', amount = ?, description = ?, payment_method = 'Telegram Stars'
                 WHERE id = ?
                 """,
-                (float(total_amount), desc, row["id"]),
+                (credit_amount, desc, row["id"]),
             )
         else:
             cursor.execute(
@@ -182,7 +191,7 @@ def process_successful_payment(successful: Dict[str, Any]) -> bool:
                 )
                 VALUES (?, 'deposit', ?, 'Success', 'Telegram Stars', 'Telegram', ?, ?)
                 """,
-                (int(user_id), float(total_amount), payload, desc),
+                (int(user_id), credit_amount, payload, desc),
             )
         conn.commit()
     except Exception as e:
@@ -200,11 +209,11 @@ def process_successful_payment(successful: Dict[str, Any]) -> bool:
         try:
             core.send_notification_to_user(
                 user["telegram_id"],
-                notify_msgs.build_balance_deposit_message(float(total_amount)),
+                notify_msgs.build_balance_deposit_message(credit_amount),
             )
             core.send_notification_to_admin(
                 notify_msgs.build_admin_deposit_notification(
-                    float(total_amount),
+                    credit_amount,
                     user.get("username", "N/A"),
                     user.get("telegram_id", "N/A"),
                     "Telegram Stars",
