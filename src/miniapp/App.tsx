@@ -82,6 +82,7 @@ type ViewState =
   | 'wait_payment' 
   | 'success_payment' 
   | 'devices' 
+  | 'hwid_devices'
   | 'buy_device' 
   | 'instruction_view' 
   | 'history' 
@@ -1171,8 +1172,7 @@ export default function App() {
 
   // Device menu state
   const [deviceMenuOpenId, setDeviceMenuOpenId] = useState<number | null>(null);
-  const [hwidModal, setHwidModal] = useState<{ deviceId: number; devices: any[]; loading: boolean } | null>(null);
-  const [resetKeyLoading, setResetKeyLoading] = useState<number | null>(null);
+  const [hwidViewData, setHwidViewData] = useState<{ deviceId: number; devices: any[]; loading: boolean }>({ deviceId: 0, devices: [], loading: false });
 
   // Buy Device State (legacy, kept for compatibility)
   
@@ -2419,42 +2419,24 @@ export default function App() {
     );
   };
 
-  const openHwidModal = async (deviceId: number) => {
-    setHwidModal({ deviceId, devices: [], loading: true });
+  const openHwidView = async (deviceId: number) => {
     setDeviceMenuOpenId(null);
+    setHwidViewData({ deviceId, devices: [], loading: true });
+    setView('hwid_devices');
     try {
       const data = await miniApiFetch(`/user/devices/${deviceId}/hwid?telegram_id=${telegramId}`);
-      setHwidModal({ deviceId, devices: data?.hwid_devices || [], loading: false });
+      setHwidViewData({ deviceId, devices: data?.hwid_devices || [], loading: false });
     } catch {
-      setHwidModal({ deviceId, devices: [], loading: false });
+      setHwidViewData(prev => ({ ...prev, loading: false }));
     }
   };
 
   const deleteHwidDevice = async (hwidId: string) => {
-    if (!hwidModal) return;
     try {
-      await miniApiFetch(`/user/devices/${hwidModal.deviceId}/hwid/${hwidId}?telegram_id=${telegramId}`, { method: 'DELETE' });
-      setHwidModal(prev => prev ? { ...prev, devices: prev.devices.filter((d: any) => d.id !== hwidId && d.uuid !== hwidId) } : null);
+      await miniApiFetch(`/user/devices/${hwidViewData.deviceId}/hwid/${hwidId}?telegram_id=${telegramId}`, { method: 'DELETE' });
+      setHwidViewData(prev => ({ ...prev, devices: prev.devices.filter((d: any) => (d.id || d.uuid || d.hwid) !== hwidId) }));
     } catch {
       alert('Не удалось удалить устройство');
-    }
-  };
-
-  const resetDeviceKey = async (device: Device) => {
-    setDeviceMenuOpenId(null);
-    if (!window.confirm('Сбросить ключ? Все подключённые устройства будут отвязаны, и вы сможете подключиться заново.')) return;
-    setResetKeyLoading(device.id);
-    try {
-      const data = await miniApiFetch(`/user/devices/${device.id}/reset-key?telegram_id=${telegramId}`, { method: 'POST' });
-      if (data?.success) {
-        alert('Ключ сброшен. Подключённые устройства отвязаны — подключитесь заново по инструкции.');
-      } else {
-        alert(data?.error || 'Не удалось сбросить ключ');
-      }
-    } catch {
-      alert('Ошибка при сбросе ключа');
-    } finally {
-      setResetKeyLoading(null);
     }
   };
 
@@ -2505,18 +2487,15 @@ export default function App() {
               <div className="relative" onClick={e => e.stopPropagation()}>
                 <button
                   onClick={() => setDeviceMenuOpenId(menuOpen ? null : device.id)}
-                  disabled={resetKeyLoading === device.id}
-                  className="w-9 h-9 rounded-lg bg-zinc-700 text-zinc-300 hover:text-white hover:bg-zinc-600 transition-colors flex items-center justify-center disabled:opacity-50"
+                  className="w-9 h-9 rounded-lg bg-zinc-700 text-zinc-300 hover:text-white hover:bg-zinc-600 transition-colors flex items-center justify-center"
                 >
-                  {resetKeyLoading === device.id
-                    ? <div className="w-4 h-4 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin" />
-                    : <span className="text-lg leading-none font-bold tracking-tight">···</span>}
+                  <span className="text-lg leading-none font-bold tracking-tight">···</span>
                 </button>
                 {menuOpen && (
                   <div className="absolute right-0 top-10 z-50 min-w-[180px] bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl overflow-hidden">
                     {/* Устройства */}
                     <button
-                      onClick={() => openHwidModal(device.id)}
+                      onClick={() => openHwidView(device.id)}
                       className="w-full flex items-center gap-3 px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors text-left"
                     >
                       <Smartphone size={15} className="text-zinc-400 shrink-0" />
@@ -2529,14 +2508,6 @@ export default function App() {
                     >
                       <Zap size={15} className="text-zinc-400 shrink-0" />
                       Продлить
-                    </button>
-                    {/* Сбросить ключ */}
-                    <button
-                      onClick={() => resetDeviceKey(device)}
-                      className="w-full flex items-center gap-3 px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors text-left"
-                    >
-                      <ArrowRight size={15} className="text-zinc-400 shrink-0" />
-                      Сбросить ключ
                     </button>
                     {/* Разделитель */}
                     <div className="border-t border-zinc-800 mx-2" />
@@ -2600,6 +2571,61 @@ export default function App() {
           <Plus size={20} /> Добавить устройство
         </Button>
       </div>
+    </div>
+  );
+
+  const HwidDevicesView = () => (
+    <div className="min-h-full flex flex-col">
+      <Header title="Устройства в подписке" onBack={() => setView('devices')} />
+      {hwidViewData.loading ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="w-10 h-10 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : hwidViewData.devices.length === 0 ? (
+        <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
+          <div className="w-16 h-16 rounded-2xl bg-zinc-800 border border-zinc-700 flex items-center justify-center mb-4">
+            <Smartphone size={28} className="text-zinc-500" />
+          </div>
+          <div className="text-white font-semibold mb-2">Нет подключённых устройств</div>
+          <div className="text-zinc-500 text-sm leading-relaxed">
+            Устройства появляются здесь после первого подключения по вашей подписке.
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 space-y-3">
+          <div className="text-xs text-zinc-500 mb-1">
+            Устройства, которые использовали эту подписку. Удалите лишние, чтобы освободить слоты.
+          </div>
+          {hwidViewData.devices.map((d: any) => {
+            const deviceId = d.id || d.uuid || d.hwid || d.deviceId;
+            const deviceName = d.name || d.userAgent || d.user_agent || d.hwid || String(deviceId) || 'Устройство';
+            const connectedAt = d.createdAt || d.created_at || d.connectedAt || d.connected_at;
+            return (
+              <div key={deviceId} className="flex items-center justify-between bg-zinc-800 rounded-xl px-4 py-3 border border-zinc-700">
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                  <div className="w-9 h-9 rounded-lg bg-zinc-700 flex items-center justify-center shrink-0">
+                    <Smartphone size={16} className="text-zinc-400" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-white truncate">{deviceName}</div>
+                    {connectedAt && (
+                      <div className="text-xs text-zinc-500 mt-0.5">
+                        {new Date(connectedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={() => deleteHwidDevice(String(deviceId))}
+                  className="ml-3 p-2 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-950/30 transition-colors shrink-0"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 
@@ -3856,6 +3882,7 @@ export default function App() {
           {view === 'wait_payment' && <PaymentWaitView />}
           {view === 'success_payment' && <PaymentSuccessView />}
           {view === 'devices' && <DevicesView />}
+          {view === 'hwid_devices' && <HwidDevicesView />}
           {view === 'extend_subscription' && <ExtendSubscriptionView />}
           {view === 'buy_device' && <BuyDeviceView />}
           {view === 'instruction_view' && <InstructionView key="instruction" />}
@@ -3899,55 +3926,6 @@ export default function App() {
       )}
 
       {/* MODALS */}
-
-      {/* HWID Devices Modal */}
-      {hwidModal && (
-        <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/70" onClick={() => setHwidModal(null)}>
-          <div className="w-full max-w-md bg-zinc-900 rounded-t-3xl p-6 pb-10 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-5">
-              <h3 className="text-lg font-bold text-white">Устройства в подписке</h3>
-              <button onClick={() => setHwidModal(null)} className="text-zinc-400 hover:text-white transition-colors">
-                <X size={22} />
-              </button>
-            </div>
-            {hwidModal.loading ? (
-              <div className="flex justify-center py-8">
-                <div className="w-8 h-8 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
-              </div>
-            ) : hwidModal.devices.length === 0 ? (
-              <div className="text-center py-8 text-zinc-500 text-sm">
-                Нет подключённых устройств.<br/>Устройства появляются при первом подключении.
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {hwidModal.devices.map((d: any) => {
-                  const deviceId = d.id || d.uuid || d.hwid;
-                  const deviceName = d.name || d.userAgent || d.user_agent || d.hwid || String(deviceId) || 'Устройство';
-                  const connectedAt = d.createdAt || d.created_at || d.connectedAt || d.connected_at;
-                  return (
-                    <div key={deviceId} className="flex items-center justify-between bg-zinc-800 rounded-xl px-4 py-3 border border-zinc-700">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-white truncate">{deviceName}</div>
-                        {connectedAt && (
-                          <div className="text-xs text-zinc-500 mt-0.5">
-                            {new Date(connectedAt).toLocaleDateString('ru-RU')}
-                          </div>
-                        )}
-                      </div>
-                      <button
-                        onClick={() => deleteHwidDevice(deviceId)}
-                        className="ml-3 p-2 rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
       
       <Modal 
         title="Удалить устройство" 
@@ -4237,4 +4215,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-}
+    }
