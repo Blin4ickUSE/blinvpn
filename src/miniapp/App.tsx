@@ -399,7 +399,7 @@ const PLAN_EXTRA_DEVICE_PRICE: Record<number, number> = {
 };
 
 function normalizedDevicesCount(devices: number): number {
-  return Math.max(2, Math.min(20, Math.floor(devices)));
+  return Math.max(1, Math.min(20, Math.floor(devices)));
 }
 
 function computePlanPrice(plan: Plan, devices: number): number {
@@ -1160,7 +1160,7 @@ export default function App() {
 
   // Connection Wizard State
   const [wizardStep, setWizardStep] = useState(1); // 1: тариф + устройства, 2: подтверждение, 3: оплата, 4: успех + инструкция
-  const [wizardDeviceCount, setWizardDeviceCount] = useState(2);
+  const [wizardDeviceCount, setWizardDeviceCount] = useState(1);
   const [successInstructionPlatform, setSuccessInstructionPlatform] = useState<PlatformId>('android');
   const [wizardSuccessPlainDevice, setWizardSuccessPlainDevice] = useState(false);
   const [wizardPlan, setWizardPlan] = useState<Plan | null>(null);
@@ -1168,6 +1168,11 @@ export default function App() {
   const [useAutoPay, setUseAutoPay] = useState(false);
   const [savedPaymentMethods, setSavedPaymentMethods] = useState<any[]>([]);
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<string | null>(null);
+
+  // Device menu state
+  const [deviceMenuOpenId, setDeviceMenuOpenId] = useState<number | null>(null);
+  const [hwidModal, setHwidModal] = useState<{ deviceId: number; devices: any[]; loading: boolean } | null>(null);
+  const [resetKeyLoading, setResetKeyLoading] = useState<number | null>(null);
 
   // Buy Device State (legacy, kept for compatibility)
   
@@ -2055,7 +2060,7 @@ export default function App() {
           
           <div className="w-full space-y-3">
             <Button 
-                onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardDeviceCount(2); setView('wizard'); }}
+                onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardDeviceCount(1); setView('wizard'); }}
                 className="w-full"
             >
                 <Shield size={20} /> {isTrialUsed ? 'Купить VPN' : 'Попробовать VPN'}
@@ -2148,8 +2153,8 @@ export default function App() {
                   <button
                     type="button"
                     className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-orange-600/80 transition-colors disabled:opacity-40"
-                    disabled={wizardDeviceCount <= 2}
-                    onClick={() => setWizardDeviceCount(c => Math.max(2, c - 1))}
+                    disabled={wizardDeviceCount <= 1}
+                    onClick={() => setWizardDeviceCount(c => Math.max(1, c - 1))}
                   >−</button>
                   <div className="text-center flex-1">
                     <div className="text-3xl font-black text-white">{wizardDeviceCount}</div>
@@ -2173,8 +2178,12 @@ export default function App() {
             <div className="space-y-3 flex-1">
                 {(vpnPlans || VPN_PLANS_DEFAULT).filter(plan => !plan.isTrial || !isTrialUsed).map((plan) => {
                     const days = plan.days ?? (plan as any).duration_days;
-                    const discountText = days === 90 ? '-16%' : days === 180 ? '-24%' : days === 365 ? '-33%' : null;
-                    const shown = priceFinal(plan, wizardDeviceCount);
+                    const months = days === 30 ? 1 : days === 90 ? 3 : days === 180 ? 6 : days === 365 ? 12 : null;
+                    const shownPrice = priceFinal(plan, wizardDeviceCount);
+                    const perMonthText = (!plan.isTrial && months && months > 1)
+                      ? `${Math.round(shownPrice / months)} ₽/месяц`
+                      : null;
+                    const shown = shownPrice;
                     const prePromo = !plan.isTrial && nextDiscountPercent > 0 ? priceAfterReferralOnly(plan, wizardDeviceCount) : null;
                     return (
                     <div 
@@ -2190,7 +2199,7 @@ export default function App() {
                                 {plan.duration}
                                 {plan.highlight && <Crown size={18} fill="currentColor" />}
                             </div>
-                            {discountText && <div className={`text-xs font-medium ${days === 180 ? 'text-amber-400' : 'text-green-400'}`}>{discountText}</div>}
+                            {perMonthText && <div className="text-xs font-medium text-zinc-500">{perMonthText}</div>}
                         </div>
                         <div className="text-right">
                             {plan.isTrial ? (
@@ -2410,16 +2419,66 @@ export default function App() {
     );
   };
 
+  const openHwidModal = async (deviceId: number) => {
+    setHwidModal({ deviceId, devices: [], loading: true });
+    setDeviceMenuOpenId(null);
+    try {
+      const data = await miniApiFetch(`/user/devices/${deviceId}/hwid?telegram_id=${telegramId}`);
+      setHwidModal({ deviceId, devices: data?.hwid_devices || [], loading: false });
+    } catch {
+      setHwidModal({ deviceId, devices: [], loading: false });
+    }
+  };
+
+  const deleteHwidDevice = async (hwidId: string) => {
+    if (!hwidModal) return;
+    try {
+      await miniApiFetch(`/user/devices/${hwidModal.deviceId}/hwid/${hwidId}?telegram_id=${telegramId}`, { method: 'DELETE' });
+      setHwidModal(prev => prev ? { ...prev, devices: prev.devices.filter((d: any) => d.id !== hwidId && d.uuid !== hwidId) } : null);
+    } catch {
+      alert('Не удалось удалить устройство');
+    }
+  };
+
+  const resetDeviceKey = async (device: Device) => {
+    setDeviceMenuOpenId(null);
+    setResetKeyLoading(device.id);
+    try {
+      const data = await miniApiFetch(`/user/devices/${device.id}/reset-key?telegram_id=${telegramId}`, { method: 'POST' });
+      if (data?.success) {
+        // Обновляем ключ локально и переходим на страницу успеха
+        const newKey = data.subscription_url || data.key_config || '';
+        if (newKey) {
+          setDeviceKeys(prev => {
+            const next = new Map(prev);
+            next.set(device.id, newKey);
+            return next;
+          });
+        }
+        await refreshDevices();
+        setSuccessInstructionPlatform(device.type as PlatformId || 'android');
+        setWizardSuccessPlainDevice(false);
+        setInstructionSourceDeviceId(device.id);
+        setWizardStep(4);
+        setView('wizard');
+      } else {
+        alert(data?.error || 'Не удалось сбросить ключ');
+      }
+    } catch {
+      alert('Ошибка при сбросе ключа');
+    } finally {
+      setResetKeyLoading(null);
+    }
+  };
+
   const DevicesView = () => (
-    <div className="min-h-full flex flex-col">
+    <div className="min-h-full flex flex-col" onClick={() => deviceMenuOpenId !== null && setDeviceMenuOpenId(null)}>
       <Header title="Мои подписки" onBack={() => setView('home')} />
       <div className="flex-1 space-y-4">
         {devices.map(device => {
           const isExpired = device.is_expired === true;
           const isBlocked = (device.key_status || '').toLowerCase() === 'blocked';
-          // Проверка на вечную подписку (год >= 2090)
-          const isForever = device.days_left !== undefined && device.days_left > 25000; // ~68 лет
-          // Формируем текст оставшегося времени
+          const isForever = device.days_left !== undefined && device.days_left > 25000;
           const getTimeLeftText = () => {
             if (isExpired) return 'Истекла';
             if (isForever) return '∞ Навсегда';
@@ -2430,7 +2489,8 @@ export default function App() {
           };
           const timeLeftText = getTimeLeftText();
           const isLowTime = !isExpired && !isForever && (device.days_left !== undefined && device.days_left <= 3);
-          
+          const menuOpen = deviceMenuOpenId === device.id;
+
           return (
           <div key={device.id} className={`rounded-xl p-4 border card-hover ${isBlocked ? 'bg-red-950/40 border-red-600/40' : isExpired ? 'bg-red-900/20 border-red-500/50' : 'bg-zinc-800 border-zinc-700'}`}>
             <div className="flex items-center justify-between mb-4">
@@ -2443,9 +2503,7 @@ export default function App() {
                     {device.is_trial ? 'Пробная подписка' : 'Подписка'} | #{device.id}
                   </div>
                   {isBlocked && (
-                    <div className="text-xs font-semibold text-red-400 mt-0.5">
-                      Ключ заблокирован
-                    </div>
+                    <div className="text-xs font-semibold text-red-400 mt-0.5">Ключ заблокирован</div>
                   )}
                   {timeLeftText ? (
                     <div className={`text-xs font-medium ${isExpired ? 'text-red-400' : isLowTime ? 'text-orange-400' : isForever ? 'text-yellow-400' : 'text-zinc-400'}`}>
@@ -2456,14 +2514,56 @@ export default function App() {
                   )}
                 </div>
               </div>
-              <div className="flex gap-2">
-                <button 
-                  onClick={() => openDeleteModal(device)}
-                  disabled={isBlocked}
-                  className="p-2 rounded-lg bg-zinc-700 text-zinc-300 hover:text-white hover:bg-red-600 transition-colors disabled:opacity-40 disabled:hover:bg-zinc-700 disabled:hover:text-zinc-300"
+              {/* Three-dot menu button */}
+              <div className="relative" onClick={e => e.stopPropagation()}>
+                <button
+                  onClick={() => setDeviceMenuOpenId(menuOpen ? null : device.id)}
+                  disabled={resetKeyLoading === device.id}
+                  className="w-9 h-9 rounded-lg bg-zinc-700 text-zinc-300 hover:text-white hover:bg-zinc-600 transition-colors flex items-center justify-center disabled:opacity-50"
                 >
-                  <Trash2 size={16} />
+                  {resetKeyLoading === device.id
+                    ? <div className="w-4 h-4 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin" />
+                    : <span className="text-lg leading-none font-bold tracking-tight">···</span>}
                 </button>
+                {menuOpen && (
+                  <div className="absolute right-0 top-10 z-50 min-w-[180px] bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl overflow-hidden">
+                    {/* Устройства */}
+                    <button
+                      onClick={() => openHwidModal(device.id)}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors text-left"
+                    >
+                      <Smartphone size={15} className="text-zinc-400 shrink-0" />
+                      Устройства
+                    </button>
+                    {/* Продлить — всегда в меню */}
+                    <button
+                      onClick={() => { setDeviceMenuOpenId(null); setExtendingDevice(device); setExtendPlan(null); setView('extend_subscription'); }}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors text-left"
+                    >
+                      <Zap size={15} className="text-zinc-400 shrink-0" />
+                      Продлить
+                    </button>
+                    {/* Сбросить ключ */}
+                    <button
+                      onClick={() => resetDeviceKey(device)}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors text-left"
+                    >
+                      <ArrowRight size={15} className="text-zinc-400 shrink-0" />
+                      Сбросить ключ
+                    </button>
+                    {/* Разделитель */}
+                    <div className="border-t border-zinc-800 mx-2" />
+                    {/* Удалить */}
+                    <button
+                      onClick={() => { setDeviceMenuOpenId(null); openDeleteModal(device); }}
+                      disabled={isBlocked}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-sm text-red-400 hover:bg-red-950/40 transition-colors text-left disabled:opacity-40"
+                    >
+                      <Trash2 size={15} className="shrink-0" />
+                      Удалить
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
             {isBlocked ? (
@@ -2472,11 +2572,7 @@ export default function App() {
               </div>
             ) : isExpired ? (
               <button 
-                onClick={() => { 
-                  setExtendingDevice(device);
-                  setExtendPlan(null);
-                  setView('extend_subscription');
-                }}
+                onClick={() => { setExtendingDevice(device); setExtendPlan(null); setView('extend_subscription'); }}
                 className="w-full bg-red-600 hover:bg-red-500 py-2 rounded-lg text-sm text-white font-medium flex items-center justify-center gap-2 transition-colors"
               >
                 <Zap size={16} /> Продлить подписку
@@ -2485,22 +2581,13 @@ export default function App() {
               isLowTime ? (
                 <div className="grid grid-cols-2 gap-2">
                   <button 
-                    onClick={() => {
-                      setInstructionPlainLinkMode(false);
-                      setInstructionSourceDeviceId(device.id);
-                      setActivePlatform(device.type as PlatformId);
-                      setView('instruction_view');
-                    }}
+                    onClick={() => { setInstructionPlainLinkMode(false); setInstructionSourceDeviceId(device.id); setActivePlatform(device.type as PlatformId); setView('instruction_view'); }}
                     className="bg-zinc-700/50 hover:bg-zinc-700 py-2.5 rounded-lg text-xs text-orange-400 flex items-center justify-center gap-1.5 transition-colors border border-zinc-600/50 font-medium"
                   >
                     <BookOpen size={15} /> Инструкция
                   </button>
                   <button 
-                    onClick={() => { 
-                      setExtendingDevice(device);
-                      setExtendPlan(null);
-                      setView('extend_subscription');
-                    }}
+                    onClick={() => { setExtendingDevice(device); setExtendPlan(null); setView('extend_subscription'); }}
                     className="bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/40 py-2.5 rounded-lg text-xs text-amber-300 flex items-center justify-center gap-1.5 font-medium transition-colors"
                   >
                     <Zap size={15} /> Продлить
@@ -2508,12 +2595,7 @@ export default function App() {
                 </div>
               ) : (
                 <button 
-                  onClick={() => {
-                    setInstructionPlainLinkMode(false);
-                    setInstructionSourceDeviceId(device.id);
-                    setActivePlatform(device.type as PlatformId);
-                    setView('instruction_view');
-                  }}
+                  onClick={() => { setInstructionPlainLinkMode(false); setInstructionSourceDeviceId(device.id); setActivePlatform(device.type as PlatformId); setView('instruction_view'); }}
                   className="w-full bg-zinc-700/50 hover:bg-zinc-700 py-2 rounded-lg text-sm text-orange-400 flex items-center justify-center gap-2 transition-colors border border-zinc-600/50"
                 >
                   <BookOpen size={16} /> Инструкция по подключению
@@ -2527,10 +2609,59 @@ export default function App() {
         )}
       </div>
       <div className="mt-6 mb-4">
-        <Button onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardDeviceCount(2); setView('wizard'); }}>
+        <Button onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardDeviceCount(1); setView('wizard'); }}>
           <Plus size={20} /> Добавить устройство
         </Button>
       </div>
+
+      {/* HWID Devices Modal */}
+      {hwidModal && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70" onClick={() => setHwidModal(null)}>
+          <div className="w-full max-w-md bg-zinc-900 rounded-t-3xl p-6 pb-8 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-lg font-bold text-white">Устройства в подписке</h3>
+              <button onClick={() => setHwidModal(null)} className="text-zinc-400 hover:text-white transition-colors">
+                <X size={22} />
+              </button>
+            </div>
+            {hwidModal.loading ? (
+              <div className="flex justify-center py-8">
+                <div className="w-8 h-8 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : hwidModal.devices.length === 0 ? (
+              <div className="text-center py-8 text-zinc-500 text-sm">
+                Нет подключённых устройств.<br/>Устройства появляются при первом подключении.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {hwidModal.devices.map((d: any) => {
+                  const deviceId = d.id || d.uuid || d.hwid;
+                  const deviceName = d.name || d.user_agent || d.hwid || deviceId || 'Устройство';
+                  const connectedAt = d.created_at || d.connectedAt || d.connected_at;
+                  return (
+                    <div key={deviceId} className="flex items-center justify-between bg-zinc-800 rounded-xl px-4 py-3 border border-zinc-700">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-white truncate">{deviceName}</div>
+                        {connectedAt && (
+                          <div className="text-xs text-zinc-500 mt-0.5">
+                            {new Date(connectedAt).toLocaleDateString('ru-RU')}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => deleteHwidDevice(deviceId)}
+                        className="ml-3 p-2 rounded-lg text-zinc-400 hover:text-red-400 hover:bg-red-950/30 transition-colors"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -2869,7 +3000,7 @@ export default function App() {
         <p className="text-zinc-400 mb-6 max-w-xs">
           Единая подписка включает VPN и обход блокировок операторов
         </p>
-        <Button onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardDeviceCount(2); setView('wizard'); }}>
+        <Button onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardDeviceCount(1); setView('wizard'); }}>
           Открыть мастер подключения
         </Button>
       </div>
@@ -3594,7 +3725,7 @@ export default function App() {
                     const d = Number(res.subscription_days) || 0;
                     if (d > 0) {
                       setWizardPlan({ id: `promo_${d}`, duration: `Промокод: ${d} дней`, price: 0, highlight: true, days: d, isTrial: false });
-                      setWizardDeviceCount(2);
+                      setWizardDeviceCount(1);
                       setWizardStep(2); // сразу на подтверждение
                       setView('wizard');
                     }
