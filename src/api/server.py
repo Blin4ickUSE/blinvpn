@@ -1687,6 +1687,157 @@ def delete_user_device(device_id: int):
         conn.close()
 
 
+@app.route('/api/user/devices/<int:device_id>/hwid', methods=['GET'])
+def get_device_hwid_devices(device_id: int):
+    """Получить HWID-устройства для подписки через Remnawave"""
+    telegram_id = request.args.get('telegram_id', type=int)
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
+
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, key_uuid FROM vpn_keys
+            WHERE id = ? AND user_id = ?
+        """, (device_id, user['id']))
+        device = cursor.fetchone()
+        if not device:
+            return jsonify({'error': 'Device not found'}), 404
+
+        key_uuid = device['key_uuid']
+        if not key_uuid:
+            return jsonify({'hwid_devices': []})
+
+        hwid_devices = remnawave.remnawave_api.get_hwid_devices_sync(key_uuid)
+        return jsonify({'hwid_devices': hwid_devices or []})
+    except Exception as e:
+        logger.error(f"Error fetching HWID devices for device {device_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/user/devices/<int:device_id>/hwid/<hwid_id>', methods=['DELETE'])
+def delete_device_hwid(device_id: int, hwid_id: str):
+    """Удалить конкретное HWID-устройство"""
+    telegram_id = request.args.get('telegram_id', type=int)
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
+
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, key_uuid FROM vpn_keys
+            WHERE id = ? AND user_id = ?
+        """, (device_id, user['id']))
+        device = cursor.fetchone()
+        if not device:
+            return jsonify({'error': 'Device not found'}), 404
+
+        key_uuid = device['key_uuid']
+        if not key_uuid:
+            return jsonify({'error': 'No key UUID for this device'}), 400
+
+        async def _delete_hwid():
+            api = remnawave.get_remnawave_api()
+            async with api as rw:
+                return await rw.delete_hwid_devices([hwid_id])
+
+        import asyncio
+        result = asyncio.run(_delete_hwid())
+        return jsonify({'success': bool(result)})
+    except Exception as e:
+        logger.error(f"Error deleting HWID device {hwid_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/user/devices/<int:device_id>/reset-key', methods=['POST'])
+def reset_device_key(device_id: int):
+    """Сбросить ключ подписки (revoke subscription URL) через Remnawave"""
+    telegram_id = request.args.get('telegram_id', type=int)
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
+
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, key_uuid, key_config FROM vpn_keys
+            WHERE id = ? AND user_id = ?
+        """, (device_id, user['id']))
+        device = cursor.fetchone()
+        if not device:
+            return jsonify({'error': 'Device not found'}), 404
+
+        key_uuid = device['key_uuid']
+        if not key_uuid:
+            return jsonify({'error': 'No key UUID for this device'}), 400
+
+        # Revoke subscription URL через Remnawave API
+        async def _revoke():
+            api = remnawave.get_remnawave_api()
+            async with api as rw:
+                return await rw._make_request('POST', f'/api/users/{key_uuid}/revoke-subscription')
+
+        import asyncio
+        revoke_result = asyncio.run(_revoke())
+
+        # Получаем обновлённые данные пользователя из Remnawave
+        async def _get_user():
+            api = remnawave.get_remnawave_api()
+            async with api as rw:
+                resp = await rw._make_request('GET', f'/api/users/{key_uuid}')
+                return resp.get('response') if isinstance(resp, dict) else None
+
+        rw_user = asyncio.run(_get_user())
+
+        new_subscription_url = ''
+        if rw_user:
+            new_subscription_url = (
+                rw_user.get('subscriptionUrl', '') or rw_user.get('subscription_url', '')
+            )
+
+        # Обновляем ключ в базе данных
+        if new_subscription_url:
+            cursor.execute(
+                "UPDATE vpn_keys SET key_config = ? WHERE id = ?",
+                (new_subscription_url, device_id)
+            )
+            conn.commit()
+
+        logger.info(f"Reset key for device {device_id}, new url: {new_subscription_url[:40] if new_subscription_url else 'N/A'}")
+        return jsonify({
+            'success': True,
+            'subscription_url': new_subscription_url,
+            'key_config': new_subscription_url
+        })
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error resetting key for device {device_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
 @app.route('/api/user/devices/<int:device_id>/name', methods=['PUT', 'POST'])
 def update_device_name(device_id: int):
     """Обновить имя устройства/ключа"""
