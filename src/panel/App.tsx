@@ -4709,7 +4709,7 @@ interface MonitoringEvent {
 
 const MonitoringPage: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
     const [nodes, setNodes] = useState<MonitoringNodeConfig[]>([]);
-    const [statusMap, setStatusMap] = useState<Record<number, MonitoringNodeStatus>>({});
+    const [statusMap, setStatusMap] = useState<Record<number, MonitoringNodeStatus & { speedtest_error?: string | null; speedtest_running?: boolean }>>({});
     const [events, setEvents] = useState<MonitoringEvent[]>([]);
     const [storage, setStorage] = useState<{ used_bytes: number; max_bytes: number; used_percent: number } | null>(null);
     const [loading, setLoading] = useState(true);
@@ -4720,10 +4720,14 @@ const MonitoringPage: React.FC<{ onToast: (title: string, msg: string, type: Toa
     const [testingId, setTestingId] = useState<number | null>(null);
     const [selectedNode, setSelectedNode] = useState<number | null>(null);
     const [history, setHistory] = useState<any[]>([]);
+    const [historyFilter, setHistoryFilter] = useState<'all' | 'ping' | 'system' | 'speedtest'>('all');
+    const [historyLoading, setHistoryLoading] = useState(false);
 
     const loadNodes = async () => {
         const data = await apiFetch('/panel/monitoring/nodes');
-        setNodes(data?.nodes || []);
+        const list = data?.nodes || [];
+        setNodes(list);
+        if (!selectedNode && list.length > 0) setSelectedNode(list[0].id);
     };
 
     const loadStatus = async () => {
@@ -4735,8 +4739,21 @@ const MonitoringPage: React.FC<{ onToast: (title: string, msg: string, type: Toa
     };
 
     const loadEvents = async () => {
-        const data = await apiFetch('/panel/monitoring/events?limit=50');
+        const data = await apiFetch('/panel/monitoring/events?limit=30');
         setEvents(data?.events || []);
+    };
+
+    const loadHistory = async (nodeId: number, filter: string) => {
+        setHistoryLoading(true);
+        try {
+            const typeParam = filter !== 'all' ? `&type=${filter}` : '';
+            const d = await apiFetch(`/panel/monitoring/nodes/${nodeId}/history?limit=200${typeParam}`);
+            setHistory(d?.history || []);
+        } catch {
+            setHistory([]);
+        } finally {
+            setHistoryLoading(false);
+        }
     };
 
     const refresh = async () => {
@@ -4756,11 +4773,11 @@ const MonitoringPage: React.FC<{ onToast: (title: string, msg: string, type: Toa
     }, []);
 
     useEffect(() => {
-        if (!selectedNode) { setHistory([]); return; }
-        apiFetch(`/panel/monitoring/nodes/${selectedNode}/history?limit=100`)
-            .then(d => setHistory(d?.history || []))
-            .catch(() => setHistory([]));
-    }, [selectedNode]);
+        if (!selectedNode) return;
+        loadHistory(selectedNode, historyFilter);
+        const interval = setInterval(() => loadHistory(selectedNode, historyFilter), 30000);
+        return () => clearInterval(interval);
+    }, [selectedNode, historyFilter]);
 
     const resetForm = () => {
         setForm({ name: '', host: '', ssh_port: 22, ssh_user: 'root', ssh_password: '' });
@@ -4786,7 +4803,7 @@ const MonitoringPage: React.FC<{ onToast: (title: string, msg: string, type: Toa
                 onToast('Успех', 'Нода обновлена', 'success');
             } else {
                 await apiFetch('/panel/monitoring/nodes', { method: 'POST', body: JSON.stringify(body) });
-                onToast('Успех', 'Нода добавлена, мониторинг запущен', 'success');
+                onToast('Успех', 'Нода добавлена', 'success');
             }
             resetForm();
             refresh();
@@ -4798,7 +4815,7 @@ const MonitoringPage: React.FC<{ onToast: (title: string, msg: string, type: Toa
     };
 
     const handleDelete = async (id: number) => {
-        if (!confirm('Удалить ноду из мониторинга?')) return;
+        if (!confirm('Удалить ноду?')) return;
         try {
             await apiFetch(`/panel/monitoring/nodes/${id}`, { method: 'DELETE' });
             onToast('Успех', 'Нода удалена', 'success');
@@ -4814,195 +4831,203 @@ const MonitoringPage: React.FC<{ onToast: (title: string, msg: string, type: Toa
         try {
             const res = await apiFetch(`/panel/monitoring/nodes/${id}/test-ssh`, { method: 'POST' });
             if (res?.success) {
-                onToast('SSH OK', `Speedtest: ${res.speedtest_tool}, CPU: ${res.metrics?.cpu}%`, 'success');
+                const st = res.speedtest;
+                onToast('OK', st ? `↓${st.download_mbps} ↑${st.upload_mbps} Мбит/с` : 'SSH подключён', 'success');
+                loadStatus();
+                if (selectedNode === id) loadHistory(id, historyFilter);
             } else {
-                onToast('Ошибка SSH', res?.error || 'Подключение не удалось', 'error');
+                onToast('Ошибка', res?.error || 'SSH не удался', 'error');
             }
         } catch (e: any) {
-            onToast('Ошибка SSH', e?.message || 'Подключение не удалось', 'error');
+            onToast('Ошибка', e?.message || 'SSH не удался', 'error');
         } finally {
             setTestingId(null);
         }
     };
 
-    const formatBytes = (b: number) => {
-        if (b >= 1e9) return `${(b / 1e9).toFixed(2)} ГБ`;
-        if (b >= 1e6) return `${(b / 1e6).toFixed(1)} МБ`;
-        return `${b} Б`;
+    const formatBytes = (b: number) => b >= 1e9 ? `${(b / 1e9).toFixed(1)} ГБ` : b >= 1e6 ? `${(b / 1e6).toFixed(0)} МБ` : `${b} Б`;
+    const formatMbps = (v: number | null | undefined) => {
+        if (v == null) return '—';
+        if (v >= 1000) return `${(v / 1000).toFixed(1)}G`;
+        if (v >= 100) return `${Math.round(v)}`;
+        return v < 10 ? v.toFixed(1) : `${Math.round(v)}`;
+    };
+    const pct = (v: number | null | undefined) => v != null ? `${Math.round(v)}%` : '—';
+    const pctColor = (v: number | null | undefined) => {
+        if (v == null) return 'text-gray-500';
+        if (v >= 90) return 'text-red-400';
+        if (v >= 70) return 'text-yellow-400';
+        return 'text-gray-300';
     };
 
-    const eventIcon = (type: string) => {
-        if (type === 'downtime') return <XCircle size={16} className="text-red-400" />;
-        if (type === 'recovery') return <CheckCircle size={16} className="text-green-400" />;
-        if (type === 'ping_spike') return <TrendingUp size={16} className="text-yellow-400" />;
-        if (type === 'traffic_spike') return <AlertTriangle size={16} className="text-orange-400" />;
-        return <Bell size={16} className="text-gray-400" />;
+    const formatHistoryRow = (h: any) => {
+        if (h.type === 'ping') return h.data?.ok ? `${h.data.ping_ms ?? '?'} мс` : 'нет ответа';
+        if (h.type === 'speedtest') return `↓${h.data?.download_mbps} ↑${h.data?.upload_mbps} Мбит/с`;
+        if (h.type === 'system') return `CPU ${h.data?.cpu}% · RAM ${h.data?.mem_used_percent}% · ↓${formatMbps(h.data?.rx_mbps)} ↑${formatMbps(h.data?.tx_mbps)} Мбит/с`;
+        if (h.type === 'speedtest_error') return h.data?.error || 'ошибка';
+        return h.data?.error || JSON.stringify(h.data || '').slice(0, 60);
     };
 
-    const MetricBar = ({ label, value, color }: { label: string; value: number | null; color: string }) => (
-        <div>
-            <div className="flex justify-between text-xs text-gray-400 mb-1">
-                <span>{label}</span>
-                <span>{value != null ? `${value}%` : '—'}</span>
-            </div>
-            <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                <div className={`h-full ${color} transition-all duration-500`} style={{ width: `${Math.min(value || 0, 100)}%` }} />
-            </div>
-        </div>
-    );
+    const selectedNodeName = nodes.find(n => n.id === selectedNode)?.name;
 
     if (loading) {
         return <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-orange-500" size={32} /></div>;
     }
 
     return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div className="space-y-4 animate-in fade-in duration-300">
+            <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                    <h1 className="text-2xl font-bold text-white">Мониторинг нод</h1>
-                    <p className="text-gray-400 mt-1">Ping, нагрузка, трафик и speedtest ваших серверов</p>
+                    <h1 className="text-xl font-bold text-white">Мониторинг</h1>
+                    <p className="text-xs text-gray-500 mt-0.5">{nodes.length} нод · ping 30с · метрики 60с · speedtest 5м</p>
                 </div>
-                <div className="flex items-center gap-3">
-                    {storage && (
-                        <div className="text-xs text-gray-500 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
-                            Логи: {formatBytes(storage.used_bytes)} / {formatBytes(storage.max_bytes)} ({storage.used_percent}%)
-                        </div>
-                    )}
-                    <button onClick={refresh} className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-300 transition-colors">
-                        <RefreshCw size={18} />
-                    </button>
-                    <button onClick={() => { resetForm(); setShowForm(true); }} className="flex items-center px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg font-medium transition-colors">
-                        <Plus size={18} className="mr-2" /> Добавить ноду
-                    </button>
+                <div className="flex items-center gap-2">
+                    {storage && <span className="text-[11px] text-gray-600 px-2 py-1 bg-gray-900 border border-gray-800 rounded">{formatBytes(storage.used_bytes)}/{formatBytes(storage.max_bytes)}</span>}
+                    <button onClick={refresh} className="p-1.5 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400"><RefreshCw size={16} /></button>
+                    <button onClick={() => { resetForm(); setShowForm(true); }} className="flex items-center px-3 py-1.5 bg-orange-600 hover:bg-orange-500 text-white text-sm rounded-lg"><Plus size={14} className="mr-1" />Нода</button>
                 </div>
             </div>
 
             {showForm && (
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                    <h3 className="text-lg font-semibold text-white mb-4">{editingNode ? 'Редактировать ноду' : 'Новая нода'}</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        <input placeholder="Название" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white" />
-                        <input placeholder="IP / хост" value={form.host} onChange={e => setForm(f => ({ ...f, host: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white" />
-                        <input type="number" placeholder="SSH порт" value={form.ssh_port} onChange={e => setForm(f => ({ ...f, ssh_port: parseInt(e.target.value) || 22 }))} className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white" />
-                        <input placeholder="SSH пользователь" value={form.ssh_user} onChange={e => setForm(f => ({ ...f, ssh_user: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white" />
-                        <input type="password" placeholder={editingNode ? 'Пароль (оставьте пустым чтобы не менять)' : 'SSH пароль'} value={form.ssh_password} onChange={e => setForm(f => ({ ...f, ssh_password: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white md:col-span-2" />
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                        <input placeholder="Название" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-white" />
+                        <input placeholder="IP" value={form.host} onChange={e => setForm(f => ({ ...f, host: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-white" />
+                        <input type="number" placeholder="Порт" value={form.ssh_port} onChange={e => setForm(f => ({ ...f, ssh_port: parseInt(e.target.value) || 22 }))} className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-white" />
+                        <input placeholder="User" value={form.ssh_user} onChange={e => setForm(f => ({ ...f, ssh_user: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-white" />
+                        <input type="password" placeholder="Пароль" value={form.ssh_password} onChange={e => setForm(f => ({ ...f, ssh_password: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-white" />
                     </div>
-                    <div className="flex gap-3 mt-4">
-                        <button onClick={handleSave} disabled={saving} className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white rounded-lg font-medium">
-                            {saving ? <Loader className="animate-spin inline" size={16} /> : 'Сохранить'}
-                        </button>
-                        <button onClick={resetForm} className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg">Отмена</button>
+                    <div className="flex gap-2 mt-2">
+                        <button onClick={handleSave} disabled={saving} className="px-3 py-1 text-sm bg-orange-600 hover:bg-orange-500 text-white rounded">{saving ? '...' : 'Сохранить'}</button>
+                        <button onClick={resetForm} className="px-3 py-1 text-sm bg-gray-800 text-gray-400 rounded">Отмена</button>
                     </div>
                 </div>
             )}
 
             {nodes.length === 0 ? (
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-12 text-center">
-                    <Server size={48} className="mx-auto text-gray-600 mb-4" />
-                    <p className="text-gray-400">Добавьте первую ноду для начала мониторинга</p>
-                </div>
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center text-gray-500 text-sm">Добавьте ноду</div>
             ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {nodes.map(node => {
-                        const st = statusMap[node.id];
-                        const online = st?.online;
-                        return (
-                            <div key={node.id} className={`bg-gray-900 border rounded-2xl p-5 transition-colors cursor-pointer ${selectedNode === node.id ? 'border-orange-500/50' : 'border-gray-800 hover:border-gray-700'}`} onClick={() => setSelectedNode(node.id)}>
-                                <div className="flex justify-between items-start mb-4">
-                                    <div>
-                                        <h3 className="font-semibold text-white">{node.name}</h3>
-                                        <p className="text-sm text-gray-500">{node.host}:{node.ssh_port}</p>
-                                    </div>
-                                    <span className={`flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full ${online ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
-                                        <span className={`w-2 h-2 rounded-full ${online ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
-                                        {online ? 'Online' : 'Offline'}
-                                    </span>
-                                </div>
-                                <div className="grid grid-cols-2 gap-3 mb-4 text-sm">
-                                    <div className="bg-gray-800/50 rounded-lg p-3">
-                                        <div className="text-gray-500 text-xs">Ping</div>
-                                        <div className={`font-bold ${st?.ping_ms && st.ping_ms > 100 ? 'text-yellow-400' : 'text-white'}`}>
-                                            {st?.ping_ms != null ? `${st.ping_ms} мс` : '—'}
-                                        </div>
-                                    </div>
-                                    <div className="bg-gray-800/50 rounded-lg p-3">
-                                        <div className="text-gray-500 text-xs">Трафик ↓/↑</div>
-                                        <div className="font-bold text-white text-xs">
-                                            {st?.rx_mbps != null ? `${st.rx_mbps}` : '—'} / {st?.tx_mbps != null ? `${st.tx_mbps}` : '—'} Мбит/с
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="space-y-2 mb-4">
-                                    <MetricBar label="CPU" value={st?.cpu_percent ?? null} color="bg-orange-500" />
-                                    <MetricBar label="RAM" value={st?.mem_percent ?? null} color="bg-blue-500" />
-                                    <MetricBar label="Диск" value={st?.disk_percent ?? null} color="bg-purple-500" />
-                                </div>
-                                {st?.speedtest && (
-                                    <div className="bg-gray-800/30 rounded-lg p-3 mb-4 text-xs">
-                                        <div className="text-gray-500 mb-1">Speedtest {st.last_speedtest_at ? `(${new Date(st.last_speedtest_at).toLocaleString('ru-RU')})` : ''}</div>
-                                        <div className="text-white">↓ {st.speedtest.download_mbps} Мбит/с · ↑ {st.speedtest.upload_mbps} Мбит/с · {st.speedtest.ping_ms} мс</div>
-                                    </div>
-                                )}
-                                {st?.ssh_error && !st.ssh_ok && (
-                                    <div className="text-xs text-red-400 mb-3 flex items-center gap-1"><AlertCircle size={12} /> SSH: {st.ssh_error}</div>
-                                )}
-                                <div className="flex gap-2" onClick={e => e.stopPropagation()}>
-                                    <button onClick={() => handleTestSSH(node.id)} disabled={testingId === node.id} className="flex-1 text-xs py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors">
-                                        {testingId === node.id ? <Loader className="animate-spin mx-auto" size={14} /> : 'Тест SSH'}
-                                    </button>
-                                    <button onClick={() => { setEditingNode(node); setForm({ name: node.name, host: node.host, ssh_port: node.ssh_port, ssh_user: node.ssh_user, ssh_password: '' }); setShowForm(true); }} className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg"><Edit2 size={14} /></button>
-                                    <button onClick={() => handleDelete(node.id)} className="p-2 bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg"><Trash2 size={14} /></button>
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-            )}
-
-            {selectedNode && history.length > 0 && (
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                    <h3 className="text-lg font-semibold text-white mb-4">История метрик</h3>
-                    <div className="max-h-64 overflow-y-auto custom-scrollbar space-y-1">
-                        {history.slice(0, 30).map((h, i) => (
-                            <div key={i} className="flex items-center justify-between text-xs py-2 border-b border-gray-800/50">
-                                <span className="text-gray-500">{new Date(h.ts).toLocaleString('ru-RU')}</span>
-                                <span className={`px-2 py-0.5 rounded ${h.type === 'ping' ? 'bg-blue-500/10 text-blue-400' : h.type === 'speedtest' ? 'bg-green-500/10 text-green-400' : h.type === 'system' ? 'bg-orange-500/10 text-orange-400' : 'bg-red-500/10 text-red-400'}`}>{h.type}</span>
-                                <span className="text-gray-300 font-mono truncate max-w-[50%] text-right">
-                                    {h.type === 'ping' && (h.data?.ok ? `${h.data.ping_ms} мс` : 'fail')}
-                                    {h.type === 'speedtest' && `↓${h.data?.download_mbps} ↑${h.data?.upload_mbps} Мбит/с`}
-                                    {h.type === 'system' && `CPU ${h.data?.cpu}% RAM ${h.data?.mem_used_percent}%`}
-                                    {h.type === 'ssh_error' && h.data?.error}
-                                </span>
-                            </div>
-                        ))}
+                <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                            <thead>
+                                <tr className="text-gray-500 border-b border-gray-800 bg-black/30">
+                                    <th className="text-left px-3 py-2 font-medium w-8"></th>
+                                    <th className="text-left px-2 py-2 font-medium">Нода</th>
+                                    <th className="text-right px-2 py-2 font-medium">Ping</th>
+                                    <th className="text-right px-2 py-2 font-medium">↓ In</th>
+                                    <th className="text-right px-2 py-2 font-medium">↑ Out</th>
+                                    <th className="text-right px-2 py-2 font-medium">CPU</th>
+                                    <th className="text-right px-2 py-2 font-medium">RAM</th>
+                                    <th className="text-right px-2 py-2 font-medium">Disk</th>
+                                    <th className="text-right px-2 py-2 font-medium">Speed</th>
+                                    <th className="text-right px-3 py-2 font-medium w-20"></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {nodes.map(node => {
+                                    const st = statusMap[node.id];
+                                    const online = st?.online;
+                                    const isSelected = selectedNode === node.id;
+                                    return (
+                                        <tr key={node.id} onClick={() => setSelectedNode(node.id)} className={`border-b border-gray-800/60 cursor-pointer transition-colors ${isSelected ? 'bg-orange-600/5' : 'hover:bg-gray-800/40'}`}>
+                                            <td className="px-3 py-2">
+                                                <span className={`inline-block w-2 h-2 rounded-full ${online ? 'bg-green-400' : 'bg-red-500'}`} title={online ? 'online' : 'offline'} />
+                                            </td>
+                                            <td className="px-2 py-2">
+                                                <div className="font-medium text-white truncate max-w-[140px]">{node.name}</div>
+                                                <div className="text-[10px] text-gray-600 font-mono">{node.host}</div>
+                                            </td>
+                                            <td className={`px-2 py-2 text-right font-mono tabular-nums ${st?.ping_ms && st.ping_ms > 100 ? 'text-yellow-400' : 'text-gray-300'}`}>
+                                                {st?.ping_ms != null ? `${st.ping_ms}` : '—'}<span className="text-gray-600">ms</span>
+                                            </td>
+                                            <td className="px-2 py-2 text-right font-mono text-cyan-400/90 tabular-nums">{formatMbps(st?.rx_mbps)}</td>
+                                            <td className="px-2 py-2 text-right font-mono text-blue-400/90 tabular-nums">{formatMbps(st?.tx_mbps)}</td>
+                                            <td className={`px-2 py-2 text-right font-mono tabular-nums ${pctColor(st?.cpu_percent)}`}>{pct(st?.cpu_percent)}</td>
+                                            <td className={`px-2 py-2 text-right font-mono tabular-nums ${pctColor(st?.mem_percent)}`}>{pct(st?.mem_percent)}</td>
+                                            <td className={`px-2 py-2 text-right font-mono tabular-nums ${pctColor(st?.disk_percent)}`}>{pct(st?.disk_percent)}</td>
+                                            <td className="px-2 py-2 text-right">
+                                                {(st as any)?.speedtest_running ? (
+                                                    <Loader size={12} className="animate-spin text-orange-400 inline" />
+                                                ) : st?.speedtest ? (
+                                                    <span className="font-mono text-green-400/90 text-[10px]">↓{st.speedtest.download_mbps}</span>
+                                                ) : (st as any)?.speedtest_error ? (
+                                                    <span className="text-red-400 text-[10px]" title={(st as any).speedtest_error}>err</span>
+                                                ) : (
+                                                    <span className="text-gray-600">—</span>
+                                                )}
+                                            </td>
+                                            <td className="px-3 py-2 text-right" onClick={e => e.stopPropagation()}>
+                                                <div className="flex justify-end gap-1">
+                                                    <button onClick={() => handleTestSSH(node.id)} disabled={testingId === node.id} className="p-1 hover:bg-gray-700 rounded text-gray-500" title="Тест SSH">
+                                                        {testingId === node.id ? <Loader size={12} className="animate-spin" /> : <Zap size={12} />}
+                                                    </button>
+                                                    <button onClick={() => { setEditingNode(node); setForm({ name: node.name, host: node.host, ssh_port: node.ssh_port, ssh_user: node.ssh_user, ssh_password: '' }); setShowForm(true); }} className="p-1 hover:bg-gray-700 rounded text-gray-500"><Edit2 size={12} /></button>
+                                                    <button onClick={() => handleDelete(node.id)} className="p-1 hover:bg-red-900/30 rounded text-red-500/70"><Trash2 size={12} /></button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             )}
 
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2"><Bell size={18} className="text-orange-400" /> События и алерты</h3>
-                {events.length === 0 ? (
-                    <p className="text-gray-500 text-sm">Событий пока нет</p>
-                ) : (
-                    <div className="space-y-2 max-h-80 overflow-y-auto custom-scrollbar">
-                        {events.map(ev => (
-                            <div key={ev.id} className="flex items-start gap-3 p-3 bg-gray-800/30 rounded-lg">
-                                {eventIcon(ev.event_type)}
-                                <div className="flex-1 min-w-0">
-                                    <div className="text-sm text-white">{ev.message}</div>
-                                    <div className="text-xs text-gray-500 mt-0.5">{ev.node_name} · {new Date(ev.created_at).toLocaleString('ru-RU')}</div>
-                                </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                    <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800 bg-black/20">
+                        <span className="text-sm font-medium text-white">История {selectedNodeName ? `· ${selectedNodeName}` : ''}</span>
+                        <div className="flex gap-1">
+                            {(['all', 'ping', 'system', 'speedtest'] as const).map(f => (
+                                <button key={f} onClick={() => setHistoryFilter(f)} className={`px-2 py-0.5 rounded text-[10px] ${historyFilter === f ? 'bg-orange-600/20 text-orange-400' : 'text-gray-500 hover:text-gray-300'}`}>
+                                    {f === 'all' ? 'все' : f}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    <div className="max-h-56 overflow-y-auto custom-scrollbar">
+                        {!selectedNode ? (
+                            <div className="p-4 text-center text-gray-600 text-xs">Выберите ноду</div>
+                        ) : historyLoading ? (
+                            <div className="p-4 flex justify-center"><Loader size={16} className="animate-spin text-orange-500" /></div>
+                        ) : history.length === 0 ? (
+                            <div className="p-4 text-center text-gray-600 text-xs">Нет записей — подождите 1–2 мин</div>
+                        ) : (
+                            <table className="w-full text-[11px]">
+                                <tbody>
+                                    {history.map((h, i) => (
+                                        <tr key={i} className="border-b border-gray-800/40 hover:bg-gray-800/30">
+                                            <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap font-mono">{h.ts?.replace('T', ' ').slice(0, 19)}</td>
+                                            <td className="px-2 py-1.5">
+                                                <span className={`px-1.5 py-0.5 rounded text-[10px] ${h.type === 'ping' ? 'bg-blue-500/10 text-blue-400' : h.type.includes('speed') ? 'bg-green-500/10 text-green-400' : h.type === 'system' ? 'bg-orange-500/10 text-orange-400' : 'bg-red-500/10 text-red-400'}`}>{h.type}</span>
+                                            </td>
+                                            <td className="px-3 py-1.5 text-gray-300 text-right font-mono">{formatHistoryRow(h)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
+                    </div>
+                </div>
+
+                <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                    <div className="px-3 py-2 border-b border-gray-800 bg-black/20 text-sm font-medium text-white flex items-center gap-2">
+                        <Bell size={14} className="text-orange-400" /> Алерты
+                    </div>
+                    <div className="max-h-56 overflow-y-auto custom-scrollbar">
+                        {events.length === 0 ? (
+                            <div className="p-4 text-center text-gray-600 text-xs">Нет событий</div>
+                        ) : events.map(ev => (
+                            <div key={ev.id} className="flex gap-2 px-3 py-2 border-b border-gray-800/40 text-[11px]">
+                                <span className="text-gray-600 whitespace-nowrap font-mono">{ev.created_at?.replace('T', ' ').slice(5, 16)}</span>
+                                <span className="text-gray-500 shrink-0">{ev.node_name}</span>
+                                <span className="text-gray-300 truncate">{ev.message}</span>
                             </div>
                         ))}
                     </div>
-                )}
-            </div>
-
-            <div className="text-xs text-gray-600 flex flex-wrap gap-4">
-                <span>Ping: каждые 30 сек</span>
-                <span>Метрики SSH: каждые 60 сек</span>
-                <span>Speedtest: каждые 5 мин</span>
-                <span>Логи хранятся до 15 ГБ, старые удаляются автоматически</span>
+                </div>
             </div>
         </div>
     );

@@ -1268,12 +1268,12 @@ def get_user_by_referral_code(referral_code: str) -> Optional[Dict[str, Any]]:
 
 
 # Доп. оплата за устройства (как в мини-приложении)
-_PLAN_EXTRA_DEVICE_PRICE = {30: 50, 90: 150, 180: 300, 365: 600}
+_PLAN_EXTRA_DEVICE_PRICE = {30: 50, 90: 100, 180: 200, 365: 400}
 
 
 def compute_vpn_subscription_price(days: int, devices: int) -> Optional[float]:
     """Цена подписки VPN по тарифу из БД + доп. устройства. None — нет подходящего плана."""
-    d = max(2, min(20, int(devices)))
+    d = max(1, min(20, int(devices)))
     conn = get_db_connection()
     cursor = conn.cursor()
     try:

@@ -52,26 +52,43 @@ echo "{\"cpu\":$CPU,\"mem_total\":$MEM_TOTAL,\"mem_avail\":$MEM_AVAIL,\"disk\":$
 
 SPEEDTEST_INSTALL_SCRIPT = r"""#!/bin/bash
 set -e
-if command -v speedtest >/dev/null 2>&1; then
-  echo "ookla"
-  exit 0
+command -v speedtest >/dev/null 2>&1 && echo ookla && exit 0
+command -v speedtest-cli >/dev/null 2>&1 && echo cli && exit 0
+[ -x /usr/local/bin/speedtest ] && echo ookla && exit 0
+
+ARCH=$(uname -m 2>/dev/null || echo x86_64)
+case "$ARCH" in
+  x86_64|amd64) ST_ARCH=linux-x86_64 ;;
+  aarch64|arm64) ST_ARCH=linux-aarch64 ;;
+  *) ST_ARCH=linux-x86_64 ;;
+esac
+TMP=/tmp/ookla-speedtest-install
+rm -rf "$TMP" && mkdir -p "$TMP"
+if command -v curl >/dev/null 2>&1; then
+  if curl -fsSL "https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-${ST_ARCH}.tgz" -o "$TMP/s.tgz" 2>/dev/null; then
+    tar -xzf "$TMP/s.tgz" -C "$TMP" 2>/dev/null || true
+    BIN=$(find "$TMP" -name speedtest -type f 2>/dev/null | head -1)
+    if [ -n "$BIN" ] && [ -f "$BIN" ]; then
+      chmod +x "$BIN"
+      cp "$BIN" /usr/local/bin/speedtest 2>/dev/null || ln -sf "$BIN" /usr/local/bin/speedtest 2>/dev/null || true
+      command -v speedtest >/dev/null 2>&1 && echo ookla && exit 0
+      [ -x /usr/local/bin/speedtest ] && echo ookla && exit 0
+    fi
+  fi
 fi
-if command -v speedtest-cli >/dev/null 2>&1; then
-  echo "cli"
-  exit 0
-fi
+
 if command -v pip3 >/dev/null 2>&1; then
-  pip3 install -q speedtest-cli 2>/dev/null && echo "cli" && exit 0
+  pip3 install -q speedtest-cli 2>/dev/null && echo cli && exit 0
 fi
 if command -v pip >/dev/null 2>&1; then
-  pip install -q speedtest-cli 2>/dev/null && echo "cli" && exit 0
+  pip install -q speedtest-cli 2>/dev/null && echo cli && exit 0
 fi
-if [ -f /etc/debian_version ] && command -v apt-get >/dev/null 2>&1; then
+if command -v apt-get >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq 2>/dev/null
-  apt-get install -y -qq speedtest-cli 2>/dev/null && echo "cli" && exit 0
+  apt-get update -qq 2>/dev/null || true
+  apt-get install -y -qq speedtest-cli 2>/dev/null && echo cli && exit 0
 fi
-echo "failed"
+echo failed
 exit 1
 """
 
@@ -197,8 +214,13 @@ class LogManager:
                             rec = json.loads(line)
                         except json.JSONDecodeError:
                             continue
-                        if metric_type and rec.get('type') != metric_type:
-                            continue
+                        if metric_type:
+                            rec_type = rec.get('type')
+                            if metric_type == 'speedtest':
+                                if rec_type not in ('speedtest', 'speedtest_error'):
+                                    continue
+                            elif rec_type != metric_type:
+                                continue
                         records.append(rec)
             except OSError:
                 continue
@@ -254,10 +276,24 @@ class SSHClient:
         finally:
             client.close()
 
+    @staticmethod
+    def _extract_json(text: str) -> Dict[str, Any]:
+        text = (text or '').strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find('{')
+            end = text.rfind('}')
+            if start >= 0 and end > start:
+                return json.loads(text[start:end + 1])
+        raise ValueError('JSON не найден в ответе speedtest')
+
     def ensure_speedtest(self) -> str:
-        code, out, err = self.run(f'bash -s <<\'SCRIPT\'\n{SPEEDTEST_INSTALL_SCRIPT}\nSCRIPT', timeout=180)
-        if code == 0 and out in ('ookla', 'cli'):
-            return out
+        code, out, err = self.run(f'bash -s <<\'SCRIPT\'\n{SPEEDTEST_INSTALL_SCRIPT}\nSCRIPT', timeout=240)
+        lines = [line.strip() for line in (out or '').splitlines() if line.strip()]
+        tool = lines[-1] if lines else ''
+        if code == 0 and tool in ('ookla', 'cli'):
+            return tool
         raise RuntimeError(err or out or 'Не удалось установить speedtest')
 
     def collect_metrics(self) -> Dict[str, Any]:
@@ -270,25 +306,17 @@ class SSHClient:
         ) if data.get('mem_total') else 0
         return data
 
-    def run_speedtest(self, tool: str) -> Dict[str, Any]:
+    def _parse_speedtest_result(self, raw: Dict[str, Any], tool: str) -> Dict[str, Any]:
         if tool == 'ookla':
-            cmd = 'speedtest -f json -p no 2>/dev/null || speedtest --accept-gdpr --accept-license -f json -p no'
-        else:
-            cmd = 'speedtest-cli --json 2>/dev/null'
-        code, out, err = self.run(cmd, timeout=180)
-        if code != 0 or not out:
-            raise RuntimeError(err or 'Speedtest failed')
-        raw = json.loads(out)
-        if tool == 'ookla':
-            dl = raw.get('download', {}).get('bandwidth', 0) * 8 / 1_000_000
-            ul = raw.get('upload', {}).get('bandwidth', 0) * 8 / 1_000_000
+            dl = float(raw.get('download', {}).get('bandwidth', 0) or 0) * 8 / 1_000_000
+            ul = float(raw.get('upload', {}).get('bandwidth', 0) or 0) * 8 / 1_000_000
             ping_ms = raw.get('ping', {}).get('latency')
             jitter = raw.get('ping', {}).get('jitter')
         else:
-            dl = raw.get('download', 0) / 1_000_000
-            ul = raw.get('upload', 0) / 1_000_000
+            dl = float(raw.get('download', 0) or 0) / 1_000_000
+            ul = float(raw.get('upload', 0) or 0) / 1_000_000
             ping_ms = raw.get('ping')
-            jitter = raw.get('server', {}).get('latency') if isinstance(raw.get('server'), dict) else None
+            jitter = None
         return {
             'download_mbps': round(dl, 2),
             'upload_mbps': round(ul, 2),
@@ -296,6 +324,35 @@ class SSHClient:
             'jitter_ms': round(float(jitter), 2) if jitter is not None else None,
             'tool': tool,
         }
+
+    def run_speedtest(self, tool: str) -> Dict[str, Any]:
+        if tool == 'ookla':
+            commands = [
+                'speedtest --accept-license --accept-gdpr --format=json -p no',
+                'speedtest -f json -p no',
+                '/usr/local/bin/speedtest --accept-license --accept-gdpr --format=json -p no',
+            ]
+        else:
+            commands = [
+                'speedtest-cli --json',
+                'python3 -m speedtest --json',
+            }
+
+        last_err = ''
+        for cmd in commands:
+            code, out, err = self.run(cmd, timeout=180)
+            if out and '{' in out:
+                try:
+                    raw = self._extract_json(out)
+                    return self._parse_speedtest_result(raw, tool)
+                except Exception as exc:
+                    last_err = str(exc)
+                    continue
+            last_err = err or out or f'exit {code}'
+
+        if tool == 'ookla':
+            return self.run_speedtest('cli')
+        raise RuntimeError(last_err or 'Speedtest failed')
 
 
 class NodeWorker:
@@ -339,6 +396,8 @@ class NodeWorker:
             'ssh_error': None,
             'last_metrics_at': None,
             'speedtest_tool': None,
+            'speedtest_error': None,
+            'speedtest_running': False,
             'updated_at': _utc_now(),
         }
         self._prev_traffic: Optional[tuple[int, int, float]] = None
@@ -481,6 +540,7 @@ class NodeWorker:
             self._log('ssh_error', {'error': str(exc)})
 
     def _handle_speedtest(self) -> None:
+        self._update_state(speedtest_running=True, speedtest_error=None)
         try:
             ssh = self._ssh()
             if not self._speedtest_tool:
@@ -491,12 +551,14 @@ class NodeWorker:
                 speedtest=result,
                 last_speedtest_at=_utc_now(),
                 speedtest_tool=self._speedtest_tool,
+                speedtest_error=None,
+                speedtest_running=False,
             )
         except Exception as exc:
             logger.warning('Speedtest error node %s: %s', self.node_id, exc)
             self._speedtest_tool = None
             self._log('speedtest_error', {'error': str(exc)})
-            self._update_state(ssh_error=str(exc))
+            self._update_state(speedtest_error=str(exc), speedtest_running=False)
 
     def _run(self) -> None:
         last_ping = 0.0

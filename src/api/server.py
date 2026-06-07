@@ -6229,7 +6229,13 @@ def monitoring_test_ssh(node_id):
         )
         metrics = ssh.collect_metrics()
         tool = ssh.ensure_speedtest()
-        return jsonify({'success': True, 'metrics': metrics, 'speedtest_tool': tool})
+        speedtest = ssh.run_speedtest(tool)
+        return jsonify({
+            'success': True,
+            'metrics': metrics,
+            'speedtest_tool': tool,
+            'speedtest': speedtest,
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 400
 
