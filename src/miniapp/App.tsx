@@ -1050,6 +1050,74 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
 
 
 // ==========================================
+// 3.1 HWID DEVICE DISPLAY HELPERS
+// ==========================================
+
+function formatHwidPlatformName(platform: string): string {
+  const p = platform.toLowerCase().replace(/\s+/g, '');
+  if (p === 'android') return 'Android';
+  if (p === 'androidtv' || p === 'android_tv') return 'Android TV';
+  if (p === 'ios' || p === 'iphone' || p === 'ipad') return 'iPhone / iPad';
+  if (p === 'windows' || p === 'win32' || p === 'win') return 'Windows';
+  if (p === 'macos' || p === 'mac' || p === 'darwin' || p === 'osx') return 'macOS';
+  if (p === 'linux') return 'Linux';
+  return platform.charAt(0).toUpperCase() + platform.slice(1);
+}
+
+function sniffPlatformFromUserAgent(ua: string): string | null {
+  const l = ua.toLowerCase();
+  if (l.includes('android tv') || l.includes('androidtv')) return 'Android TV';
+  if (l.includes('iphone')) return 'iPhone';
+  if (l.includes('ipad')) return 'iPad';
+  if (l.includes('android')) return 'Android';
+  if (l.includes('ios')) return 'iPhone / iPad';
+  if (l.includes('windows')) return 'Windows';
+  if (l.includes('mac os') || l.includes('macintosh')) return 'macOS';
+  if (l.includes('linux')) return 'Linux';
+  return null;
+}
+
+/** Человекочитаемое имя HWID-устройства из userAgent вида App/1.0/Android/... */
+function formatHwidDeviceLabel(device: any, index: number): { title: string } {
+  const rawName = String(device?.name || device?.deviceName || device?.device_name || '').trim();
+  const ua = String(
+    device?.userAgent || device?.user_agent || device?.platform || device?.os || ''
+  ).trim();
+
+  if (rawName && !rawName.includes('/') && rawName.length <= 48) {
+    return { title: rawName };
+  }
+
+  // App/1.0/Android/HWID — берём только платформу
+  const slashUaMatch = ua.match(/^[^/]+\/[^/]+\/([^/]+)\//i);
+  if (slashUaMatch) {
+    return { title: formatHwidPlatformName(slashUaMatch[1]) };
+  }
+
+  if (device?.platform) {
+    return { title: formatHwidPlatformName(String(device.platform)) };
+  }
+
+  const sniffed = sniffPlatformFromUserAgent(ua);
+  if (sniffed) {
+    return { title: sniffed };
+  }
+
+  if (ua && ua.length <= 36 && !ua.includes('/')) {
+    return { title: ua };
+  }
+
+  return { title: `Устройство ${index + 1}` };
+}
+
+function hwidDeviceIcon(platformHint: string) {
+  const p = platformHint.toLowerCase();
+  if (p.includes('tv')) return Tv;
+  if (p.includes('windows') || p.includes('mac') || p.includes('linux')) return Monitor;
+  return Smartphone;
+}
+
+// ==========================================
 // 4. MAIN APPLICATION
 // ==========================================
 
@@ -2677,13 +2745,14 @@ export default function App() {
             </div>
             {hwidList.map((d: any, idx: number) => {
               const hwidId = d.id || d.uuid || d.hwid || d.deviceId || `hwid-${idx}`;
-              const deviceName = d.name || d.userAgent || d.user_agent || d.platform || d.os || d.hwid || `Устройство ${idx + 1}`;
+              const { title: deviceName } = formatHwidDeviceLabel(d, idx);
               const connectedAt = formatHwidDate(d.createdAt || d.created_at || d.connectedAt || d.connected_at || d.lastSeenAt || d.last_seen_at);
+              const DeviceIcon = hwidDeviceIcon(deviceName);
               return (
                 <div key={String(hwidId)} className="flex items-center justify-between bg-zinc-800 rounded-xl px-4 py-3 border border-zinc-700">
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     <div className="w-9 h-9 rounded-lg bg-zinc-700 flex items-center justify-center shrink-0">
-                      <Smartphone size={16} className="text-zinc-400" />
+                      <DeviceIcon size={16} className="text-zinc-400" />
                     </div>
                     <div className="min-w-0">
                       <div className="text-sm font-medium text-white truncate">{deviceName}</div>
