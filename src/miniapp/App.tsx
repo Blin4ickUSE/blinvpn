@@ -415,14 +415,6 @@ function computePlanPrice(plan: Plan, devices: number): number {
   return plan.price + (d - 1) * extra;
 }
 
-function formatPlanPriceLabel(plan: Plan, devices: number): string {
-  if (plan.isTrial) return '0 ₽';
-  const extra = getExtraDevicePrice(plan);
-  const total = computePlanPrice(plan, devices);
-  if (devices <= 1) return `${plan.price} ₽`;
-  return `${plan.price} ₽ + ${extra} ₽ × ${devices - 1} = ${total} ₽`;
-}
-
 // Платежные методы загружаются из API с комиссиями, но оставляем дефолтные
 const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
   {
@@ -2281,33 +2273,18 @@ export default function App() {
                                 {plan.duration}
                                 {plan.highlight && <Crown size={18} fill="currentColor" />}
                             </div>
-                            {!plan.isTrial && (
-                              <div className="text-[11px] text-zinc-500 mt-0.5">
-                                {plan.price} ₽ + {getExtraDevicePrice(plan)} ₽/устр.
-                              </div>
-                            )}
                             {perMonthText && <div className="text-xs font-medium text-zinc-500">{perMonthText}</div>}
                         </div>
                         <div className="text-right">
                             {plan.isTrial ? (
                               <div className="font-bold text-xl text-white">0 ₽</div>
                             ) : prePromo != null && prePromo !== shown ? (
-                              <div className="flex flex-col items-end gap-0.5">
-                                <div className="flex items-baseline gap-2">
-                                  <span className="text-sm font-semibold text-zinc-500 line-through decoration-zinc-500/70 decoration-2 tabular-nums">{prePromo} ₽</span>
-                                  <span className={`font-bold text-xl tabular-nums ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>{shown} ₽</span>
-                                </div>
-                                {wizardDeviceCount > 1 && (
-                                  <span className="text-[10px] text-zinc-600 tabular-nums">{formatPlanPriceLabel(plan, wizardDeviceCount)}</span>
-                                )}
+                              <div className="flex items-baseline gap-2">
+                                <span className="text-sm font-semibold text-zinc-500 line-through decoration-zinc-500/70 decoration-2 tabular-nums">{prePromo} ₽</span>
+                                <span className={`font-bold text-xl tabular-nums ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>{shown} ₽</span>
                               </div>
                             ) : (
-                              <div className="flex flex-col items-end gap-0.5">
-                                <div className={`font-bold text-xl tabular-nums ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>{shown} ₽</div>
-                                {wizardDeviceCount > 1 && (
-                                  <span className="text-[10px] text-zinc-600 tabular-nums">{formatPlanPriceLabel(plan, wizardDeviceCount)}</span>
-                                )}
-                              </div>
+                              <div className={`font-bold text-xl tabular-nums ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>{shown} ₽</div>
                             )}
                             <ChevronRight size={20} className="text-zinc-500 ml-auto mt-1" />
                         </div>
@@ -2325,10 +2302,7 @@ export default function App() {
                     {wizardPlan.duration}
                 </div>
                 {!wizardPlan.isTrial && (
-                  <>
-                    <div className="text-sm text-zinc-500 mb-2">Устройств в подписке: <span className="text-orange-400 font-semibold">{wizardDeviceCount}</span></div>
-                    <div className="text-xs text-zinc-600 mb-4">{formatPlanPriceLabel(wizardPlan, wizardDeviceCount)}</div>
-                  </>
+                  <div className="text-sm text-zinc-500 mb-4">Устройств в подписке: <span className="text-orange-400 font-semibold">{wizardDeviceCount}</span></div>
                 )}
                 <div className="border-t border-zinc-800 pt-4 flex justify-between items-center">
                     <span className="text-zinc-400">Итого:</span>
@@ -2849,10 +2823,7 @@ export default function App() {
                     <div className={`font-bold ${extendPlan?.id === plan.id ? 'text-orange-400' : 'text-white'}`}>
                       {plan.duration}
                     </div>
-                    <div className="text-zinc-500 text-sm">{plan.days} дней · {plan.price} ₽ + {getExtraDevicePrice(plan)} ₽/устр.</div>
-                    {extPricingCnt > 1 && (
-                      <div className="text-[10px] text-zinc-600 mt-0.5">{formatPlanPriceLabel(plan, extPricingCnt)}</div>
-                    )}
+                    <div className="text-zinc-500 text-sm">{plan.days} дней</div>
                   </div>
                   <div className={`text-right ${extendPlan?.id === plan.id ? 'text-orange-400' : 'text-zinc-300'}`}>
                     {pre != null && pre !== fin ? (
