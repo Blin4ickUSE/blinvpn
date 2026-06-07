@@ -2232,7 +2232,6 @@ export default function App() {
                   >−</button>
                   <div className="text-center flex-1">
                     <div className="text-3xl font-black text-white">{wizardDeviceCount}</div>
-                    <div className="text-[10px] text-zinc-500 mt-1">1-е включено в тариф, доп. — по цене плана</div>
                   </div>
                   <button
                     type="button"
