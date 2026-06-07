@@ -336,7 +336,7 @@ class SSHClient:
             commands = [
                 'speedtest-cli --json',
                 'python3 -m speedtest --json',
-            }
+            ]
 
         last_err = ''
         for cmd in commands:
