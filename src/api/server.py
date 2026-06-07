@@ -1715,7 +1715,9 @@ def get_device_hwid_devices(device_id: int):
             return jsonify({'hwid_devices': []})
 
         hwid_devices = remnawave.remnawave_api.get_hwid_devices_sync(key_uuid)
-        return jsonify({'hwid_devices': hwid_devices or []})
+        if not isinstance(hwid_devices, list):
+            hwid_devices = []
+        return jsonify({'hwid_devices': hwid_devices})
     except Exception as e:
         logger.error(f"Error fetching HWID devices for device {device_id}: {e}")
         return jsonify({'error': str(e)}), 500

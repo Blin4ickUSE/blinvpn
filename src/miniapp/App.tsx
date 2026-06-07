@@ -83,6 +83,7 @@ type ViewState =
   | 'success_payment' 
   | 'devices' 
   | 'hwid_devices'
+  | 'extend_subscription'
   | 'buy_device' 
   | 'instruction_view' 
   | 'history' 
@@ -1063,6 +1064,7 @@ const VIEW_DEPTH: Record<string, number> = {
   topup: 1,
   wizard: 1,
   buy_device: 2,
+  hwid_devices: 2,
   extend_subscription: 2,
   instruction_view: 2,
   referral_detail: 2,
@@ -1184,7 +1186,7 @@ export default function App() {
 
   // Device menu state
   const [deviceMenuOpenId, setDeviceMenuOpenId] = useState<number | null>(null);
-  const [hwidViewData, setHwidViewData] = useState<{ deviceId: number; devices: any[]; loading: boolean }>({ deviceId: 0, devices: [], loading: false });
+  const [hwidViewData, setHwidViewData] = useState<{ deviceId: number; devices: any[]; loading: boolean; error?: string | null }>({ deviceId: 0, devices: [], loading: false, error: null });
 
   // Buy Device State (legacy, kept for compatibility)
   
@@ -2449,15 +2451,33 @@ export default function App() {
     );
   };
 
+  const normalizeHwidList = (raw: unknown): any[] => {
+    if (Array.isArray(raw)) return raw.filter(Boolean);
+    if (raw && typeof raw === 'object') {
+      const obj = raw as Record<string, unknown>;
+      for (const key of ['devices', 'items', 'hwidDevices', 'hwid_devices', 'data']) {
+        const nested = obj[key];
+        if (Array.isArray(nested)) return nested.filter(Boolean);
+      }
+    }
+    return [];
+  };
+
   const openHwidView = async (deviceId: number) => {
     setDeviceMenuOpenId(null);
-    setHwidViewData({ deviceId, devices: [], loading: true });
+    setHwidViewData({ deviceId, devices: [], loading: true, error: null });
     setView('hwid_devices');
     try {
       const data = await miniApiFetch(`/user/devices/${deviceId}/hwid?telegram_id=${telegramId}`);
-      setHwidViewData({ deviceId, devices: data?.hwid_devices || [], loading: false });
-    } catch {
-      setHwidViewData(prev => ({ ...prev, loading: false }));
+      const list = normalizeHwidList(data?.hwid_devices ?? data?.devices ?? data);
+      setHwidViewData({ deviceId, devices: list, loading: false, error: null });
+    } catch (e: any) {
+      setHwidViewData({
+        deviceId,
+        devices: [],
+        loading: false,
+        error: e?.message || 'Не удалось загрузить устройства',
+      });
     }
   };
 
@@ -2604,60 +2624,89 @@ export default function App() {
     </div>
   );
 
-  const HwidDevicesView = () => (
-    <div className="min-h-full flex flex-col">
-      <Header title="Устройства в подписке" onBack={() => setView('devices')} />
-      {hwidViewData.loading ? (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="w-10 h-10 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
-        </div>
-      ) : hwidViewData.devices.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
-          <div className="w-16 h-16 rounded-2xl bg-zinc-800 border border-zinc-700 flex items-center justify-center mb-4">
-            <Smartphone size={28} className="text-zinc-500" />
+  const HwidDevicesView = () => {
+    const subscription = devices.find(d => d.id === hwidViewData.deviceId);
+    const hwidList = Array.isArray(hwidViewData.devices) ? hwidViewData.devices : [];
+    const limit = subscription?.devices_limit || 1;
+
+    const formatHwidDate = (value: unknown): string | null => {
+      if (!value) return null;
+      const dt = new Date(String(value));
+      if (Number.isNaN(dt.getTime())) return null;
+      return dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+    };
+
+    return (
+      <div className="min-h-full flex flex-col">
+        <Header title="Устройства в подписке" onBack={() => setView('devices')} />
+
+        {subscription && (
+          <div className="mb-4 px-1 text-xs text-zinc-500">
+            Подписка #{subscription.id} · слотов: <span className="text-orange-400 font-semibold">{hwidList.length}/{limit}</span>
           </div>
-          <div className="text-white font-semibold mb-2">Нет подключённых устройств</div>
-          <div className="text-zinc-500 text-sm leading-relaxed">
-            Устройства появляются здесь после первого подключения по вашей подписке.
+        )}
+
+        {hwidViewData.loading ? (
+          <div className="flex-1 flex flex-col items-center justify-center gap-3 py-16">
+            <div className="w-10 h-10 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+            <div className="text-sm text-zinc-500">Загрузка устройств...</div>
           </div>
-        </div>
-      ) : (
-        <div className="flex-1 space-y-3">
-          <div className="text-xs text-zinc-500 mb-1">
-            Устройства, которые использовали эту подписку. Удалите лишние, чтобы освободить слоты.
+        ) : hwidViewData.error ? (
+          <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-10">
+            <AlertTriangle size={32} className="text-red-400 mb-3" />
+            <div className="text-white font-semibold mb-2">Не удалось загрузить</div>
+            <div className="text-zinc-500 text-sm mb-4">{hwidViewData.error}</div>
+            <Button variant="secondary" onClick={() => openHwidView(hwidViewData.deviceId)}>
+              Повторить
+            </Button>
           </div>
-          {hwidViewData.devices.map((d: any) => {
-            const deviceId = d.id || d.uuid || d.hwid || d.deviceId;
-            const deviceName = d.name || d.userAgent || d.user_agent || d.hwid || String(deviceId) || 'Устройство';
-            const connectedAt = d.createdAt || d.created_at || d.connectedAt || d.connected_at;
-            return (
-              <div key={deviceId} className="flex items-center justify-between bg-zinc-800 rounded-xl px-4 py-3 border border-zinc-700">
-                <div className="flex items-center gap-3 flex-1 min-w-0">
-                  <div className="w-9 h-9 rounded-lg bg-zinc-700 flex items-center justify-center shrink-0">
-                    <Smartphone size={16} className="text-zinc-400" />
+        ) : hwidList.length === 0 ? (
+          <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-10">
+            <div className="w-16 h-16 rounded-2xl bg-zinc-800 border border-zinc-700 flex items-center justify-center mb-4">
+              <Smartphone size={28} className="text-zinc-500" />
+            </div>
+            <div className="text-white font-semibold mb-2">Нет подключённых устройств</div>
+            <div className="text-zinc-500 text-sm leading-relaxed">
+              Устройства появятся здесь после первого подключения по подписке в Happ.
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 space-y-3 pb-4">
+            <div className="text-xs text-zinc-500 px-1">
+              Подключённые устройства. Удалите лишние, чтобы освободить слот.
+            </div>
+            {hwidList.map((d: any, idx: number) => {
+              const hwidId = d.id || d.uuid || d.hwid || d.deviceId || `hwid-${idx}`;
+              const deviceName = d.name || d.userAgent || d.user_agent || d.platform || d.os || d.hwid || `Устройство ${idx + 1}`;
+              const connectedAt = formatHwidDate(d.createdAt || d.created_at || d.connectedAt || d.connected_at || d.lastSeenAt || d.last_seen_at);
+              return (
+                <div key={String(hwidId)} className="flex items-center justify-between bg-zinc-800 rounded-xl px-4 py-3 border border-zinc-700">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <div className="w-9 h-9 rounded-lg bg-zinc-700 flex items-center justify-center shrink-0">
+                      <Smartphone size={16} className="text-zinc-400" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-white truncate">{deviceName}</div>
+                      {connectedAt && (
+                        <div className="text-xs text-zinc-500 mt-0.5">Подключено: {connectedAt}</div>
+                      )}
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-white truncate">{deviceName}</div>
-                    {connectedAt && (
-                      <div className="text-xs text-zinc-500 mt-0.5">
-                        {new Date(connectedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
-                      </div>
-                    )}
-                  </div>
+                  <button
+                    onClick={() => deleteHwidDevice(String(hwidId))}
+                    className="ml-3 p-2 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-950/30 transition-colors shrink-0"
+                    title="Удалить устройство"
+                  >
+                    <Trash2 size={16} />
+                  </button>
                 </div>
-                <button
-                  onClick={() => deleteHwidDevice(String(deviceId))}
-                  className="ml-3 p-2 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-950/30 transition-colors shrink-0"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // View для продления подписки - выбор тарифа
   const ExtendSubscriptionView = () => {

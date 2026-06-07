@@ -409,7 +409,22 @@ class RemnaWaveAPI:
     # Remnawave 2.7.4 HWID management
     async def get_hwid_devices(self, user_uuid: str) -> List[Dict[str, Any]]:
         response = await self._make_request('GET', f'/api/hwid/devices/{user_uuid}')
-        return response.get('response', []) if isinstance(response, dict) else []
+        return self._normalize_hwid_devices_response(response)
+
+    @staticmethod
+    def _normalize_hwid_devices_response(response: Any) -> List[Dict[str, Any]]:
+        """Привести ответ Remnawave к списку HWID-устройств."""
+        if not isinstance(response, dict):
+            return []
+        raw = response.get('response', response.get('devices', response))
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+        if isinstance(raw, dict):
+            for key in ('devices', 'items', 'hwidDevices', 'hwid_devices', 'data'):
+                nested = raw.get(key)
+                if isinstance(nested, list):
+                    return [item for item in nested if isinstance(item, dict)]
+        return []
 
     async def delete_hwid_devices(self, device_ids: List[str]) -> bool:
         data = {'deviceIds': device_ids}
