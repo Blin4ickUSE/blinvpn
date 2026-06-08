@@ -339,6 +339,61 @@ class RemnaWaveAPI:
         squads_data = response.get('response', {}).get('internalSquads', [])
         return [self._parse_internal_squad(squad) for squad in squads_data]
     
+    async def get_user_by_uuid(self, uuid: str) -> Optional[RemnaWaveUser]:
+        """Получить пользователя Remnawave по UUID."""
+        uuid = str(uuid or '').strip()
+        if not uuid:
+            return None
+        try:
+            response = await self._make_request('GET', f'/api/users/{uuid}')
+            user_data = response.get('response', response)
+            if isinstance(user_data, dict) and user_data.get('uuid'):
+                return self._parse_user(user_data)
+        except RemnaWaveAPIError as e:
+            if getattr(e, 'status_code', None) == 404:
+                return None
+            raise
+        return None
+
+    async def ensure_hwid_device_limit(self, user_uuid: str, limit: int) -> bool:
+        """Установить hwidDeviceLimit и проверить, что значение применилось."""
+        user_uuid = str(user_uuid or '').strip()
+        limit = int(limit)
+        if not user_uuid or limit < 1:
+            return False
+
+        for attempt in range(2):
+            user = await self.update_user(user_uuid, hwid_device_limit=limit)
+            actual = user.hwid_device_limit if user else None
+            if actual == limit:
+                logger.info("hwidDeviceLimit synced for %s -> %s", user_uuid, limit)
+                return True
+            logger.warning(
+                "hwidDeviceLimit mismatch for %s (attempt %s): want=%s got=%s",
+                user_uuid, attempt + 1, limit, actual,
+            )
+        return False
+
+    async def subscription_ever_connected(self, user_uuid: str) -> bool:
+        """Была ли подписка когда-либо подключена (трафик, HWID или firstConnectedAt)."""
+        user_uuid = str(user_uuid or '').strip()
+        if not user_uuid:
+            return True
+        try:
+            user = await self.get_user_by_uuid(user_uuid)
+            if user and user.user_traffic:
+                if user.user_traffic.first_connected_at:
+                    return True
+                if user.user_traffic.used_traffic_bytes > 0:
+                    return True
+                if user.user_traffic.lifetime_used_traffic_bytes > 0:
+                    return True
+            devices = await self.get_hwid_devices(user_uuid)
+            return len(devices) > 0
+        except Exception as e:
+            logger.warning("subscription_ever_connected check failed for %s: %s", user_uuid, e)
+            return True
+
     async def get_user_by_telegram_id(self, telegram_id: int) -> List[RemnaWaveUser]:
         try:
             response = await self._make_request('GET', f'/api/users/by-telegram-id/{telegram_id}')
@@ -726,6 +781,18 @@ class RemnawaveAPI:
             )
 
         return run_async(with_remnawave_api(_update))
+
+    def ensure_hwid_device_limit_sync(self, user_uuid: str, limit: int) -> bool:
+        async def _ensure(api: RemnaWaveAPI):
+            return await api.ensure_hwid_device_limit(user_uuid, limit)
+
+        return run_async(with_remnawave_api(_ensure))
+
+    def subscription_ever_connected_sync(self, user_uuid: str) -> bool:
+        async def _check(api: RemnaWaveAPI):
+            return await api.subscription_ever_connected(user_uuid)
+
+        return run_async(with_remnawave_api(_check))
 
     def create_user_with_params(self, telegram_id: int, username: str, days: int,
                                traffic_limit_bytes: int = 0, hwid_device_limit: int = None,

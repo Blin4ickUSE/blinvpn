@@ -60,6 +60,8 @@ _NO_SUB_AFTER_START_SEC = 30 * 60
 _NO_SUB_MAX_DAYS = 30
 _COMEBACK_INTERVAL_SEC = 7 * 86400
 _BACKGROUND_TASK_STARTUP_DELAY_SEC = 15
+_NO_CONNECT_DELAY_SEC = 3 * 3600
+_NO_CONNECT_NOTIF_TYPE = 'no_connect_3h'
 
 
 async def _send_user_notification(
@@ -103,6 +105,15 @@ def _in_notif_window(actual_seconds: float, target_seconds: float) -> bool:
     if abs(actual_seconds - target_seconds) <= _NOTIF_WINDOW_SEC:
         return True
     return target_seconds - _NOTIF_CATCHUP_SEC <= actual_seconds < target_seconds - _NOTIF_WINDOW_SEC
+
+
+def _in_elapsed_notif_window(elapsed_seconds: float, delay_seconds: float) -> bool:
+    """Прошло delay_seconds с момента события: в окне ±2.5 мин или догон до 6 ч."""
+    if elapsed_seconds < delay_seconds - _NOTIF_WINDOW_SEC:
+        return False
+    if abs(elapsed_seconds - delay_seconds) <= _NOTIF_WINDOW_SEC:
+        return True
+    return delay_seconds <= elapsed_seconds < delay_seconds + _NOTIF_CATCHUP_SEC
 
 
 def _get_renewal_price(devices_limit: int) -> float:
@@ -776,7 +787,57 @@ async def subscription_notifications_task():
                                 f"Grace daily ({days_left}d left) sent to {row['telegram_id']} for key {key_id}"
                             )
 
-            # === 4. Удаление через 7 дней (Remnawave + БД + уведомление) ===
+            # === 4. Через 3 ч после создания — нет ни одного подключения (только если никогда не подключались) ===
+            cursor.execute("""
+                SELECT vk.id, vk.key_uuid, vk.created_at, u.id as user_id, u.telegram_id
+                FROM vpn_keys vk
+                JOIN users u ON vk.user_id = u.id
+                WHERE vk.status = 'Active'
+                  AND vk.key_uuid IS NOT NULL
+                  AND vk.created_at IS NOT NULL
+            """)
+            for row in cursor.fetchall():
+                created_at = _parse_dt_utc(row['created_at'])
+                if not created_at:
+                    continue
+                elapsed = (now_utc - created_at).total_seconds()
+                if not _in_elapsed_notif_window(elapsed, _NO_CONNECT_DELAY_SEC):
+                    continue
+                key_id = row['id']
+                key_uuid = row['key_uuid']
+                if (
+                    _expiry_notification_sent(cursor, key_id, _NO_CONNECT_NOTIF_TYPE)
+                    or _expiry_notification_sent(cursor, key_id, f'{_NO_CONNECT_NOTIF_TYPE}_skipped')
+                ):
+                    continue
+                try:
+                    ever_connected = await asyncio.to_thread(
+                        remnawave.remnawave_api.subscription_ever_connected_sync,
+                        key_uuid,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "no_connect_3h: Remnawave check failed for key %s: %s", key_id, e
+                    )
+                    continue
+                if ever_connected:
+                    _mark_expiry_notification_sent(
+                        cursor, row['user_id'], key_id, f'{_NO_CONNECT_NOTIF_TYPE}_skipped'
+                    )
+                    continue
+                msg = notify_msgs.build_no_connect_3h_message(key_id)
+                sent, unreachable = await _send_user_notification(row['telegram_id'], msg)
+                if _notification_considered_delivered(sent, unreachable):
+                    _mark_expiry_notification_sent(
+                        cursor, row['user_id'], key_id, _NO_CONNECT_NOTIF_TYPE
+                    )
+                    if sent:
+                        logger.info(
+                            "no_connect_3h sent to %s for key %s",
+                            row['telegram_id'], key_id,
+                        )
+
+            # === 5. Удаление через 7 дней (Remnawave + БД + уведомление) ===
             grace_cutoff = now_utc - timedelta(days=_GRACE_PERIOD_DAYS)
             cursor.execute("""
                 SELECT vk.id, vk.key_uuid, vk.user_id, vk.expiry_date, u.telegram_id

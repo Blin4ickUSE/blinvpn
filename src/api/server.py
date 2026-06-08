@@ -1439,14 +1439,13 @@ def get_user_devices():
                             rw_limit = None
                         if rw_limit is not None and rw_limit != db_limit:
                             try:
-                                remnawave.remnawave_api.update_user_sync(
-                                    uuid=rw_uuid,
-                                    hwid_device_limit=db_limit,
-                                )
-                                logger.info(
-                                    "Synced hwid_device_limit for %s: %s -> %s",
-                                    rw_uuid, rw_limit, db_limit,
-                                )
+                                if remnawave.remnawave_api.ensure_hwid_device_limit_sync(
+                                    rw_uuid, db_limit
+                                ):
+                                    logger.info(
+                                        "Synced hwid_device_limit for %s: %s -> %s",
+                                        rw_uuid, rw_limit, db_limit,
+                                    )
                             except Exception as sync_err:
                                 logger.warning(
                                     "Failed to sync hwid_device_limit for %s: %s",
@@ -2212,6 +2211,10 @@ def extend_subscription():
                     update_kwargs["traffic_limit_bytes"] = remnawave.VPN_TRAFFIC_LIMIT_BYTES
                     update_kwargs["traffic_limit_strategy"] = remnawave.TrafficLimitStrategy.MONTH
                 remnawave.remnawave_api.update_user_sync(**update_kwargs)
+                if not remnawave.remnawave_api.ensure_hwid_device_limit_sync(key_uuid, int(new_dev)):
+                    raise remnawave.RemnaWaveAPIError(
+                        f"hwidDeviceLimit not applied in Remnawave (expected {new_dev})"
+                    )
             except Exception as e:
                 logger.error(f"Failed to update key in Remnawave: {e}")
                 # Возвращаем баланс если не удалось обновить
@@ -3894,6 +3897,11 @@ def update_key(key_id: int):
                     update_params['hwid_device_limit'] = int(new_devices)
                 
                 remnawave.remnawave_api.update_user_sync(**update_params)
+                if new_devices is not None:
+                    if not remnawave.remnawave_api.ensure_hwid_device_limit_sync(
+                        key_uuid, int(new_devices)
+                    ):
+                        return jsonify({'error': 'Не удалось обновить лимит устройств в Remnawave'}), 500
                 logger.info(f"Updated key {key_uuid} in Remnawave")
             except Exception as e:
                 logger.error(f"Failed to update key {key_uuid} in Remnawave: {e}")
@@ -5724,16 +5732,19 @@ def single_user_action(user_id):
             notification_msg = notify_msgs.build_admin_traffic_limit_message(limit_gb)
             
         elif action_type == 'SET_DEVICES':
-            limit = int(value)
+            limit = max(1, min(20, int(value)))
             cursor.execute("UPDATE vpn_keys SET devices_limit = ? WHERE id = ?", (limit, selected_sub['id']))
             if selected_sub['key_uuid']:
                 try:
-                    remnawave.remnawave_api.update_user_sync(
-                        uuid=selected_sub['key_uuid'],
-                        hwid_device_limit=limit,
-                    )
+                    if not remnawave.remnawave_api.ensure_hwid_device_limit_sync(
+                        selected_sub['key_uuid'], limit
+                    ):
+                        raise remnawave.RemnaWaveAPIError(
+                            f"hwidDeviceLimit not applied (expected {limit})"
+                        )
                 except Exception as e:
                     logger.error(f"Failed to set key devices in Remnawave: {e}")
+                    return jsonify({'error': 'Не удалось обновить лимит устройств в Remnawave'}), 500
             notification_msg = notify_msgs.build_admin_devices_limit_message(limit)
 
         elif action_type == 'SET_PARTNER_RATE':

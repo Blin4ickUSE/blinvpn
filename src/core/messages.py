@@ -24,6 +24,7 @@ _EMOJI_EXTEND = "5305522282695768654"
 _EMOJI_DELETE = "5260293700088511294"
 _EMOJI_UNBAN = "5206607081334906820"
 _EMOJI_KEY = "5456561606592866295"
+_EMOJI_NO_CONNECT = "5210952531676504517"
 _EMOJI_REFUND = "5231449120635370684"
 _EMOJI_PARTNER = "5397916757333654639"
 
@@ -403,6 +404,16 @@ def build_comeback_message() -> str:
 
 
 # --- Ключ / VPN ---
+
+def build_no_connect_3h_message(key_id: int) -> str:
+    return (
+        f'<tg-emoji emoji-id="{_EMOJI_NO_CONNECT}">❌</tg-emoji> '
+        f'<b>Кажется, не всё прошло гладко...</b>\n\n'
+        f'Вы подключили подписку №{key_id}, но так и ни разу не подключились. '
+        f'Найти инструкцию можно в разделе «Подписки» → «Инструкция».\n'
+        f'Если подключится не получится, обратитесь в поддержку: @blinteams.'
+    )
+
 
 def build_key_created_message(days: int, traffic_gb: int, devices: int) -> str:
     return (
