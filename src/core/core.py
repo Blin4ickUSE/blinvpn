@@ -313,6 +313,12 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         base_username = sanitize_username(username, telegram_id)
         unique_username = f"{base_username}_{timestamp}"
         
+        traffic_strategy = (
+            remnawave.TrafficLimitStrategy.NO_RESET
+            if plan_type == 'trial' or not (traffic_limit or 0)
+            else remnawave.TrafficLimitStrategy.MONTH
+        )
+
         # Создаем нового пользователя в Remnawave с уникальным username
         try:
             remnawave_user = remnawave.remnawave_api.create_user_with_params(
@@ -321,7 +327,8 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
                 days=days,
                 traffic_limit_bytes=traffic_limit or 0,
                 hwid_device_limit=int(devices_limit),
-                active_internal_squads=squad_uuids if squad_uuids else None
+                active_internal_squads=squad_uuids if squad_uuids else None,
+                traffic_limit_strategy=traffic_strategy,
             )
         except Exception as create_error:
             error_msg = str(create_error).lower()
@@ -336,7 +343,8 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
                     days=days,
                     traffic_limit_bytes=traffic_limit or 0,
                     hwid_device_limit=int(devices_limit),
-                    active_internal_squads=squad_uuids if squad_uuids else None
+                    active_internal_squads=squad_uuids if squad_uuids else None,
+                    traffic_limit_strategy=traffic_strategy,
                 )
             else:
                 raise create_error
@@ -448,6 +456,7 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
                     expire_at=exp_sync,
                     traffic_limit_bytes=int(traffic_limit or 0),
                     hwid_device_limit=int(devices_limit),
+                    traffic_limit_strategy=traffic_strategy,
                 )
             except Exception as sync_err:
                 logger.error(f"Remnawave sync after create_user_and_subscription: {sync_err}")

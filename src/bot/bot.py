@@ -134,21 +134,18 @@ def _mark_expiry_notification_sent(cursor, user_id: int, key_id: int, notif_type
 
 async def _delete_subscription_fully(
     cursor, key_id: int, key_uuid: str, user_id: int, telegram_id: int, expiry_date: str
-) -> None:
-    """Удалить подписку из Remnawave и БД, уведомить пользователя."""
-    if not _expiry_notification_sent(cursor, key_id, 'subscription_deleted'):
-        msg = notify_msgs.build_subscription_deleted_message(key_id)
-        if telegram_id:
-            sent, unreachable = await _send_user_notification(telegram_id, msg)
-            if _notification_considered_delivered(sent, unreachable):
-                _mark_expiry_notification_sent(cursor, user_id, key_id, 'subscription_deleted')
-
+) -> bool:
+    """Удалить подписку из Remnawave и БД, уведомить пользователя. Возвращает True при успехе."""
     if key_uuid:
         try:
-            remnawave.remnawave_api.delete_user_sync(key_uuid)
+            deleted = await remnawave.remnawave_api.delete_user_async(key_uuid)
+            if not deleted:
+                logger.error(f"Remnawave did not confirm deletion of key {key_uuid}")
+                return False
             logger.info(f"Deleted key {key_uuid} from Remnawave")
         except Exception as e:
             logger.error(f"Failed to delete key {key_uuid} from Remnawave: {e}")
+            return False
 
     cursor.execute("DELETE FROM vpn_keys WHERE id = ?", (key_id,))
     expiry_part = f"|expiry={expiry_date}" if expiry_date else ""
@@ -159,6 +156,15 @@ async def _delete_subscription_fully(
         """,
         (user_id, f"key_id={key_id}{expiry_part}|deleted"),
     )
+
+    if not _expiry_notification_sent(cursor, key_id, 'subscription_deleted'):
+        msg = notify_msgs.build_subscription_deleted_message(key_id)
+        if telegram_id:
+            sent, unreachable = await _send_user_notification(telegram_id, msg)
+            if _notification_considered_delivered(sent, unreachable):
+                _mark_expiry_notification_sent(cursor, user_id, key_id, 'subscription_deleted')
+
+    return True
 
 
 def _user_notification_sent(cursor, user_id: int, notif_type: str) -> bool:
@@ -782,7 +788,7 @@ async def subscription_notifications_task():
             """, (grace_cutoff.isoformat(),))
 
             for row in cursor.fetchall():
-                await _delete_subscription_fully(
+                deleted = await _delete_subscription_fully(
                     cursor,
                     row['id'],
                     row['key_uuid'],
@@ -790,10 +796,15 @@ async def subscription_notifications_task():
                     row['telegram_id'],
                     row['expiry_date'],
                 )
-                logger.info(
-                    f"Auto-deleted expired key {row['id']} for user {row['user_id']} "
-                    f"after {_GRACE_PERIOD_DAYS} days"
-                )
+                if deleted:
+                    logger.info(
+                        f"Auto-deleted expired key {row['id']} for user {row['user_id']} "
+                        f"after {_GRACE_PERIOD_DAYS} days"
+                    )
+                else:
+                    logger.warning(
+                        f"Skipped DB deletion for key {row['id']}: Remnawave delete failed"
+                    )
 
             conn.commit()
             conn.close()

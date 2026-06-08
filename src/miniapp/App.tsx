@@ -5,8 +5,10 @@ import {
   CheckCircle, Clock, Globe, Shield, Zap, Plus, Sparkles,
   LogOut, Download, Apple, Command, User, ChevronDown, 
   ArrowRight, Frown, BookOpen, Crown, ChevronRight, Wallet, Sliders, X,
-  Rocket, AlertTriangle, FileText, ExternalLink, MessageCircle
+  Rocket, AlertTriangle, FileText, ExternalLink, MessageCircle, RotateCcw
 } from 'lucide-react';
+
+const TRAFFIC_RESET_PRICE = 49;
 
 // ==========================================
 // 0. ENV & API HELPERS
@@ -1180,6 +1182,8 @@ export default function App() {
   
   // Modal States
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [trafficResetModalOpen, setTrafficResetModalOpen] = useState(false);
+  const [trafficResetLoading, setTrafficResetLoading] = useState(false);
   const [withdrawModalOpen, setWithdrawModalOpen] = useState(false); 
   // Legal Docs Modal
   const [docModalOpen, setDocModalOpen] = useState(false);
@@ -1254,6 +1258,7 @@ export default function App() {
   const [extendingDevice, setExtendingDevice] = useState<Device | null>(null);
   const [extendPlan, setExtendPlan] = useState<Plan | null>(null);
   const [extendDeviceCount, setExtendDeviceCount] = useState(1);
+  const [wizardActivating, setWizardActivating] = useState(false);
 
   useEffect(() => {
     if (extendingDevice) {
@@ -1279,7 +1284,11 @@ export default function App() {
         if (user && initData) return user;
         await new Promise((r) => setTimeout(r, step));
       }
-      return win.Telegram?.WebApp?.initDataUnsafe?.user || null;
+      const webApp = win.Telegram?.WebApp;
+      if (webApp?.initDataUnsafe?.user && webApp?.initData) {
+        return webApp.initDataUnsafe.user;
+      }
+      return null;
     };
 
     (async () => {
@@ -1369,9 +1378,11 @@ export default function App() {
           headers['Authorization'] = `tma ${initData}`;
         }
         const res = await fetch(`/api/user/avatar?telegram_id=${tgId}`, { headers });
-        if (res.ok) {
+        if (res.ok && res.status !== 204) {
           const blob = await res.blob();
-          setUserPhotoUrl(URL.createObjectURL(blob));
+          if (blob.size > 0) {
+            setUserPhotoUrl(URL.createObjectURL(blob));
+          }
         }
       } catch {
         /* fallback: буква в круге */
@@ -1382,18 +1393,36 @@ export default function App() {
       let userData: any = null;
       try {
         // Пользователь (автоматически создается если не существует)
-        let userUrl = `/user/info?telegram_id=${tgId}&username=${encodeURIComponent(tgUsername)}`;
-        if (tgFirstName) {
-          userUrl += `&first_name=${encodeURIComponent(tgFirstName)}`;
+        let userUrl = `/user/info?telegram_id=${tgId}`;
+        if (tgUsername) {
+          userUrl += `&username=${encodeURIComponent(tgUsername)}`;
         }
         if (referralId) {
           userUrl += `&ref=${referralId}`;
         }
         userData = await miniApiFetch(userUrl);
+        if (!userData && win.Telegram?.WebApp?.initData) {
+          await new Promise((r) => setTimeout(r, 300));
+          userData = await miniApiFetch(userUrl);
+        }
       } catch (err) {
         console.error('Ошибка загрузки профиля:', err);
-        setUserLoadFailed(true);
-        return;
+        if (win.Telegram?.WebApp?.initData) {
+          try {
+            await new Promise((r) => setTimeout(r, 400));
+            let retryUrl = `/user/info?telegram_id=${tgId}`;
+            if (tgUsername) retryUrl += `&username=${encodeURIComponent(tgUsername)}`;
+            if (referralId) retryUrl += `&ref=${referralId}`;
+            userData = await miniApiFetch(retryUrl);
+          } catch (retryErr) {
+            console.error('Повторная загрузка профиля не удалась:', retryErr);
+            setUserLoadFailed(true);
+            return;
+          }
+        } else {
+          setUserLoadFailed(true);
+          return;
+        }
       }
 
       if (userData && userData._needsSubscription) {
@@ -1787,6 +1816,47 @@ export default function App() {
     setDeleteModalOpen(true);
   };
 
+  const openTrafficResetModal = (device: Device) => {
+    setCurrentDevice(device);
+    setTrafficResetModalOpen(true);
+  };
+
+  const confirmTrafficReset = async () => {
+    if (!currentDevice || !telegramId) return;
+
+    if (balance < TRAFFIC_RESET_PRICE) {
+      if (window.confirm(`Недостаточно средств. Стоимость: ${TRAFFIC_RESET_PRICE} ₽. Ваш баланс: ${balance} ₽. Пополнить баланс?`)) {
+        setTrafficResetModalOpen(false);
+        setView('topup');
+      }
+      return;
+    }
+
+    setTrafficResetLoading(true);
+    try {
+      const result = await miniApiFetch(
+        `/user/devices/${currentDevice.id}/reset-traffic?telegram_id=${telegramId}`,
+        { method: 'POST' }
+      );
+      if (result?.success) {
+        if (typeof result.balance === 'number') {
+          setBalance(result.balance);
+        }
+        addHistoryItem('traffic_reset', `Сброс трафика: подписка #${currentDevice.id}`, -TRAFFIC_RESET_PRICE);
+        setTrafficResetModalOpen(false);
+        setCurrentDevice(null);
+        refreshDevices();
+      } else {
+        alert(result?.error || 'Не удалось сбросить трафик');
+      }
+    } catch (e) {
+      console.error('Failed to reset traffic', e);
+      alert('Ошибка при сбросе трафика');
+    } finally {
+      setTrafficResetLoading(false);
+    }
+  };
+
   const confirmDeleteDevice = async () => {
     if (!currentDevice || !telegramId) return;
     
@@ -1969,7 +2039,7 @@ export default function App() {
   };
 
   const wizardActivate = async () => {
-    if (!wizardPlan) return;
+    if (!wizardPlan || wizardActivating) return;
 
     // Получаем userId если еще не загружен
     const currentUserId = await ensureUserId();
@@ -1980,12 +2050,13 @@ export default function App() {
 
     // Активируем триал
     if (wizardPlan.isTrial) {
+      setWizardActivating(true);
       try {
         const res = await miniApiFetch('/subscription/create', {
           method: 'POST',
           body: JSON.stringify({
             user_id: currentUserId,
-            days: wizardPlan.days || 1,
+            days: wizardPlan.days || 3,
             type: 'vpn',
             is_trial: true,
             price: 0,
@@ -1995,7 +2066,9 @@ export default function App() {
         
         if (res && res.success) {
           setIsTrialUsed(true);
-          addHistoryItem('trial', 'Активация пробного периода', 0);
+          if (!res.already_active) {
+            addHistoryItem('trial', 'Активация пробного периода', 0);
+          }
           await refreshAll();
           setInstructionSourceDeviceId(null);
           setWizardSuccessPlainDevice(false);
@@ -2006,6 +2079,8 @@ export default function App() {
       } catch (e) {
         console.error('Failed to activate trial', e);
         alert('Ошибка активации пробного периода');
+      } finally {
+        setWizardActivating(false);
       }
       return;
     }
@@ -2025,7 +2100,8 @@ export default function App() {
       }
       return;
     }
-    
+
+    setWizardActivating(true);
     try {
       const res = await miniApiFetch('/subscription/create', {
         method: 'POST',
@@ -2050,6 +2126,8 @@ export default function App() {
     } catch (e) {
       console.error(e);
       alert('Ошибка при создании подписки');
+    } finally {
+      setWizardActivating(false);
     }
   };
 
@@ -2352,8 +2430,14 @@ export default function App() {
                 </div>
 
                 {balance >= payableTotal ? (
-                    <Button onClick={wizardActivate} variant={wizardPlan.isTrial ? 'trial' : 'primary'}>
-                        {wizardPlan.isTrial ? 'Активировать бесплатно' : 'Оплатить с баланса'}
+                    <Button
+                      onClick={wizardActivate}
+                      variant={wizardPlan.isTrial ? 'trial' : 'primary'}
+                      disabled={wizardActivating}
+                    >
+                        {wizardActivating
+                          ? 'Активация...'
+                          : wizardPlan.isTrial ? 'Активировать бесплатно' : 'Оплатить с баланса'}
                     </Button>
                 ) : (
                     <Button onClick={() => {
@@ -2525,7 +2609,10 @@ export default function App() {
   const deleteHwidDevice = async (hwidId: string) => {
     try {
       await miniApiFetch(`/user/devices/${hwidViewData.deviceId}/hwid/${hwidId}?telegram_id=${telegramId}`, { method: 'DELETE' });
-      setHwidViewData(prev => ({ ...prev, devices: prev.devices.filter((d: any) => (d.id || d.uuid || d.hwid) !== hwidId) }));
+      setHwidViewData(prev => ({
+        ...prev,
+        devices: prev.devices.filter((d: any) => (d.hwid || d.hwidHash || d.id || d.uuid) !== hwidId),
+      }));
     } catch {
       alert('Не удалось удалить устройство');
     }
@@ -2600,6 +2687,16 @@ export default function App() {
                       <Zap size={15} className="text-zinc-400 shrink-0" />
                       Продлить
                     </button>
+                    {/* Сбросить трафик */}
+                    {!device.is_trial && !isBlocked && (
+                      <button
+                        onClick={() => { setDeviceMenuOpenId(null); openTrafficResetModal(device); }}
+                        className="w-full flex items-center gap-3 px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors text-left"
+                      >
+                        <RotateCcw size={15} className="text-zinc-400 shrink-0" />
+                        Сбросить трафик · {TRAFFIC_RESET_PRICE} ₽
+                      </button>
+                    )}
                     {/* Разделитель */}
                     <div className="border-t border-zinc-800 mx-2" />
                     {/* Удалить */}
@@ -2717,7 +2814,7 @@ export default function App() {
               Подключённые устройства. Удалите лишние, чтобы освободить слот.
             </div>
             {hwidList.map((d: any, idx: number) => {
-              const hwidId = d.id || d.uuid || d.hwid || d.deviceId || `hwid-${idx}`;
+              const hwidId = d.hwid || d.hwidHash || d.id || d.uuid || d.deviceId || `hwid-${idx}`;
               const { title: deviceName } = formatHwidDeviceLabel(d, idx);
               const connectedAt = formatHwidDate(d.createdAt || d.created_at || d.connectedAt || d.connected_at || d.lastSeenAt || d.last_seen_at);
               const DeviceIcon = hwidDeviceIcon(deviceName);
@@ -4060,6 +4157,27 @@ export default function App() {
           <div className="grid grid-cols-2 gap-3">
              <Button variant="secondary" onClick={() => setDeleteModalOpen(false)}>Отмена</Button>
              <Button variant="danger" onClick={confirmDeleteDevice}>Удалить</Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        title="Сбросить трафик"
+        isOpen={trafficResetModalOpen}
+        onClose={() => !trafficResetLoading && setTrafficResetModalOpen(false)}
+      >
+        <div className="space-y-4">
+          <p className="text-zinc-300">
+            Сбросить счётчик трафика для подписки <b>#{currentDevice?.id}</b>?
+            Стоимость: <b>{TRAFFIC_RESET_PRICE} ₽</b>. Лимит останется 1 ТБ.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <Button variant="secondary" onClick={() => setTrafficResetModalOpen(false)} disabled={trafficResetLoading}>
+              Отмена
+            </Button>
+            <Button onClick={confirmTrafficReset} disabled={trafficResetLoading}>
+              {trafficResetLoading ? 'Сброс...' : `Сбросить за ${TRAFFIC_RESET_PRICE} ₽`}
+            </Button>
           </div>
         </div>
       </Modal>

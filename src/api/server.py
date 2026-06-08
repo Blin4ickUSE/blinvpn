@@ -88,12 +88,24 @@ def check_required_channel_subscription(telegram_id: int) -> bool:
             params={"chat_id": REQUIRED_CHANNEL_ID, "user_id": telegram_id},
             timeout=5,
         )
-        data = resp.json() if resp.ok else {}
+        if not resp.ok:
+            logger.warning(
+                "getChatMember HTTP %s for user %s: %s",
+                resp.status_code, telegram_id, resp.text[:200],
+            )
+            return True
+        data = resp.json()
+        if not data.get("ok"):
+            logger.warning(
+                "getChatMember not ok for user %s: %s",
+                telegram_id, data.get("description", data),
+            )
+            return True
         status = ((data.get("result") or {}).get("status") or "").lower()
         return status in {"member", "administrator", "creator"}
     except Exception as e:
         logger.warning(f"Failed to check channel subscription for {telegram_id}: {e}")
-        return False
+        return True
 
 
 def get_admin_ids() -> list[int]:
@@ -789,17 +801,41 @@ def redirect_to_happ():
 
 # ========== API для мини-приложения ==========
 
+def _get_user_trial_key(user_id: int):
+    """Последний trial-ключ пользователя (если есть)."""
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, key_uuid, key_config, expiry_date, devices_limit, traffic_limit, plan_type
+            FROM vpn_keys
+            WHERE user_id = ? AND plan_type = 'trial'
+            ORDER BY id DESC LIMIT 1
+        """, (user_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 @app.route('/api/user/info', methods=['GET'])
 def get_user_info():
     """Получить информацию о пользователе"""
     telegram_id = request.args.get('telegram_id', type=int)
     username = request.args.get('username', '')
-    first_name = request.args.get('first_name', '')  # Имя пользователя из Telegram
+    first_name = request.args.get('first_name', '')  # fallback; основной источник — initData
     ref = request.args.get('ref', type=int)  # Telegram ID реферера
 
     auth_err = enforce_telegram_id_auth(telegram_id)
     if auth_err:
         return auth_err
+
+    tg_user = get_telegram_user_from_request()
+    if tg_user:
+        if not first_name:
+            first_name = tg_user.get('first_name') or ''
+        if not username:
+            username = tg_user.get('username') or ''
     
     # Нельзя быть своим собственным рефералом
     if ref == telegram_id:
@@ -939,7 +975,7 @@ def get_user_avatar():
 
     avatar = fetch_telegram_user_avatar(telegram_id)
     if not avatar:
-        return '', 404
+        return Response(status=204)
 
     content, content_type = avatar
     return Response(
@@ -1752,16 +1788,80 @@ def delete_device_hwid(device_id: int, hwid_id: str):
         if not key_uuid:
             return jsonify({'error': 'No key UUID for this device'}), 400
 
-        async def _delete_hwid():
-            api = remnawave.get_remnawave_api()
-            async with api as rw:
-                return await rw.delete_hwid_devices([hwid_id])
-
-        import asyncio
-        result = asyncio.run(_delete_hwid())
+        result = remnawave.remnawave_api.delete_hwid_device_sync(key_uuid, hwid_id)
         return jsonify({'success': bool(result)})
     except Exception as e:
         logger.error(f"Error deleting HWID device {hwid_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/user/devices/<int:device_id>/reset-traffic', methods=['POST'])
+def reset_device_traffic(device_id: int):
+    """Досрочный сброс трафика подписки (49 ₽)"""
+    telegram_id = request.args.get('telegram_id', type=int)
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
+
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    price = remnawave.TRAFFIC_RESET_PRICE_RUB
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, key_uuid, status, plan_type, traffic_limit
+            FROM vpn_keys
+            WHERE id = ? AND user_id = ?
+        """, (device_id, user['id']))
+        device = cursor.fetchone()
+        if not device:
+            return jsonify({'error': 'Device not found'}), 404
+
+        if device['status'] == 'Blocked':
+            return jsonify({'error': 'Подписка заблокирована'}), 403
+
+        traffic_limit = float(device['traffic_limit'] or 0)
+        if traffic_limit <= 0:
+            return jsonify({'error': 'Сброс трафика недоступен для безлимитной подписки'}), 400
+
+        key_uuid = device['key_uuid']
+        if not key_uuid:
+            return jsonify({'error': 'No key UUID for this device'}), 400
+
+        deducted = database.update_user_balance(user['id'], -price, ensure_non_negative=True)
+        if not deducted:
+            return jsonify({'error': f'Недостаточно средств. Стоимость сброса: {price} ₽'}), 400
+
+        try:
+            remnawave.remnawave_api.reset_user_traffic_sync(key_uuid)
+        except Exception as e:
+            database.update_user_balance(user['id'], price)
+            logger.error(f"Failed to reset traffic in Remnawave for key {key_uuid}: {e}")
+            return jsonify({'error': 'Не удалось сбросить трафик в VPN-системе'}), 500
+
+        cursor.execute(
+            "UPDATE vpn_keys SET traffic_used = 0 WHERE id = ?",
+            (device_id,),
+        )
+        cursor.execute("""
+            INSERT INTO transactions (user_id, type, amount, status, description, payment_method)
+            VALUES (?, 'traffic_reset', ?, 'Success', ?, 'Balance')
+        """, (user['id'], -price, f"Сброс трафика подписки #{device_id}"))
+        conn.commit()
+
+        updated_user = database.get_user_by_id(user['id'])
+        return jsonify({
+            'success': True,
+            'balance': float(updated_user.get('balance') or 0),
+            'traffic_used': 0,
+        })
+    except Exception as e:
+        logger.error(f"Error resetting traffic for device {device_id}: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
         conn.close()
@@ -1980,10 +2080,8 @@ def extend_subscription():
         if needs_unlimit:
             new_traffic_limit = 0.0
             new_traffic_used = 0.0
-        elif new_dev > cur_dev:
-            base_tb = int(1024 ** 4)
-            extra = max(0, new_dev - 1) * int(200 * (1024 ** 3))
-            new_traffic_limit = float(base_tb + extra)
+        elif plan_type == 'vpn' and not needs_unlimit:
+            new_traffic_limit = float(remnawave.VPN_TRAFFIC_LIMIT_BYTES)
 
         # Обновляем ключ в Remnawave
         if key_uuid:
@@ -1997,8 +2095,9 @@ def extend_subscription():
                 if needs_unlimit:
                     update_kwargs["traffic_limit_bytes"] = 0
                     update_kwargs["traffic_limit_strategy"] = remnawave.TrafficLimitStrategy.NO_RESET
-                elif new_dev > cur_dev:
-                    update_kwargs["traffic_limit_bytes"] = int(new_traffic_limit)
+                elif plan_type == 'vpn':
+                    update_kwargs["traffic_limit_bytes"] = remnawave.VPN_TRAFFIC_LIMIT_BYTES
+                    update_kwargs["traffic_limit_strategy"] = remnawave.TrafficLimitStrategy.MONTH
                 remnawave.remnawave_api.update_user_sync(**update_kwargs)
             except Exception as e:
                 logger.error(f"Failed to update key in Remnawave: {e}")
@@ -2088,11 +2187,67 @@ def create_subscription():
     
     # Проверка пробного периода
     if is_trial:
-        if user.get('trial_used', 0) == 1:
-            return jsonify({'error': 'Пробный период уже использован'}), 400
         days = 3
         price = 0
         requested_devices = 2
+        existing_trial = _get_user_trial_key(user_id)
+        if existing_trial:
+            return jsonify({
+                'success': True,
+                'already_active': True,
+                'subscription': {
+                    'key_id': existing_trial['id'],
+                    'subscription_url': existing_trial.get('key_config'),
+                    'plan_type': 'trial',
+                },
+            })
+        if user.get('trial_used', 0) == 1:
+            logger.warning(
+                'subscription/create trial rejected: already used, user_id=%s tg=%s',
+                user_id, user.get('telegram_id'),
+            )
+            return jsonify({'error': 'Пробный период уже использован'}), 400
+
+        conn_trial = database.get_db_connection()
+        cur_trial = conn_trial.cursor()
+        try:
+            cur_trial.execute("BEGIN IMMEDIATE")
+            cur_trial.execute(
+                "SELECT trial_used FROM users WHERE id = ?",
+                (user_id,),
+            )
+            trial_row = cur_trial.fetchone()
+            if trial_row and int(trial_row['trial_used'] or 0) == 1:
+                conn_trial.rollback()
+                existing_trial = _get_user_trial_key(user_id)
+                if existing_trial:
+                    return jsonify({
+                        'success': True,
+                        'already_active': True,
+                        'subscription': {
+                            'key_id': existing_trial['id'],
+                            'subscription_url': existing_trial.get('key_config'),
+                            'plan_type': 'trial',
+                        },
+                    })
+                return jsonify({'error': 'Пробный период уже использован'}), 400
+            cur_trial.execute(
+                "UPDATE users SET trial_used = 1 WHERE id = ? AND COALESCE(trial_used, 0) = 0",
+                (user_id,),
+            )
+            if cur_trial.rowcount == 0:
+                conn_trial.rollback()
+                return jsonify({'error': 'Пробный период уже использован'}), 400
+            conn_trial.commit()
+        except Exception as e:
+            try:
+                conn_trial.rollback()
+            except Exception:
+                pass
+            logger.error(f"Trial lock failed for user {user_id}: {e}")
+            return jsonify({'error': 'Не удалось активировать пробный период'}), 500
+        finally:
+            conn_trial.close()
     else:
         requested_devices = max(2, min(20, requested_devices))
         # Apply one-time discount from promocode
@@ -2116,6 +2271,10 @@ def create_subscription():
     if not is_trial:
         deducted = database.update_user_balance(user_id, -price, ensure_non_negative=True)
         if not deducted:
+            logger.warning(
+                'subscription/create insufficient balance: user_id=%s price=%s balance=%s',
+                user_id, price, user.get('balance'),
+            )
             return jsonify({'error': 'Insufficient balance'}), 400
         # Discount consumed on purchase
         try:
@@ -2136,10 +2295,8 @@ def create_subscription():
         traffic_limit_bytes = int(10 * (1024 ** 3))
         plan_type = 'trial'
     else:
-        # Единая подписка: 1 ТБ + 200 ГБ за каждое доп. устройство
-        base = int(1024 ** 4)  # 1 TB
-        extra = max(0, int(requested_devices) - 1) * int(200 * (1024 ** 3))
-        traffic_limit_bytes = base + extra
+        # Единая подписка: ровно 1 ТБ (1024 ГБ), сброс трафика раз в месяц
+        traffic_limit_bytes = remnawave.VPN_TRAFFIC_LIMIT_BYTES
         plan_type = 'vpn'
     
     result = core.create_user_and_subscription(
@@ -2154,8 +2311,6 @@ def create_subscription():
         cursor = conn.cursor()
         
         if is_trial:
-            # Помечаем пробный период как использованный
-            cursor.execute("UPDATE users SET trial_used = 1 WHERE id = ?", (user_id,))
             description = "Активация пробного периода (3 дня)"
             trans_type = 'trial'
         else:
@@ -2186,9 +2341,26 @@ def create_subscription():
         
         return jsonify({'success': True, 'subscription': result})
     
-    # Откат баланса, если создание не удалось (только для не-триала)
-    if not is_trial:
+    # Откат при неудаче
+    if is_trial:
+        try:
+            conn_rb = database.get_db_connection()
+            cur_rb = conn_rb.cursor()
+            if not _get_user_trial_key(user_id):
+                cur_rb.execute(
+                    "UPDATE users SET trial_used = 0 WHERE id = ?",
+                    (user_id,),
+                )
+                conn_rb.commit()
+            conn_rb.close()
+        except Exception as e:
+            logger.error(f"Failed to rollback trial_used for user {user_id}: {e}")
+    elif price > 0:
         database.update_user_balance(user_id, price)
+    logger.error(
+        'subscription/create failed: user_id=%s is_trial=%s tg=%s',
+        user_id, is_trial, user.get('telegram_id'),
+    )
     return jsonify({'error': 'Failed to create subscription'}), 500
 
 # ========== API для панели ==========
@@ -5132,21 +5304,18 @@ def create_backup():
 def get_remnawave_squads():
     """Получить список сквадов из Remnawave"""
     try:
-        import asyncio
-        from src.api.remnawave import get_remnawave_api, RemnaWaveAPI
-        
-        async def fetch_squads():
-            api = get_remnawave_api()
-            async with api as connected_api:
-                internal_squads = await connected_api.get_internal_squads()
-                return [{
-                    'uuid': s.uuid,
-                    'name': s.name,
-                    'members_count': s.members_count,
-                    'inbounds_count': s.inbounds_count,
-                } for s in internal_squads]
-        
-        squads = asyncio.run(fetch_squads())
+        from src.api.remnawave import with_remnawave_api, run_async
+
+        async def fetch_squads(api):
+            internal_squads = await api.get_internal_squads()
+            return [{
+                'uuid': s.uuid,
+                'name': s.name,
+                'members_count': s.members_count,
+                'inbounds_count': s.inbounds_count,
+            } for s in internal_squads]
+
+        squads = run_async(with_remnawave_api(fetch_squads))
         # Убираем дубликаты по UUID
         seen_uuids = set()
         unique_squads = []
@@ -5716,9 +5885,9 @@ def _guess_squad_type(name: str) -> str:
 
 
 async def _fetch_remnawave_squads():
-    api = remnawave.get_remnawave_api()
-    async with api as rw_api:
-        return await rw_api.get_internal_squads()
+    async def _fetch(api):
+        return await api.get_internal_squads()
+    return await remnawave.with_remnawave_api(_fetch)
 
 
 def _merge_squads_with_local_config(rw_squads) -> list:
@@ -5760,8 +5929,7 @@ def _persist_remnawave_squads(rw_squads) -> None:
 def get_squads():
     """Получить сквады из Remnawave с локальными настройками балансировщика"""
     try:
-        import asyncio
-        rw_squads = asyncio.run(_fetch_remnawave_squads())
+        rw_squads = remnawave.run_async(_fetch_remnawave_squads())
         _persist_remnawave_squads(rw_squads)
         squads = _merge_squads_with_local_config(rw_squads)
         existing_uuids = {squad.uuid for squad in rw_squads}
@@ -5784,8 +5952,6 @@ def get_squads():
 def sync_squads():
     """Синхронизировать сквады с Remnawave"""
     try:
-        import asyncio
-        
         async def do_sync():
             rw_squads = await _fetch_remnawave_squads()
             _persist_remnawave_squads(rw_squads)
@@ -5795,8 +5961,8 @@ def sync_squads():
                 'type': _guess_squad_type(squad.name),
                 'members_count': squad.members_count,
             } for squad in rw_squads]
-        
-        synced = asyncio.run(do_sync())
+
+        synced = remnawave.run_async(do_sync())
         return jsonify({
             'success': True,
             'synced': synced,

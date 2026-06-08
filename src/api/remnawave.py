@@ -7,9 +7,11 @@ import os
 import asyncio
 import json
 import ssl
-import base64 
+import base64
+import threading
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Union, Any, Callable, Awaitable, TypeVar
 import aiohttp
 import logging
 from dataclasses import dataclass
@@ -17,6 +19,45 @@ from enum import Enum
 from urllib.parse import urlparse, urljoin
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar('T')
+
+_async_loop: Optional[asyncio.AbstractEventLoop] = None
+_async_loop_lock = threading.Lock()
+
+
+def _ensure_async_loop() -> asyncio.AbstractEventLoop:
+    """Один фоновый event loop для всех sync-вызовов (Flask threads)."""
+    global _async_loop
+    with _async_loop_lock:
+        if _async_loop is None or _async_loop.is_closed():
+            loop = asyncio.new_event_loop()
+
+            def _loop_runner() -> None:
+                asyncio.set_event_loop(loop)
+                loop.run_forever()
+
+            threading.Thread(target=_loop_runner, name='remnawave-async', daemon=True).start()
+            _async_loop = loop
+        return _async_loop
+
+
+def run_async(coro: Awaitable[T], timeout: float = 60) -> T:
+    """Выполнить coroutine в фоновом loop (без asyncio.run из worker-потоков)."""
+    loop = _ensure_async_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    try:
+        return future.result(timeout=timeout)
+    except FuturesTimeoutError:
+        future.cancel()
+        raise RemnaWaveAPIError(f"Request timed out after {timeout}s")
+
+
+async def with_remnawave_api(fn: Callable[['RemnaWaveAPI'], Awaitable[T]]) -> T:
+    """Свежий aiohttp-session на каждый вызов — без гонок между потоками."""
+    api = get_remnawave_api()
+    async with api:
+        return await fn(api)
 
 
 class UserStatus(Enum):
@@ -31,6 +72,12 @@ class TrafficLimitStrategy(Enum):
     DAY = "DAY"
     WEEK = "WEEK"
     MONTH = "MONTH"
+    MONTH_ROLLING = "MONTH_ROLLING"
+
+
+# 1 ТБ = 1024 ГБ (без бонуса за доп. устройства)
+VPN_TRAFFIC_LIMIT_BYTES = 1024 * (1024 ** 3)
+TRAFFIC_RESET_PRICE_RUB = 49
 
 
 @dataclass
@@ -388,12 +435,17 @@ class RemnaWaveAPI:
     
     async def delete_user(self, uuid: str) -> bool:
         """Удалить пользователя из Remnawave"""
-        try:
-            response = await self._make_request('DELETE', f'/api/users/{uuid}')
-            return response.get('response', {}).get('isDeleted', False)
-        except Exception as e:
-            logger.error(f"Error deleting user {uuid}: {e}")
-            return False
+        response = await self._make_request('DELETE', f'/api/users/{uuid}')
+        if isinstance(response, dict):
+            resp = response.get('response', response)
+            if isinstance(resp, dict):
+                return bool(resp.get('isDeleted', True))
+        return True
+
+    async def reset_user_traffic(self, uuid: str) -> bool:
+        """Досрочный сброс счётчика трафика пользователя"""
+        response = await self._make_request('POST', f'/api/users/{uuid}/actions/reset-traffic')
+        return bool(response.get('success', True)) if isinstance(response, dict) else True
     
     async def get_all_users(self, start: int = 0, size: int = 100) -> Dict[str, Any]:
         params = {'start': start, 'size': size}
@@ -426,8 +478,8 @@ class RemnaWaveAPI:
                     return [item for item in nested if isinstance(item, dict)]
         return []
 
-    async def delete_hwid_devices(self, device_ids: List[str]) -> bool:
-        data = {'deviceIds': device_ids}
+    async def delete_hwid_device(self, user_uuid: str, hwid: str) -> bool:
+        data = {'userUuid': user_uuid, 'hwid': hwid}
         response = await self._make_request('POST', '/api/hwid/devices/delete', data)
         return bool(response.get('success', True)) if isinstance(response, dict) else True
 
@@ -547,120 +599,141 @@ def sanitize_remnawave_username(username: str, telegram_id: int) -> str:
 
 
 class RemnawaveAPI:
-    """Обёртка для синхронного использования"""
-    
-    def __init__(self):
-        self._api = get_remnawave_api()
-    
+    """Обёртка для синхронного использования из Flask и async из aiogram."""
+
     def create_user(self, telegram_id: int, username: str = None, email: str = None):
         """Создать пользователя (синхронная обёртка)"""
-        # Санитизируем username
         safe_username = sanitize_remnawave_username(username, telegram_id)
-        
-        async def _create():
-            async with self._api as api:
-                expire_at = datetime.now() + timedelta(days=30)
-                return await api.create_user(
-                    safe_username,
-                    expire_at,
-                    telegram_id=telegram_id,
-                    email=email
-                )
-        return asyncio.run(_create())
-    
+
+        async def _create(api: RemnaWaveAPI):
+            expire_at = datetime.now() + timedelta(days=30)
+            return await api.create_user(
+                safe_username,
+                expire_at,
+                telegram_id=telegram_id,
+                email=email,
+            )
+
+        return run_async(with_remnawave_api(_create))
+
     def get_user_by_telegram_id(self, telegram_id: int):
         """Получить пользователя по Telegram ID (синхронная обёртка)"""
-        async def _get():
-            async with self._api as api:
-                return await api.get_user_by_telegram_id(telegram_id)
-        return asyncio.run(_get())
-    
+        async def _get(api: RemnaWaveAPI):
+            return await api.get_user_by_telegram_id(telegram_id)
+
+        return run_async(with_remnawave_api(_get))
+
     def create_subscription(self, user_uuid: str, days: int, traffic_limit: int = None):
         """Создать подписку (синхронная обёртка)"""
-        async def _create():
-            async with self._api as api:
-                expire_at = datetime.now() + timedelta(days=days)
-                return await api.update_user(
-                    user_uuid,
-                    expire_at=expire_at,
-                    traffic_limit_bytes=traffic_limit
-                )
-        return asyncio.run(_create())
-    
-    def update_user_sync(self, uuid: str, expire_at: datetime = None, 
+        async def _create(api: RemnaWaveAPI):
+            expire_at = datetime.now() + timedelta(days=days)
+            return await api.update_user(
+                user_uuid,
+                expire_at=expire_at,
+                traffic_limit_bytes=traffic_limit,
+            )
+
+        return run_async(with_remnawave_api(_create))
+
+    def update_user_sync(self, uuid: str, expire_at: datetime = None,
                         traffic_limit_bytes: int = None, hwid_device_limit: int = None,
                         active_internal_squads: List[str] = None, status: UserStatus = None,
                         traffic_limit_strategy: TrafficLimitStrategy = None):
         """Обновить пользователя (синхронная обёртка)"""
-        async def _update():
-            async with self._api as api:
-                return await api.update_user(
-                    uuid,
-                    expire_at=expire_at,
-                    traffic_limit_bytes=traffic_limit_bytes,
-                    traffic_limit_strategy=traffic_limit_strategy,
-                    hwid_device_limit=hwid_device_limit,
-                    active_internal_squads=active_internal_squads,
-                    status=status
-                )
-        return asyncio.run(_update())
-    
+        async def _update(api: RemnaWaveAPI):
+            return await api.update_user(
+                uuid,
+                expire_at=expire_at,
+                traffic_limit_bytes=traffic_limit_bytes,
+                traffic_limit_strategy=traffic_limit_strategy,
+                hwid_device_limit=hwid_device_limit,
+                active_internal_squads=active_internal_squads,
+                status=status,
+            )
+
+        return run_async(with_remnawave_api(_update))
+
     def create_user_with_params(self, telegram_id: int, username: str, days: int,
                                traffic_limit_bytes: int = 0, hwid_device_limit: int = None,
-                               active_internal_squads: List[str] = None):
+                               active_internal_squads: List[str] = None,
+                               traffic_limit_strategy: TrafficLimitStrategy = None):
         """Создать пользователя с полными параметрами (синхронная обёртка)"""
-        # Санитизируем username
+        if traffic_limit_strategy is None:
+            traffic_limit_strategy = (
+                TrafficLimitStrategy.MONTH if traffic_limit_bytes > 0
+                else TrafficLimitStrategy.NO_RESET
+            )
         safe_username = sanitize_remnawave_username(username, telegram_id)
-        
-        async def _create():
-            async with self._api as api:
-                expire_at = datetime.now() + timedelta(days=days)
-                return await api.create_user(
-                    safe_username,
-                    expire_at,
-                    telegram_id=telegram_id,
-                    traffic_limit_bytes=traffic_limit_bytes,
-                    hwid_device_limit=hwid_device_limit,
-                    active_internal_squads=active_internal_squads
-                )
-        return asyncio.run(_create())
-    
+
+        async def _create(api: RemnaWaveAPI):
+            expire_at = datetime.now() + timedelta(days=days)
+            return await api.create_user(
+                safe_username,
+                expire_at,
+                telegram_id=telegram_id,
+                traffic_limit_bytes=traffic_limit_bytes,
+                traffic_limit_strategy=traffic_limit_strategy,
+                hwid_device_limit=hwid_device_limit,
+                active_internal_squads=active_internal_squads,
+            )
+
+        return run_async(with_remnawave_api(_create))
+
     def get_internal_squads(self):
         """Получить список внутренних сквадов (синхронная обёртка)"""
-        async def _get():
-            async with self._api as api:
-                return await api.get_internal_squads()
-        return asyncio.run(_get())
+        async def _get(api: RemnaWaveAPI):
+            return await api.get_internal_squads()
+
+        return run_async(with_remnawave_api(_get))
 
     def get_all_squads(self):
         """Алиас для get_internal_squads (обратная совместимость)"""
         return self.get_internal_squads()
-    
+
     def delete_user_sync(self, uuid: str) -> bool:
         """Удалить пользователя (синхронная обёртка)"""
-        async def _delete():
-            async with self._api as api:
-                return await api.delete_user(uuid)
-        return asyncio.run(_delete())
-    
+        async def _delete(api: RemnaWaveAPI):
+            return await api.delete_user(uuid)
+
+        return run_async(with_remnawave_api(_delete))
+
+    async def delete_user_async(self, uuid: str) -> bool:
+        """Удалить пользователя (async — для вызова из aiogram)"""
+        async def _delete(api: RemnaWaveAPI):
+            return await api.delete_user(uuid)
+
+        return await with_remnawave_api(_delete)
+
+    def reset_user_traffic_sync(self, uuid: str) -> bool:
+        async def _reset(api: RemnaWaveAPI):
+            return await api.reset_user_traffic(uuid)
+
+        return run_async(with_remnawave_api(_reset))
+
     def get_all_users_sync(self, start: int = 0, size: int = 100):
         """Получить всех пользователей (синхронная обёртка)"""
-        async def _get():
-            async with self._api as api:
-                return await api.get_all_users(start, size)
-        return asyncio.run(_get())
+        async def _get(api: RemnaWaveAPI):
+            return await api.get_all_users(start, size)
+
+        return run_async(with_remnawave_api(_get))
 
     def get_hwid_devices_sync(self, user_uuid: str):
-        async def _get():
-            async with self._api as api:
-                return await api.get_hwid_devices(user_uuid)
-        return asyncio.run(_get())
+        async def _get(api: RemnaWaveAPI):
+            return await api.get_hwid_devices(user_uuid)
+
+        return run_async(with_remnawave_api(_get))
+
+    def delete_hwid_device_sync(self, user_uuid: str, hwid: str) -> bool:
+        async def _delete(api: RemnaWaveAPI):
+            return await api.delete_hwid_device(user_uuid, hwid)
+
+        return run_async(with_remnawave_api(_delete))
 
     def delete_all_hwid_devices_sync(self, user_uuid: str) -> bool:
-        async def _delete():
-            async with self._api as api:
-                return await api.delete_all_hwid_devices(user_uuid)
-        return asyncio.run(_delete())
+        async def _delete(api: RemnaWaveAPI):
+            return await api.delete_all_hwid_devices(user_uuid)
+
+        return run_async(with_remnawave_api(_delete))
 
 
 # Глобальный экземпляр для обратной совместимости
