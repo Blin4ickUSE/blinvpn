@@ -917,6 +917,14 @@ interface UserActionModalProps {
     initialValue?: string;
 }
 
+const DEVICE_LIMIT_PRESETS = [1, 2, 3, 5, 10, 15, 20];
+
+const clampNumber = (raw: string, min: number, max: number, fallback: number) => {
+  const n = parseInt(raw, 10);
+  if (Number.isNaN(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+};
+
 const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConfirm, initialValue = '' }) => {
   const [value, setValue] = useState(initialValue);
   const [notify, setNotify] = useState(true);
@@ -927,6 +935,9 @@ const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConf
       icon: React.ElementType;
       color: string;
       type: string;
+      min?: number;
+      max?: number;
+      presets?: number[];
   };
 
   const config: ActionConfig = ({
@@ -935,7 +946,7 @@ const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConf
       'EXTEND_SUB': { title: 'Продлить подписку', label: 'Количество дней', icon: Clock, color: 'text-orange-400', type: 'number' },
       'REDUCE_SUB': { title: 'Уменьшить срок', label: 'Количество дней', icon: Clock, color: 'text-orange-400', type: 'number' },
       'SET_TRAFFIC': { title: 'Лимит трафика', label: 'Макс. трафик (GB)', icon: Database, color: 'text-purple-400', type: 'number' },
-      'SET_DEVICES': { title: 'Лимит устройств', label: 'Кол-во устройств', icon: Smartphone, color: 'text-indigo-400', type: 'number' },
+      'SET_DEVICES': { title: 'Лимит устройств', label: 'Кол-во устройств (1–20)', icon: Smartphone, color: 'text-indigo-400', type: 'number', min: 1, max: 20, presets: DEVICE_LIMIT_PRESETS },
       'BAN': { title: 'Заблокировать', label: 'Причина бана', icon: Ban, color: 'text-red-400', type: 'text' },
       'UNBAN': { title: 'Разблокировать', label: '', icon: CheckCircle, color: 'text-green-400', type: 'text' },
       'MASS_ADD_DAYS': { title: 'Всем добавить дни', label: 'Количество дней', icon: Calendar, color: 'text-orange-500', type: 'number' },
@@ -948,6 +959,16 @@ const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConf
       'MASS_REMOVE_PARTNER': { title: 'Убрать партнерство', label: '', icon: UserMinus, color: 'text-gray-500', type: 'text' },
   } as Record<string, ActionConfig>)[type] || { title: 'Действие', label: 'Значение', icon: Settings, color: 'text-white', type: 'text' };
 
+  const numMin = config.min ?? 0;
+  const numMax = config.max ?? 999999;
+  const numValue = config.type === 'number' ? clampNumber(value, numMin, numMax, numMin || 0) : 0;
+  const showNumberStepper = config.type === 'number' && (config.presets?.length || config.max !== undefined);
+
+  const setNumberValue = (next: number) => {
+    const clamped = Math.max(numMin, Math.min(numMax, next));
+    setValue(String(clamped));
+  };
+
   return (
       <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200" onClick={onClose}>
           <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-sm p-6 shadow-2xl relative animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
@@ -955,22 +976,75 @@ const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConf
               <div className="space-y-4">
                   <div>
                       <label className="text-xs text-gray-500 block mb-1.5">{config.label}</label>
-                      <input 
-                        type={config.type} 
-                        value={value} 
-                        onChange={e => setValue(e.target.value)} 
-                        className="w-full bg-gray-950 border border-gray-700 text-white text-lg rounded-xl px-4 py-3 focus:ring-2 focus:ring-orange-500 outline-none font-mono" 
-                        placeholder="0" 
-                        autoFocus 
-                        min="0"
-                      />
+                      {showNumberStepper ? (
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setNumberValue(numValue - 1)}
+                              disabled={numValue <= numMin}
+                              className="w-12 h-12 rounded-xl bg-gray-800 border border-gray-700 text-white text-xl font-bold hover:bg-gray-700 disabled:opacity-40"
+                            >−</button>
+                            <input
+                              type="number"
+                              value={value}
+                              onChange={e => setValue(e.target.value)}
+                              className="flex-1 bg-gray-950 border border-gray-700 text-white text-2xl rounded-xl px-4 py-3 focus:ring-2 focus:ring-orange-500 outline-none font-mono text-center"
+                              autoFocus
+                              min={numMin}
+                              max={numMax}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setNumberValue(numValue + 1)}
+                              disabled={numValue >= numMax}
+                              className="w-12 h-12 rounded-xl bg-gray-800 border border-gray-700 text-white text-xl font-bold hover:bg-gray-700 disabled:opacity-40"
+                            >+</button>
+                          </div>
+                          {config.presets && config.presets.length > 0 && (
+                            <div className="flex flex-wrap gap-2">
+                              {config.presets.map((preset) => (
+                                <button
+                                  key={preset}
+                                  type="button"
+                                  onClick={() => setNumberValue(preset)}
+                                  className={`px-3 py-1.5 rounded-lg text-sm font-mono border transition-colors ${
+                                    numValue === preset
+                                      ? 'bg-orange-600/20 border-orange-500 text-orange-400'
+                                      : 'bg-gray-950 border-gray-800 text-gray-400 hover:border-gray-600'
+                                  }`}
+                                >
+                                  {preset}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <input 
+                          type={config.type} 
+                          value={value} 
+                          onChange={e => setValue(e.target.value)} 
+                          className="w-full bg-gray-950 border border-gray-700 text-white text-lg rounded-xl px-4 py-3 focus:ring-2 focus:ring-orange-500 outline-none font-mono" 
+                          placeholder="0" 
+                          autoFocus 
+                          min={numMin}
+                          max={config.max}
+                        />
+                      )}
                   </div>
                   <label className="flex items-center cursor-pointer group bg-gray-950/50 p-3 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors">
                       <div className="relative"><input type="checkbox" checked={notify} onChange={() => setNotify(!notify)} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full shadow-inner transition-colors ${notify ? 'bg-orange-600' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${notify ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="text-sm text-gray-200 font-medium">Уведомить пользователя</div><div className="text-xs text-gray-500">Отправить сообщение в бот</div></div>
                   </label>
                   <div className="flex gap-3 pt-2">
                       <button onClick={onClose} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl font-medium transition-colors">Отмена</button>
-                      <button onClick={() => onConfirm(value, notify)} className="flex-1 py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-bold shadow-lg shadow-orange-900/20 transition-colors">Применить</button>
+                      <button
+                        onClick={() => onConfirm(
+                          config.type === 'number' ? String(clampNumber(value, numMin, numMax, numMin || 0)) : value,
+                          notify,
+                        )}
+                        className="flex-1 py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-bold shadow-lg shadow-orange-900/20 transition-colors"
+                      >Применить</button>
                   </div>
               </div>
           </div>
@@ -1312,10 +1386,28 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
                         )}
                     </div>
                     <div className="grid grid-cols-2 gap-4">
-                        <label className="flex items-center cursor-pointer p-4 bg-gray-800/50 border border-gray-800 rounded-xl hover:border-gray-700 transition-colors"><div className="relative"><input type="checkbox" checked={isTrial} onChange={() => { setIsTrial(!isTrial); setIsForever(false); }} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full transition-colors ${isTrial ? 'bg-purple-600' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform ${isTrial ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="font-medium text-white">Пробный период</div><div className="text-xs text-gray-500">1 день, 5ГБ, 2 устройства</div></div></label>
+                        <label className="flex items-center cursor-pointer p-4 bg-gray-800/50 border border-gray-800 rounded-xl hover:border-gray-700 transition-colors"><div className="relative"><input type="checkbox" checked={isTrial} onChange={() => { setIsTrial(!isTrial); setIsForever(false); }} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full transition-colors ${isTrial ? 'bg-purple-600' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform ${isTrial ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="font-medium text-white">Пробный период</div><div className="text-xs text-gray-500">1 день, 5 ГБ, 1 устройство</div></div></label>
                         <label className="flex items-center cursor-pointer p-4 bg-gray-800/50 border border-gray-800 rounded-xl hover:border-gray-700 transition-colors"><div className="relative"><input type="checkbox" checked={isForever} onChange={() => { setIsForever(!isForever); setIsTrial(false); }} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full transition-colors ${isForever ? 'bg-yellow-500' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform ${isForever ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="font-medium text-white">∞ Навсегда</div><div className="text-xs text-gray-500">До 2099 года</div></div></label>
                     </div>
-                    <div className="grid grid-cols-3 gap-4"><div><label className="text-xs text-gray-500 mb-1.5 block">Длительность (дней)</label><input type="number" min="1" value={isForever ? 27394 : params.days} disabled={isForever} onChange={e => setParams({...params, days: parseInt(e.target.value) || 0})} className={`w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono ${isForever ? 'opacity-50' : ''}`}/></div><div><label className="text-xs text-gray-500 mb-1.5 block">Трафик (GB)</label><input type="number" min="1" value={params.traffic} onChange={e => setParams({...params, traffic: parseInt(e.target.value) || 0})} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono"/></div><div><label className="text-xs text-gray-500 mb-1.5 block">Устройства</label><input type="number" min="1" value={params.devices} onChange={e => setParams({...params, devices: parseInt(e.target.value) || 0})} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono"/></div></div>
+                    <div className="grid grid-cols-3 gap-4"><div><label className="text-xs text-gray-500 mb-1.5 block">Длительность (дней)</label><input type="number" min="1" value={isForever ? 27394 : params.days} disabled={isForever} onChange={e => setParams({...params, days: parseInt(e.target.value) || 0})} className={`w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono ${isForever ? 'opacity-50' : ''}`}/></div><div><label className="text-xs text-gray-500 mb-1.5 block">Трафик (GB)</label><input type="number" min="1" value={params.traffic} onChange={e => setParams({...params, traffic: parseInt(e.target.value) || 0})} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono"/></div><div><label className="text-xs text-gray-500 mb-1.5 block">Устройства (1–20)</label><div className="flex items-center gap-1"><button type="button" disabled={params.devices <= 1} onClick={() => setParams(p => ({...p, devices: Math.max(1, p.devices - 1)}))} className="w-8 h-9 rounded-lg bg-gray-800 border border-gray-700 text-white disabled:opacity-40">−</button><input type="number" min="1" max="20" value={params.devices} onChange={e => setParams({...params, devices: Math.max(1, Math.min(20, parseInt(e.target.value) || 1))})} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-2 py-2 text-white text-center font-mono"/><button type="button" disabled={params.devices >= 20} onClick={() => setParams(p => ({...p, devices: Math.min(20, p.devices + 1)}))} className="w-8 h-9 rounded-lg bg-gray-800 border border-gray-700 text-white disabled:opacity-40">+</button></div></div></div>
+                    {!isTrial && (
+                      <div className="flex flex-wrap gap-2">
+                        {DEVICE_LIMIT_PRESETS.map((preset) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            onClick={() => setParams((p) => ({ ...p, devices: preset }))}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-mono border transition-colors ${
+                              params.devices === preset
+                                ? 'bg-orange-600/20 border-orange-500 text-orange-400'
+                                : 'bg-gray-950 border-gray-800 text-gray-500 hover:border-gray-600'
+                            }`}
+                          >
+                            {preset} устр.
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     <div>
                         <label className="text-sm font-medium text-gray-400 mb-2 block">Доступные сквады</label>
                         {loadingSquads ? (
@@ -1362,6 +1454,7 @@ interface UserSubscription {
   days_left: number;
   traffic_used: number;
   traffic_limit: number;
+  devices_limit: number;
   type: string;
 }
 
@@ -1376,6 +1469,7 @@ interface ReferralItem {
 
 const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToast, onOpenUser }) => {
   const [activeAction, setActiveAction] = useState<string | null>(null);
+  const [subAction, setSubAction] = useState<{ subId: number; action: string; initialValue: string } | null>(null);
   const [subscriptions, setSubscriptions] = useState<UserSubscription[]>([]);
   const [loadingSubs, setLoadingSubs] = useState(true);
   const [partnerRateDraft, setPartnerRateDraft] = useState<number>(user?.partnerRate ?? 25);
@@ -1450,24 +1544,35 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
     }
   };
   
-  const handleSubAction = async (subId: number, action: 'EXTEND_SUB' | 'REDUCE_SUB' | 'SET_TRAFFIC' | 'SET_DEVICES') => {
-    const prompts: Record<string, string> = {
-      EXTEND_SUB: 'На сколько дней продлить?',
-      REDUCE_SUB: 'На сколько дней уменьшить?',
-      SET_TRAFFIC: 'Новый лимит трафика (ГБ):',
-      SET_DEVICES: 'Новый лимит устройств:',
+  const handleSubAction = (subId: number, action: 'EXTEND_SUB' | 'REDUCE_SUB' | 'SET_TRAFFIC' | 'SET_DEVICES') => {
+    const sub = subscriptions.find((s) => s.id === subId);
+    const initialByAction: Record<string, string> = {
+      EXTEND_SUB: '30',
+      REDUCE_SUB: '7',
+      SET_TRAFFIC: String(sub?.traffic_limit ? Math.round(sub.traffic_limit / (1024 ** 3)) : 100),
+      SET_DEVICES: String(sub?.devices_limit ?? 1),
     };
-    const value = prompt(prompts[action]);
-    if (!value) return;
+    setSubAction({ subId, action, initialValue: initialByAction[action] || '' });
+  };
+
+  const confirmSubAction = async (value: string, notify: boolean) => {
+    if (!subAction) return;
     try {
       await apiFetch(`/panel/users/${user.id}/action`, {
         method: 'POST',
-        body: JSON.stringify({ action, value, notify: true, subscription_id: subId }),
+        body: JSON.stringify({
+          action: subAction.action,
+          value,
+          notify,
+          subscription_id: subAction.subId,
+        }),
       });
       onToast('Успешно', 'Изменения применены', 'success');
       await refreshSubscriptions();
     } catch (e) {
       onToast('Ошибка', 'Не удалось применить действие', 'error');
+    } finally {
+      setSubAction(null);
     }
   };
 
@@ -1552,6 +1657,14 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto" onClick={onClose}>
         {activeAction && <UserActionModal type={activeAction} onClose={() => setActiveAction(null)} onConfirm={confirmAction} />}
+        {subAction && (
+          <UserActionModal
+            type={subAction.action}
+            initialValue={subAction.initialValue}
+            onClose={() => setSubAction(null)}
+            onConfirm={confirmSubAction}
+          />
+        )}
         <div className="bg-gray-950 border border-gray-800 rounded-2xl w-full max-w-4xl shadow-2xl relative animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
             <div className="p-6 border-b border-gray-800 flex justify-between items-start bg-gray-900 rounded-t-2xl">
                 <div className="flex items-center gap-4"><div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center text-2xl font-bold text-gray-500 border border-gray-700">{user.username.charAt(1).toUpperCase()}</div><div><h2 className="text-2xl font-bold text-white flex items-center">{user.username} {user.status === 'Active' && <CheckCircle size={18} className="text-green-500 ml-2" />}{user.status === 'Banned' && <Ban size={18} className="text-red-500 ml-2" />}{user.inBlacklist && <span className="ml-2 text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full border border-red-500/30">Чёрный список</span>}</h2><div className="flex items-center gap-3 text-sm text-gray-400 mt-1"><span className="flex items-center bg-gray-800 px-2 py-0.5 rounded"><Hash size={12} className="mr-1"/> ID: {user.telegramId}</span><span className="flex items-center"><Calendar size={12} className="mr-1"/> Рег: {user.regDate}</span></div></div></div>
@@ -1588,11 +1701,14 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
                                      'bg-gray-500/20 text-gray-400'
                                    }`}>{sub.status}</span>
                                  </div>
-                                 <div className="flex justify-between text-xs">
+                                 <div className="flex justify-between text-xs gap-2">
                                    <span className={sub.days_left <= 3 ? 'text-red-400' : 'text-gray-400'}>
                                      {sub.days_left <= 0 ? 'Истекла' : `Осталось ${sub.days_left} дн.`}
                                    </span>
-                                   <span className="text-gray-500">
+                                   <span className="text-indigo-400/90 shrink-0">
+                                     {sub.devices_limit ?? 1} устр.
+                                   </span>
+                                   <span className="text-gray-500 text-right">
                                      {sub.traffic_limit > 0 
                                        ? `${(sub.traffic_used / (1024**3)).toFixed(1)} / ${(sub.traffic_limit / (1024**3)).toFixed(0)} ГБ`
                                        : 'Безлимит'

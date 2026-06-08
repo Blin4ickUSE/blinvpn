@@ -288,7 +288,7 @@ def sanitize_username(username: str, telegram_id: int) -> str:
 def create_user_and_subscription(telegram_id: int, username: str, days: int, 
                                  referred_by: int = None, traffic_limit: int = None,
                                  squad_uuids: list = None, plan_type: str = 'vpn',
-                                 devices_limit: int = 2) -> Optional[Dict]:
+                                 devices_limit: int = 1) -> Optional[Dict]:
     """Создать пользователя и подписку"""
     try:
         # Создаем пользователя в БД

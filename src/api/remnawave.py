@@ -487,7 +487,7 @@ class RemnaWaveAPI:
             for alt_key in ('id', 'uuid', 'deviceId'):
                 if str(device.get(alt_key) or '') == ref and hwid:
                     return hwid
-        return ref
+        return None
 
     @staticmethod
     def _normalize_hwid_devices_response(response: Any) -> List[Dict[str, Any]]:
@@ -507,31 +507,60 @@ class RemnaWaveAPI:
                     return [item for item in nested if isinstance(item, dict)]
         return []
 
+    @staticmethod
+    def format_hwid_device_for_client(device: Dict[str, Any]) -> Dict[str, Any]:
+        """Гарантировать поле hwid в ответе для клиента."""
+        out = dict(device)
+        hwid = RemnaWaveAPI._hwid_from_device(device)
+        if hwid:
+            out['hwid'] = hwid
+        return out
+
     async def delete_hwid_device(self, user_uuid: str, hwid: str) -> bool:
         hwid = str(hwid or '').strip()
-        if not hwid:
+        user_uuid = str(user_uuid or '').strip()
+        if not hwid or not user_uuid:
             return False
 
         before_list = await self.get_hwid_devices(user_uuid)
         before_hwids = {self._hwid_from_device(d) for d in before_list if self._hwid_from_device(d)}
         if hwid not in before_hwids:
-            logger.warning("HWID %s not found for user %s (have: %s)", hwid, user_uuid, before_hwids)
+            logger.warning(
+                "HWID %r not found for user %s (have: %s)",
+                hwid[:48], user_uuid, list(before_hwids),
+            )
             return False
 
         data = {'userUuid': user_uuid, 'hwid': hwid}
-        await self._make_request('POST', '/api/hwid/devices/delete', data)
+        logger.info("Remnawave HWID delete request: userUuid=%s hwid_len=%d", user_uuid, len(hwid))
+        response = await self._make_request('POST', '/api/hwid/devices/delete', data)
 
-        after_list = await self.get_hwid_devices(user_uuid)
-        after_hwids = {self._hwid_from_device(d) for d in after_list if self._hwid_from_device(d)}
-        if hwid in after_hwids:
-            logger.error("HWID %s still present after delete for user %s", hwid, user_uuid)
-            return False
+        remaining = self._normalize_hwid_devices_response(response)
+        remaining_hwids = {self._hwid_from_device(d) for d in remaining if self._hwid_from_device(d)}
+        if hwid in remaining_hwids:
+            after_list = await self.get_hwid_devices(user_uuid)
+            after_hwids = {self._hwid_from_device(d) for d in after_list if self._hwid_from_device(d)}
+            if hwid in after_hwids:
+                logger.error("HWID %r still present after delete for user %s", hwid[:48], user_uuid)
+                return False
+        logger.info(
+            "Remnawave HWID deleted: user=%s remaining=%d",
+            user_uuid,
+            len(remaining_hwids) if remaining_hwids else len(remaining),
+        )
         return True
 
     async def delete_all_hwid_devices(self, user_uuid: str) -> bool:
+        user_uuid = str(user_uuid or '').strip()
+        if not user_uuid:
+            return False
         data = {'userUuid': user_uuid}
-        response = await self._make_request('POST', '/api/hwid/devices/delete-all', data)
-        return bool(response.get('success', True)) if isinstance(response, dict) else True
+        await self._make_request('POST', '/api/hwid/devices/delete-all', data)
+        after_list = await self.get_hwid_devices(user_uuid)
+        if after_list:
+            logger.error("HWID devices still present after delete-all for user %s: %d", user_uuid, len(after_list))
+            return False
+        return True
     
     def _parse_user(self, user_data: Dict) -> RemnaWaveUser:
         status_str = user_data.get('status') or 'ACTIVE'

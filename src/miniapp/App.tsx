@@ -1251,6 +1251,7 @@ export default function App() {
   // Device menu state
   const [deviceMenuOpenId, setDeviceMenuOpenId] = useState<number | null>(null);
   const [hwidViewData, setHwidViewData] = useState<{ deviceId: number; devices: any[]; loading: boolean; error?: string | null }>({ deviceId: 0, devices: [], loading: false, error: null });
+  const [hwidDeleting, setHwidDeleting] = useState<string | null>(null);
 
   // Buy Device State (legacy, kept for compatibility)
   
@@ -2060,7 +2061,7 @@ export default function App() {
             type: 'vpn',
             is_trial: true,
             price: 0,
-            devices: 2,
+            devices: 1,
           }),
         });
         
@@ -2115,7 +2116,10 @@ export default function App() {
       });
       
       if (res && res.success) {
-        addHistoryItem('buy_dev', `Подключение: ${name}`, -price);
+        if (res.devices_limit != null && Number(res.devices_limit) !== wizardDeviceCount) {
+          console.warn('Device count mismatch:', res.devices_limit, wizardDeviceCount);
+        }
+        addHistoryItem('buy_dev', `Подключение: ${name}`, -(res.price ?? price));
         await refreshAll();
         setInstructionSourceDeviceId(null);
         setWizardSuccessPlainDevice(false);
@@ -2612,19 +2616,26 @@ export default function App() {
   };
 
   const deleteHwidDevice = async (hwidValue: string) => {
-    if (!hwidValue || !telegramId) return;
+    if (!hwidValue || !telegramId || hwidDeleting) return;
+    setHwidDeleting(hwidValue);
     try {
       const result = await miniApiFetch(
-        `/user/devices/${hwidViewData.deviceId}/hwid/${encodeURIComponent(hwidValue)}?telegram_id=${telegramId}`,
-        { method: 'DELETE' },
+        `/user/devices/${hwidViewData.deviceId}/hwid/delete?telegram_id=${telegramId}`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ hwid: hwidValue }),
+        },
       );
       if (result?.success) {
-        await openHwidView(hwidViewData.deviceId);
+        const list = normalizeHwidList(result?.hwid_devices ?? []);
+        setHwidViewData(prev => ({ ...prev, devices: list, loading: false, error: null }));
       } else {
         alert(result?.error || 'Не удалось удалить устройство');
       }
-    } catch {
-      alert('Не удалось удалить устройство');
+    } catch (e: any) {
+      alert(e?.message || 'Не удалось удалить устройство');
+    } finally {
+      setHwidDeleting(null);
     }
   };
 
@@ -2844,10 +2855,15 @@ export default function App() {
                   {hwidValue && (
                     <button
                       onClick={() => deleteHwidDevice(hwidValue)}
-                      className="ml-3 p-2 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-950/30 transition-colors shrink-0"
+                      disabled={hwidDeleting === hwidValue}
+                      className="ml-3 p-2 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-950/30 transition-colors shrink-0 disabled:opacity-40"
                       title="Удалить устройство"
                     >
-                      <Trash2 size={16} />
+                      {hwidDeleting === hwidValue ? (
+                        <div className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <Trash2 size={16} />
+                      )}
                     </button>
                   )}
                 </div>
@@ -3266,7 +3282,7 @@ export default function App() {
                     days: payload.wizardPlan?.days || 30,
                     type: 'vpn',
                     price: payload.price,
-                    devices: payload.wizardDeviceCount ?? 2,
+                    devices: payload.wizardDeviceCount ?? 1,
                   }),
                 });
 

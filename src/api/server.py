@@ -149,6 +149,22 @@ def get_user_ban_status(user: dict, telegram_id: int | None = None) -> dict:
     return {'banned': False}
 
 
+def _send_user_notifications_async(notifications: list[tuple[int, str]]) -> None:
+    """Отправить HTML-уведомления пользователям в фоне."""
+    if not notifications:
+        return
+    from threading import Thread
+
+    def _run():
+        for tg_id, msg in notifications:
+            try:
+                core.send_notification_to_user(int(tg_id), msg)
+            except Exception as e:
+                logger.warning("Failed to send notification to %s: %s", tg_id, e)
+
+    Thread(target=_run, daemon=True).start()
+
+
 def notify_referral_income_credited(referral_result: dict | None, *, extended: bool = False) -> None:
     """Уведомления рефереру 1-й и 2-й линии после начисления."""
     if not referral_result:
@@ -1405,6 +1421,37 @@ def get_user_devices():
                     cursor_sync.execute("""
                         UPDATE vpn_keys SET traffic_used = ? WHERE key_uuid = ?
                     """, (traffic_used, rw_uuid))
+                # Синхронизация лимита устройств: БД — источник истины
+                if rw_uuid:
+                    cursor_sync.execute(
+                        "SELECT id, devices_limit FROM vpn_keys WHERE key_uuid = ?",
+                        (rw_uuid,),
+                    )
+                    key_row = cursor_sync.fetchone()
+                    if key_row:
+                        db_limit = int(key_row['devices_limit'] or 1)
+                        rw_limit = getattr(rw_user, 'hwid_device_limit', None)
+                        if rw_limit is None and isinstance(rw_user, dict):
+                            rw_limit = rw_user.get('hwidDeviceLimit')
+                        try:
+                            rw_limit = int(rw_limit) if rw_limit is not None else None
+                        except (TypeError, ValueError):
+                            rw_limit = None
+                        if rw_limit is not None and rw_limit != db_limit:
+                            try:
+                                remnawave.remnawave_api.update_user_sync(
+                                    uuid=rw_uuid,
+                                    hwid_device_limit=db_limit,
+                                )
+                                logger.info(
+                                    "Synced hwid_device_limit for %s: %s -> %s",
+                                    rw_uuid, rw_limit, db_limit,
+                                )
+                            except Exception as sync_err:
+                                logger.warning(
+                                    "Failed to sync hwid_device_limit for %s: %s",
+                                    rw_uuid, sync_err,
+                                )
                 # Дата окончания из Remnawave — главный источник
                 expire_at = getattr(rw_user, 'expire_at', None) or (rw_user.get('expireAt') if isinstance(rw_user, dict) else None)
                 if rw_uuid and expire_at:
@@ -1426,7 +1473,8 @@ def get_user_devices():
     try:
         cursor.execute("""
             SELECT id, key_config, key_uuid, status as key_status, expiry_date,
-                   traffic_used, traffic_limit, plan_type, created_at, custom_name
+                   traffic_used, traffic_limit, plan_type, created_at, custom_name,
+                   devices_limit
             FROM vpn_keys
             WHERE user_id = ? AND key_uuid IS NOT NULL AND status != 'Deleted'
             ORDER BY created_at DESC
@@ -1523,6 +1571,7 @@ def get_user_devices():
                 'expiry_date': expiry_date_str,
                 'traffic_used': row['traffic_used'],
                 'traffic_limit': row['traffic_limit'],
+                'devices_limit': int(row['devices_limit'] or 1),
                 'plan_type': plan_type
             })
         
@@ -1723,6 +1772,62 @@ def delete_user_device(device_id: int):
         conn.close()
 
 
+def _delete_subscription_hwid_device(telegram_id: int, device_id: int, hwid_ref: str):
+    """Удалить HWID в Remnawave. Возвращает (body, status)."""
+    from urllib.parse import unquote
+
+    user = database.get_user_by_telegram_id(telegram_id)
+    if not user:
+        return {'error': 'User not found'}, 404
+
+    hwid_ref = unquote(str(hwid_ref or '')).strip()
+    if not hwid_ref:
+        return {'error': 'HWID is required'}, 400
+
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, key_uuid FROM vpn_keys
+            WHERE id = ? AND user_id = ?
+        """, (device_id, user['id']))
+        device = cursor.fetchone()
+        if not device:
+            return {'error': 'Device not found'}, 404
+
+        key_uuid = device['key_uuid']
+        if not key_uuid:
+            return {'error': 'No key UUID for this device'}, 400
+
+        current_devices = remnawave.remnawave_api.get_hwid_devices_sync(key_uuid)
+        if not isinstance(current_devices, list):
+            current_devices = []
+        hwid_value = remnawave.RemnaWaveAPI.resolve_hwid_from_devices(current_devices, hwid_ref)
+        if not hwid_value:
+            return {'error': 'HWID device not found'}, 404
+
+        result = remnawave.remnawave_api.delete_hwid_device_sync(key_uuid, hwid_value)
+        if not result:
+            return {'error': 'Не удалось удалить устройство в VPN-панели'}, 500
+
+        remaining = remnawave.remnawave_api.get_hwid_devices_sync(key_uuid)
+        if not isinstance(remaining, list):
+            remaining = []
+        formatted = [
+            remnawave.RemnaWaveAPI.format_hwid_device_for_client(d)
+            for d in remaining if isinstance(d, dict)
+        ]
+        return {'success': True, 'remaining': len(formatted), 'hwid_devices': formatted}, 200
+    except remnawave.RemnaWaveAPIError as e:
+        logger.error("Remnawave HWID delete API error for device %s: %s", device_id, e)
+        return {'error': str(e)}, getattr(e, 'status_code', None) or 502
+    except Exception as e:
+        logger.error("Error deleting HWID device for subscription %s: %s", device_id, e)
+        return {'error': str(e)}, 500
+    finally:
+        conn.close()
+
+
 @app.route('/api/user/devices/<int:device_id>/hwid', methods=['GET'])
 def get_device_hwid_devices(device_id: int):
     """Получить HWID-устройства для подписки через Remnawave"""
@@ -1753,7 +1858,11 @@ def get_device_hwid_devices(device_id: int):
         hwid_devices = remnawave.remnawave_api.get_hwid_devices_sync(key_uuid)
         if not isinstance(hwid_devices, list):
             hwid_devices = []
-        return jsonify({'hwid_devices': hwid_devices})
+        formatted = [
+            remnawave.RemnaWaveAPI.format_hwid_device_for_client(d)
+            for d in hwid_devices if isinstance(d, dict)
+        ]
+        return jsonify({'hwid_devices': formatted})
     except Exception as e:
         logger.error(f"Error fetching HWID devices for device {device_id}: {e}")
         return jsonify({'error': str(e)}), 500
@@ -1761,54 +1870,30 @@ def get_device_hwid_devices(device_id: int):
         conn.close()
 
 
-@app.route('/api/user/devices/<int:device_id>/hwid/<hwid_id>', methods=['DELETE'])
-def delete_device_hwid(device_id: int, hwid_id: str):
-    """Удалить конкретное HWID-устройство"""
+@app.route('/api/user/devices/<int:device_id>/hwid/delete', methods=['POST'])
+def delete_device_hwid_post(device_id: int):
+    """Удалить HWID-устройство (тело JSON — надёжнее, чем DELETE в URL)."""
     telegram_id = request.args.get('telegram_id', type=int)
     auth_err = enforce_telegram_id_auth(telegram_id)
     if auth_err:
         return auth_err
 
-    user = database.get_user_by_telegram_id(telegram_id)
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
+    data = request.get_json(silent=True) or {}
+    hwid_ref = (data.get('hwid') or '').strip()
+    body, status = _delete_subscription_hwid_device(telegram_id, device_id, hwid_ref)
+    return jsonify(body), status
 
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            SELECT id, key_uuid FROM vpn_keys
-            WHERE id = ? AND user_id = ?
-        """, (device_id, user['id']))
-        device = cursor.fetchone()
-        if not device:
-            return jsonify({'error': 'Device not found'}), 404
 
-        key_uuid = device['key_uuid']
-        if not key_uuid:
-            return jsonify({'error': 'No key UUID for this device'}), 400
+@app.route('/api/user/devices/<int:device_id>/hwid/<path:hwid_id>', methods=['DELETE'])
+def delete_device_hwid(device_id: int, hwid_id: str):
+    """Удалить конкретное HWID-устройство (legacy, для обратной совместимости)."""
+    telegram_id = request.args.get('telegram_id', type=int)
+    auth_err = enforce_telegram_id_auth(telegram_id)
+    if auth_err:
+        return auth_err
 
-        from urllib.parse import unquote
-        hwid_ref = unquote(str(hwid_id or '')).strip()
-        if not hwid_ref:
-            return jsonify({'error': 'HWID is required'}), 400
-
-        current_devices = remnawave.remnawave_api.get_hwid_devices_sync(key_uuid)
-        if not isinstance(current_devices, list):
-            current_devices = []
-        hwid_value = remnawave.RemnaWaveAPI.resolve_hwid_from_devices(current_devices, hwid_ref)
-        if not hwid_value:
-            return jsonify({'error': 'HWID device not found'}), 404
-
-        result = remnawave.remnawave_api.delete_hwid_device_sync(key_uuid, hwid_value)
-        if not result:
-            return jsonify({'error': 'Не удалось удалить устройство в VPN-панели'}), 500
-        return jsonify({'success': True})
-    except Exception as e:
-        logger.error(f"Error deleting HWID device {hwid_id}: {e}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        conn.close()
+    body, status = _delete_subscription_hwid_device(telegram_id, device_id, hwid_id)
+    return jsonify(body), status
 
 
 @app.route('/api/user/devices/<int:device_id>/reset-traffic', methods=['POST'])
@@ -2021,7 +2106,7 @@ def extend_subscription():
                 req = int(devices_in)
             except (TypeError, ValueError):
                 return jsonify({'error': 'Некорректное число устройств'}), 400
-            req = max(2, min(20, req))
+            req = max(1, min(20, req))
             if req < cur_dev:
                 return jsonify({'error': 'Нельзя уменьшить количество устройств при продлении'}), 400
             new_dev = req
@@ -2043,6 +2128,20 @@ def extend_subscription():
             try:
                 price = round(float(price) * (100 - discount) / 100, 2)
             except Exception:
+                pass
+
+        client_price = data.get('price')
+        if client_price is not None:
+            try:
+                if abs(float(client_price) - price) > 0.02:
+                    logger.warning(
+                        'subscription/extend price mismatch: user=%s key=%s devices=%s days=%s client=%s server=%s',
+                        user_id, key_id, new_dev, days, client_price, price,
+                    )
+                    return jsonify({
+                        'error': 'Цена не совпадает с тарифом. Обновите страницу и попробуйте снова.',
+                    }), 400
+            except (TypeError, ValueError):
                 pass
 
         # Списываем баланс
@@ -2178,7 +2277,11 @@ def create_subscription():
     user_id = data.get('user_id')
     days = data.get('days')
     is_trial = data.get('is_trial', False)  # Пробный период
-    requested_devices = int(data.get('devices', 2) or 2)
+    try:
+        requested_devices = int(data.get('devices', 1) or 1)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Некорректное число устройств'}), 400
+    requested_devices = max(1, min(20, requested_devices))
     
     if not user_id or not days:
         return jsonify({'error': 'Missing required fields'}), 400
@@ -2203,7 +2306,7 @@ def create_subscription():
     if is_trial:
         days = 3
         price = 0
-        requested_devices = 2
+        requested_devices = 1
         existing_trial = _get_user_trial_key(user_id)
         if existing_trial:
             return jsonify({
@@ -2263,7 +2366,6 @@ def create_subscription():
         finally:
             conn_trial.close()
     else:
-        requested_devices = max(2, min(20, requested_devices))
         # Apply one-time discount from promocode
         discount = database.get_effective_discount_percent(user)
 
@@ -2280,6 +2382,25 @@ def create_subscription():
                 price = round(float(price) * (100 - discount) / 100, 2)
             except Exception:
                 pass
+
+        client_price = data.get('price')
+        if client_price is not None:
+            try:
+                if abs(float(client_price) - price) > 0.02:
+                    logger.warning(
+                        'subscription/create price mismatch: user=%s devices=%s days=%s client=%s server=%s',
+                        user_id, requested_devices, days, client_price, price,
+                    )
+                    return jsonify({
+                        'error': 'Цена не совпадает с тарифом. Обновите страницу и попробуйте снова.',
+                    }), 400
+            except (TypeError, ValueError):
+                pass
+
+        logger.info(
+            'subscription/create: user=%s days=%s devices=%s price=%s',
+            user_id, days, requested_devices, price,
+        )
     
     # Для пробного периода не списываем баланс
     if not is_trial:
@@ -2328,7 +2449,10 @@ def create_subscription():
             description = "Активация пробного периода (3 дня)"
             trans_type = 'trial'
         else:
-            description = f"Подписка ({days} дней)"
+            dev_word = 'устройство' if requested_devices == 1 else (
+                'устройства' if 2 <= requested_devices <= 4 else 'устройств'
+            )
+            description = f"Подписка ({days} дн., {requested_devices} {dev_word})"
             trans_type = 'subscription'
         
         # Создаем транзакцию
@@ -2353,7 +2477,12 @@ def create_subscription():
                 )
                 notify_referral_income_credited(referral_result, extended=False)
         
-        return jsonify({'success': True, 'subscription': result})
+        return jsonify({
+            'success': True,
+            'subscription': result,
+            'devices_limit': requested_devices,
+            'price': price,
+        })
     
     # Откат при неудаче
     if is_trial:
@@ -3044,7 +3173,7 @@ def get_user_subscriptions(user_id: int):
         
         cursor.execute("""
             SELECT vk.id, vk.key_uuid, vk.status, vk.expiry_date, 
-                   vk.traffic_used, vk.traffic_limit, vk.created_at,
+                   vk.traffic_used, vk.traffic_limit, vk.created_at, vk.devices_limit,
                    CASE WHEN vk.traffic_limit > 0 AND vk.traffic_limit < 100000000000 THEN 'whitelist' ELSE 'vpn' END as type
             FROM vpn_keys vk
             WHERE vk.user_id = ?
@@ -3136,6 +3265,7 @@ def get_user_subscriptions(user_id: int):
                 'days_left': days_left if days_left is not None else 0,
                 'traffic_used': traffic_used,
                 'traffic_limit': float(row['traffic_limit'] or 0),
+                'devices_limit': int(row['devices_limit'] or 1),
                 'type': row['type']
             })
         
@@ -3421,7 +3551,7 @@ def create_key():
     if is_trial:
         days = 1
         traffic_gb = 5
-        devices = 2
+        devices = 1
     
     traffic_bytes = int(traffic_gb * (1024 ** 3))  # Конвертация в байты
     
@@ -5467,22 +5597,8 @@ def mass_user_action():
         
         conn.commit()
         
-        # Отправляем уведомления через бота (асинхронно)
         if notifications:
-            from threading import Thread
-            def send_notifications():
-                import asyncio
-                from aiogram import Bot
-                bot = Bot(token=os.getenv('TELEGRAM_BOT_TOKEN', ''))
-                async def send_all():
-                    for tg_id, msg in notifications:
-                        try:
-                            await bot.send_message(tg_id, msg)
-                        except Exception as e:
-                            logger.warning(f"Failed to send notification to {tg_id}: {e}")
-                    await bot.session.close()
-                asyncio.run(send_all())
-            Thread(target=send_notifications, daemon=True).start()
+            _send_user_notifications_async(notifications)
         
         return jsonify({'success': True, 'affected': affected})
     except Exception as e:
@@ -5660,21 +5776,8 @@ def single_user_action(user_id):
         
         conn.commit()
         
-        # Отправляем уведомление
         if notify and notification_msg:
-            from threading import Thread
-            def send_notification():
-                import asyncio
-                from aiogram import Bot
-                bot = Bot(token=os.getenv('TELEGRAM_BOT_TOKEN', ''))
-                async def send():
-                    try:
-                        await bot.send_message(telegram_id, notification_msg)
-                    except Exception as e:
-                        logger.warning(f"Failed to send notification: {e}")
-                    await bot.session.close()
-                asyncio.run(send())
-            Thread(target=send_notification, daemon=True).start()
+            _send_user_notifications_async([(telegram_id, notification_msg)])
         
         return jsonify({'success': True})
     except Exception as e:
