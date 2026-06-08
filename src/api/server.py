@@ -1788,8 +1788,22 @@ def delete_device_hwid(device_id: int, hwid_id: str):
         if not key_uuid:
             return jsonify({'error': 'No key UUID for this device'}), 400
 
-        result = remnawave.remnawave_api.delete_hwid_device_sync(key_uuid, hwid_id)
-        return jsonify({'success': bool(result)})
+        from urllib.parse import unquote
+        hwid_ref = unquote(str(hwid_id or '')).strip()
+        if not hwid_ref:
+            return jsonify({'error': 'HWID is required'}), 400
+
+        current_devices = remnawave.remnawave_api.get_hwid_devices_sync(key_uuid)
+        if not isinstance(current_devices, list):
+            current_devices = []
+        hwid_value = remnawave.RemnaWaveAPI.resolve_hwid_from_devices(current_devices, hwid_ref)
+        if not hwid_value:
+            return jsonify({'error': 'HWID device not found'}), 404
+
+        result = remnawave.remnawave_api.delete_hwid_device_sync(key_uuid, hwid_value)
+        if not result:
+            return jsonify({'error': 'Не удалось удалить устройство в VPN-панели'}), 500
+        return jsonify({'success': True})
     except Exception as e:
         logger.error(f"Error deleting HWID device {hwid_id}: {e}")
         return jsonify({'error': str(e)}), 500

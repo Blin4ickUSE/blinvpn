@@ -464,6 +464,32 @@ class RemnaWaveAPI:
         return self._normalize_hwid_devices_response(response)
 
     @staticmethod
+    def _hwid_from_device(device: Dict[str, Any]) -> str:
+        """Извлечь строку HWID из объекта устройства Remnawave."""
+        for key in ('hwid', 'hwidHash', 'hwid_hash', 'hwidHashValue'):
+            value = device.get(key)
+            if value:
+                return str(value)
+        return ''
+
+    @staticmethod
+    def resolve_hwid_from_devices(devices: List[Dict[str, Any]], hwid_ref: str) -> Optional[str]:
+        """Найти реальный hwid по значению из UI (hwid или устаревший id/uuid)."""
+        ref = str(hwid_ref or '').strip()
+        if not ref:
+            return None
+        for device in devices:
+            if not isinstance(device, dict):
+                continue
+            hwid = RemnaWaveAPI._hwid_from_device(device)
+            if hwid and hwid == ref:
+                return hwid
+            for alt_key in ('id', 'uuid', 'deviceId'):
+                if str(device.get(alt_key) or '') == ref and hwid:
+                    return hwid
+        return ref
+
+    @staticmethod
     def _normalize_hwid_devices_response(response: Any) -> List[Dict[str, Any]]:
         """Привести ответ Remnawave к списку HWID-устройств."""
         if not isinstance(response, dict):
@@ -472,16 +498,35 @@ class RemnaWaveAPI:
         if isinstance(raw, list):
             return [item for item in raw if isinstance(item, dict)]
         if isinstance(raw, dict):
-            for key in ('devices', 'items', 'hwidDevices', 'hwid_devices', 'data'):
+            devices = raw.get('devices')
+            if isinstance(devices, list):
+                return [item for item in devices if isinstance(item, dict)]
+            for key in ('items', 'hwidDevices', 'hwid_devices', 'data'):
                 nested = raw.get(key)
                 if isinstance(nested, list):
                     return [item for item in nested if isinstance(item, dict)]
         return []
 
     async def delete_hwid_device(self, user_uuid: str, hwid: str) -> bool:
+        hwid = str(hwid or '').strip()
+        if not hwid:
+            return False
+
+        before_list = await self.get_hwid_devices(user_uuid)
+        before_hwids = {self._hwid_from_device(d) for d in before_list if self._hwid_from_device(d)}
+        if hwid not in before_hwids:
+            logger.warning("HWID %s not found for user %s (have: %s)", hwid, user_uuid, before_hwids)
+            return False
+
         data = {'userUuid': user_uuid, 'hwid': hwid}
-        response = await self._make_request('POST', '/api/hwid/devices/delete', data)
-        return bool(response.get('success', True)) if isinstance(response, dict) else True
+        await self._make_request('POST', '/api/hwid/devices/delete', data)
+
+        after_list = await self.get_hwid_devices(user_uuid)
+        after_hwids = {self._hwid_from_device(d) for d in after_list if self._hwid_from_device(d)}
+        if hwid in after_hwids:
+            logger.error("HWID %s still present after delete for user %s", hwid, user_uuid)
+            return False
+        return True
 
     async def delete_all_hwid_devices(self, user_uuid: str) -> bool:
         data = {'userUuid': user_uuid}

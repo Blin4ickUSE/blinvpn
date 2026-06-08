@@ -2606,13 +2606,23 @@ export default function App() {
     }
   };
 
-  const deleteHwidDevice = async (hwidId: string) => {
+  const resolveDeviceHwid = (device: any): string | null => {
+    const hwid = device?.hwid || device?.hwidHash || device?.hwid_hash;
+    return hwid ? String(hwid) : null;
+  };
+
+  const deleteHwidDevice = async (hwidValue: string) => {
+    if (!hwidValue || !telegramId) return;
     try {
-      await miniApiFetch(`/user/devices/${hwidViewData.deviceId}/hwid/${hwidId}?telegram_id=${telegramId}`, { method: 'DELETE' });
-      setHwidViewData(prev => ({
-        ...prev,
-        devices: prev.devices.filter((d: any) => (d.hwid || d.hwidHash || d.id || d.uuid) !== hwidId),
-      }));
+      const result = await miniApiFetch(
+        `/user/devices/${hwidViewData.deviceId}/hwid/${encodeURIComponent(hwidValue)}?telegram_id=${telegramId}`,
+        { method: 'DELETE' },
+      );
+      if (result?.success) {
+        await openHwidView(hwidViewData.deviceId);
+      } else {
+        alert(result?.error || 'Не удалось удалить устройство');
+      }
     } catch {
       alert('Не удалось удалить устройство');
     }
@@ -2694,7 +2704,7 @@ export default function App() {
                         className="w-full flex items-center gap-3 px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors text-left"
                       >
                         <RotateCcw size={15} className="text-zinc-400 shrink-0" />
-                        Сбросить трафик · {TRAFFIC_RESET_PRICE} ₽
+                        Сбросить трафик
                       </button>
                     )}
                     {/* Разделитель */}
@@ -2814,12 +2824,12 @@ export default function App() {
               Подключённые устройства. Удалите лишние, чтобы освободить слот.
             </div>
             {hwidList.map((d: any, idx: number) => {
-              const hwidId = d.hwid || d.hwidHash || d.id || d.uuid || d.deviceId || `hwid-${idx}`;
+              const hwidValue = resolveDeviceHwid(d);
               const { title: deviceName } = formatHwidDeviceLabel(d, idx);
               const connectedAt = formatHwidDate(d.createdAt || d.created_at || d.connectedAt || d.connected_at || d.lastSeenAt || d.last_seen_at);
               const DeviceIcon = hwidDeviceIcon(deviceName);
               return (
-                <div key={String(hwidId)} className="flex items-center justify-between bg-zinc-800 rounded-xl px-4 py-3 border border-zinc-700">
+                <div key={hwidValue || `hwid-${idx}`} className="flex items-center justify-between bg-zinc-800 rounded-xl px-4 py-3 border border-zinc-700">
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     <div className="w-9 h-9 rounded-lg bg-zinc-700 flex items-center justify-center shrink-0">
                       <DeviceIcon size={16} className="text-zinc-400" />
@@ -2831,13 +2841,15 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <button
-                    onClick={() => deleteHwidDevice(String(hwidId))}
-                    className="ml-3 p-2 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-950/30 transition-colors shrink-0"
-                    title="Удалить устройство"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  {hwidValue && (
+                    <button
+                      onClick={() => deleteHwidDevice(hwidValue)}
+                      className="ml-3 p-2 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-950/30 transition-colors shrink-0"
+                      title="Удалить устройство"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
                 </div>
               );
             })}
