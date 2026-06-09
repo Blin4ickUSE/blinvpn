@@ -2106,8 +2106,6 @@ def extend_subscription():
             except (TypeError, ValueError):
                 return jsonify({'error': 'Некорректное число устройств'}), 400
             req = max(1, min(20, req))
-            if req < cur_dev:
-                return jsonify({'error': 'Нельзя уменьшить количество устройств при продлении'}), 400
             new_dev = req
         else:
             new_dev = cur_dev
