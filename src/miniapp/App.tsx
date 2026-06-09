@@ -1826,10 +1826,7 @@ export default function App() {
     if (!currentDevice || !telegramId) return;
 
     if (balance < TRAFFIC_RESET_PRICE) {
-      if (window.confirm(`Недостаточно средств. Стоимость: ${TRAFFIC_RESET_PRICE} ₽. Ваш баланс: ${balance} ₽. Пополнить баланс?`)) {
-        setTrafficResetModalOpen(false);
-        setView('topup');
-      }
+      alert(`Недостаточно средств. Стоимость: ${TRAFFIC_RESET_PRICE} ₽. Ваш баланс: ${balance} ₽.`);
       return;
     }
 
@@ -4482,4 +4479,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-    }
+                     }
