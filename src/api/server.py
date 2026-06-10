@@ -580,6 +580,31 @@ def miniapp_auth_relaxed() -> bool:
     return os.getenv('MINIAPP_ALLOW_UNAUTH', '').lower() in ('1', 'true', 'yes')
 
 
+def sync_user_from_request(telegram_id: int, tg_user: dict) -> None:
+    """
+    Синхронизирует username и full_name пользователя из Telegram initData.
+    Вызывается при каждом аутентифицированном запросе.
+    """
+    try:
+        username = (tg_user.get('username') or '').strip()
+        first_name = (tg_user.get('first_name') or '').strip()
+        last_name = (tg_user.get('last_name') or '').strip()
+        full_name = f"{first_name} {last_name}".strip() if last_name else first_name
+
+        user = database.get_user_by_telegram_id(telegram_id)
+        if not user:
+            return
+
+        if username and username != user.get('username'):
+            database.update_user_username(telegram_id, username)
+            logger.info('Username updated for %s: %s -> %s', telegram_id, user.get('username'), username)
+
+        if full_name and full_name != user.get('full_name'):
+            database.update_user_full_name(telegram_id, full_name)
+    except Exception as e:
+        logger.warning('sync_user_from_request error for %s: %s', telegram_id, e)
+
+
 def enforce_telegram_id_auth(telegram_id: int | None):
     """
     Проверяет, что telegram_id совпадает с пользователем из подписанного initData.
@@ -599,6 +624,8 @@ def enforce_telegram_id_auth(telegram_id: int | None):
                 request.remote_addr,
             )
             return jsonify({'error': 'Forbidden'}), 403
+        # Синхронизируем username/full_name при каждом аутентифицированном запросе
+        sync_user_from_request(int(telegram_id), tg_user)
         return None
 
     if miniapp_auth_relaxed():
@@ -917,6 +944,11 @@ def get_user_info():
         # Обновляем first_name если он изменился (всегда актуальное имя из Telegram)
         if first_name and first_name != user.get('full_name'):
             database.update_user_full_name(telegram_id, first_name)
+            user = database.get_user_by_telegram_id(telegram_id)
+
+        # Обновляем username если он изменился
+        if username and username != user.get('username'):
+            database.update_user_username(telegram_id, username)
             user = database.get_user_by_telegram_id(telegram_id)
 
     # Fallback auto-reconcile for CryptoPay before returning live balance.
@@ -3930,7 +3962,7 @@ def get_user_referrals():
     try:
         cursor.execute(
             """
-            SELECT id, username, full_name, registration_date
+            SELECT id, telegram_id, username, full_name, registration_date
             FROM users
             WHERE referred_by = ?
             ORDER BY registration_date DESC
@@ -4008,6 +4040,8 @@ def get_user_referrals():
             referrals.append(
                 {
                     "id": ref_id,
+                    "telegram_id": r["telegram_id"],
+                    "username": r["username"] or None,
                     "name": r["full_name"] or r["username"] or f"id{ref_id}",
                     "date": r["registration_date"] or "",
                     "spent": round(total_spent, 2),
