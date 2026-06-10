@@ -153,6 +153,8 @@ interface ReferralTransaction {
 
 interface ReferralUser {
   id: number;
+  telegram_id?: number;
+  username?: string | null;
   name: string;
   date: string;
   spent: number;
@@ -3766,7 +3768,20 @@ export default function App() {
             referralList.map(user => (
               <button 
                  key={user.id} 
-                 onClick={() => { const w = window as any; if (w.Telegram?.WebApp?.openTelegramLink) { w.Telegram.WebApp.openTelegramLink(`https://t.me/${BOT_USERNAME_MINI}`); } else { window.open(`https://t.me/${BOT_USERNAME_MINI}`, '_blank'); } }}
+                 onClick={() => {
+                   const tg = (window as any).Telegram?.WebApp;
+                   // Открываем профиль реферала если есть username, иначе просто его страницу по id
+                   const link = user.username
+                     ? `https://t.me/${user.username}`
+                     : `tg://user?id=${user.telegram_id ?? user.id}`;
+                   if (tg?.openTelegramLink) {
+                     tg.openTelegramLink(link);
+                   } else if (tg?.openLink) {
+                     tg.openLink(link);
+                   } else {
+                     window.open(link, '_blank');
+                   }
+                 }}
                  className="w-full bg-zinc-800/50 border border-zinc-800 p-3 rounded-xl flex justify-between items-center hover:bg-zinc-800 transition-colors"
               >
                 <div className="flex items-center gap-3">
@@ -4478,4 +4493,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-      }
+          }
