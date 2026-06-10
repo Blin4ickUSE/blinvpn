@@ -450,7 +450,6 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
 const WITHDRAW_METHODS = [
   { id: 'balance', name: 'На баланс', icon: <Wallet size={20} />, min: 1 },
   { id: 'card', name: 'На карту РФ', icon: <CreditCard size={20} />, min: 1000 },
-  { id: 'cryptobot', name: 'CryptoBot', icon: <img src="https://cryptologos.cc/logos/tether-usdt-logo.svg?v=026" className="w-5 h-5 invert" alt="USDT" />, min: 10 },
   { id: 'crypto', name: 'Криптовалюта', icon: <img src="https://cryptologos.cc/logos/tether-usdt-logo.svg?v=026" className="w-5 h-5 invert" alt="USDT" />, min: 300 },
 ];
 
@@ -3506,7 +3505,7 @@ export default function App() {
             {instructionPlainLinkMode ? (
               <button
                 type="button"
-                onClick={() => setInstructionPlainLinkMode(false)}
+                onClick={() => { setInstructionPlainLinkMode(false); setActivePlatform(successInstructionPlatform); }}
                 className="w-full py-2.5 px-3 rounded-xl text-sm font-semibold border border-zinc-700 bg-zinc-800/70 text-zinc-200 hover:bg-zinc-800 transition-colors"
               >
                 Установка на это устройство
@@ -3610,10 +3609,32 @@ export default function App() {
     );
   };
 
-  const HistoryView = () => (
+  const HistoryView = () => {
+    // Нормализуем и фильтруем историю
+    const normalizedHistory = history.map(item => {
+      const t = (item.type || '').toLowerCase();
+      const title = (item.title || '').toLowerCase();
+      // Определяем тип
+      const isTopup = item.amount > 0 || t.includes('topup') || t.includes('top_up') || t.includes('deposit') || t.includes('refill') || t.includes('referral_withdraw_to_balance') || t.includes('admin_credit') || t.includes('admin_topup') || title.includes('пополнение') || title.includes('зачислен') || title.includes('начислен');
+      const isPurchase = t.includes('purchase') || t.includes('buy') || t.includes('subscription') || t.includes('extend') || title.includes('покупка') || title.includes('подписка') || title.includes('продление') || title.includes('оплата');
+      const isDebit = item.amount < 0 && !isPurchase;
+
+      if (isTopup && item.amount > 0) {
+        return { ...item, title: 'Пополнение баланса', _normalized: 'topup' };
+      }
+      if (isPurchase) {
+        return { ...item, title: 'Покупка', _normalized: 'purchase' };
+      }
+      if (isDebit) {
+        return { ...item, title: 'Списание', _normalized: 'debit' };
+      }
+      return { ...item, _normalized: 'other' };
+    }).filter(item => item._normalized !== 'other');
+
+    return (
     <div className="min-h-full flex flex-col">
       <Header title="История" onBack={() => setView('home')} />
-      {history.length === 0 ? (
+      {normalizedHistory.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center py-20 text-center">
           <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center text-zinc-500 mb-4">
             <Clock size={28} />
@@ -3623,7 +3644,7 @@ export default function App() {
         </div>
       ) : (
         <div className="space-y-3">
-          {history.map(item => (
+          {normalizedHistory.map(item => (
             <div key={item.id} className="bg-zinc-800/50 p-4 rounded-xl border border-zinc-800 flex justify-between items-center">
               <div className="flex items-center gap-3">
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center ${item.amount > 0 ? 'bg-green-500/10 text-green-500' : (item.amount < 0 ? 'bg-red-500/10 text-red-500' : 'bg-zinc-700 text-zinc-400')}`}>
@@ -3642,8 +3663,8 @@ export default function App() {
         </div>
       )}
     </div>
-  );
-
+    );
+  };
   const ReferralDetailView = () => {
     if (!selectedReferral) return null;
     return (
@@ -3701,14 +3722,10 @@ export default function App() {
           <div className="text-zinc-500 text-sm mb-4">Пригласите друзей, чтобы заработать</div>
         )}
 
-        <div className="grid grid-cols-2 gap-4 border-t border-white/10 pt-4">
+        <div className="flex justify-center border-t border-white/10 pt-4">
           <div>
-            <div className="text-xl font-bold text-white">{referrals.count}</div>
-            <div className="text-xs text-zinc-500">Приглашено</div>
-          </div>
-          <div>
-            <div className="text-xl font-bold text-white">20%</div>
-            <div className="text-xs text-zinc-500">С покупок друга</div>
+            <div className="text-xl font-bold text-white text-center">{referrals.count}</div>
+            <div className="text-xs text-zinc-500 text-center">Приглашено</div>
           </div>
         </div>
         <p className="mt-4 text-left text-xs text-zinc-400 leading-relaxed border-t border-white/5 pt-3">
@@ -3735,25 +3752,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Стать партнёром */}
-      <button
-        onClick={() => setView('partner')}
-        className="partner-cta group w-full flex items-center gap-3 rounded-xl mb-6 p-4 text-left bg-orange-500/[0.07] border border-orange-500/25 hover:bg-orange-500/[0.12] active:scale-[0.99] transition-all"
-      >
-        <div className="shrink-0 w-10 h-10 rounded-lg bg-orange-500/15 border border-orange-500/25 flex items-center justify-center text-orange-400">
-          <Crown size={20} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-base font-bold text-white">Стать партнёром</span>
-            <span className="text-[10px] font-bold tracking-wide text-orange-300 bg-orange-500/15 px-1.5 py-0.5 rounded">до 40%</span>
-          </div>
-          <p className="text-xs text-zinc-400 leading-snug mt-0.5">
-            Рекламируйте BlinVPN в своём блоге и зарабатывайте до 40% от дохода
-          </p>
-        </div>
-        <ChevronRight size={18} className="text-orange-400/70 shrink-0 partner-cta-arrow" />
-      </button>
       
       <div>
         <h3 className="text-sm font-bold text-zinc-400 uppercase tracking-wider mb-3 px-1">Приглашенные пользователи</h3>
@@ -3768,7 +3766,7 @@ export default function App() {
             referralList.map(user => (
               <button 
                  key={user.id} 
-                 onClick={() => { setSelectedReferral(user); setView('referral_detail'); }}
+                 onClick={() => { const w = window as any; if (w.Telegram?.WebApp?.openTelegramLink) { w.Telegram.WebApp.openTelegramLink(`https://t.me/${BOT_USERNAME_MINI}`); } else { window.open(`https://t.me/${BOT_USERNAME_MINI}`, '_blank'); } }}
                  className="w-full bg-zinc-800/50 border border-zinc-800 p-3 rounded-xl flex justify-between items-center hover:bg-zinc-800 transition-colors"
               >
                 <div className="flex items-center gap-3">
@@ -4228,11 +4226,6 @@ export default function App() {
         {withdrawState.step === 1 && (
           <div className="space-y-4">
             <div className="text-sm text-zinc-400">Доступно: <span className="text-green-500 font-bold">{referrals.partnerBalance.toFixed(2)} ₽</span></div>
-            {referrals.partnerBalance < 1000 && (
-              <div className="p-3 bg-yellow-900/20 border border-yellow-500/30 rounded-xl text-yellow-400 text-sm">
-                Минимумы вывода: баланс — 1₽, карта РФ — 1000₽, CryptoBot — 10₽, криптовалюта — 300₽.
-              </div>
-            )}
             <input
               type="number"
               placeholder="Сумма вывода"
@@ -4289,13 +4282,19 @@ export default function App() {
             
             {withdrawState.method === 'card' && (
               <>
-                <div className="text-sm text-zinc-400 mb-2">Заполните реквизиты:</div>
+                <div className="text-sm text-zinc-400 mb-2">Номер карты (16 цифр):</div>
                 <input
                   type="text"
-                  placeholder="Номер карты"
+                  inputMode="numeric"
+                  placeholder="0000 0000 0000 0000"
                   value={withdrawState.cardNumber}
-                  onChange={(e) => setWithdrawState({ ...withdrawState, cardNumber: e.target.value })}
-                  className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white mb-2 focus:border-orange-500 outline-none"
+                  maxLength={19}
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/\D/g, '').slice(0, 16);
+                    const formatted = digits.replace(/(.{4})/g, '$1 ').trim();
+                    setWithdrawState({ ...withdrawState, cardNumber: formatted });
+                  }}
+                  className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white mb-2 focus:border-orange-500 outline-none font-mono tracking-widest"
                 />
               </>
             )}
@@ -4479,4 +4478,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-                     }
+      }
