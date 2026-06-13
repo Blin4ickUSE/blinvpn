@@ -2151,11 +2151,11 @@ def extend_subscription():
         price = float(server_price)
 
         if user.get('referred_by') and not database.user_has_paid_subscription_purchase(int(user_id)):
-            price = round(price * 0.9, 2)
+            price = round(price * 0.9)
 
         if discount > 0 and price and float(price) > 0:
             try:
-                price = round(float(price) * (100 - discount) / 100, 2)
+                price = round(float(price) * (100 - discount) / 100)
             except Exception:
                 pass
 
@@ -2408,11 +2408,11 @@ def create_subscription():
         price = float(server_price)
 
         if user.get('referred_by') and not database.user_has_paid_subscription_purchase(int(user_id)):
-            price = round(price * 0.9, 2)
+            price = round(price * 0.9)
 
         if discount > 0:
             try:
-                price = round(float(price) * (100 - discount) / 100, 2)
+                price = round(float(price) * (100 - discount) / 100)
             except Exception:
                 pass
 
