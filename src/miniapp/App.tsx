@@ -425,9 +425,9 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
     id: 'platega_sbp',
     name: 'СБП',
     icon: <img src="https://i.imgur.com/pu9w7tE.png" className="w-8 h-8 object-contain" alt="СБП" />,
-    feePercent: 6.5
+    feePercent: 6
   },
-  { id: 'platega_card_ru', name: 'Российские карты', icon: <img src="https://i.imgur.com/CE6Q9yJ.png" className="w-8 h-8 object-contain" alt="МИР" />, feePercent: 8 },
+  { id: 'platega_card_ru', name: 'Российские карты', icon: <img src="https://i.imgur.com/CE6Q9yJ.png" className="w-8 h-8 object-contain" alt="МИР" />, feePercent: 7 },
   { id: 'platega_card_intl', name: 'Иностранные карты', icon: <img src="https://upload.wikimedia.org/wikipedia/commons/2/2a/Mastercard-logo.svg" className="w-8 h-8 object-contain" alt="Card" />, feePercent: 15 },
   {
     id: 'tg_stars',
