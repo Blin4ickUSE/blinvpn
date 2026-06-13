@@ -4207,7 +4207,7 @@ export default function App() {
         <div className="space-y-4">
           <p className="text-zinc-300">
             Сбросить счётчик трафика для подписки <b>#{currentDevice?.id}</b>?
-            Стоимость: <b>{TRAFFIC_RESET_PRICE} ₽</b>. Лимит останется 1 ТБ.
+            Стоимость: <b>{TRAFFIC_RESET_PRICE} ₽</b>. Лимит останется 2 ТБ.
           </p>
           <div className="grid grid-cols-2 gap-3">
             <Button variant="secondary" onClick={() => setTrafficResetModalOpen(false)} disabled={trafficResetLoading}>

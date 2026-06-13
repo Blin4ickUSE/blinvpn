@@ -75,8 +75,8 @@ class TrafficLimitStrategy(Enum):
     MONTH_ROLLING = "MONTH_ROLLING"
 
 
-# 1 ТБ = 1024 ГБ (без бонуса за доп. устройства)
-VPN_TRAFFIC_LIMIT_BYTES = 1024 * (1024 ** 3)
+# 2 ТБ = 2048 ГБ (без бонуса за доп. устройства)
+VPN_TRAFFIC_LIMIT_BYTES = 2048 * (1024 ** 3)
 TRAFFIC_RESET_PRICE_RUB = 49
 
 
@@ -704,6 +704,11 @@ def get_remnawave_api():
         secret_key=secret_key,
         caddy_token=caddy_token
     )
+
+
+def format_subscription_username(telegram_id: int, key_id: int) -> str:
+    """Имя подписки в Remnawave: TELEGRAMID_KEYID (например 11111111_280)."""
+    return f"{int(telegram_id)}_{int(key_id)}"
 
 
 # Для обратной совместимости

@@ -305,25 +305,34 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
                 squad_uuids = database.get_default_squads(plan_type)
         
         logger.info(f"Creating subscription for {telegram_id}, plan_type={plan_type}, squads={squad_uuids}")
-        
-        # Генерируем уникальный username для каждой новой подписки
-        # Формат: username_telegramid_timestamp
-        import time
-        timestamp = int(time.time() * 1000) % 1000000  # Последние 6 цифр timestamp
-        base_username = sanitize_username(username, telegram_id)
-        unique_username = f"{base_username}_{timestamp}"
-        
+
+        assigned_squad_uuid = squad_uuids[0] if squad_uuids else None
+        expiry_date = (datetime.now() + timedelta(days=days)).isoformat()
+
         traffic_strategy = (
             remnawave.TrafficLimitStrategy.NO_RESET
             if plan_type == 'trial' or not (traffic_limit or 0)
             else remnawave.TrafficLimitStrategy.MONTH
         )
 
-        # Создаем нового пользователя в Remnawave с уникальным username
+        # Резервируем key_id в БД, чтобы имя подписки было TELEGRAMID_KEYID
+        conn = database.get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO vpn_keys (user_id, key_uuid, key_config, status, expiry_date,
+                                 devices_limit, traffic_limit, squad_uuid, plan_type)
+            VALUES (?, NULL, NULL, 'Pending', ?, ?, ?, ?, ?)
+        """, (user_id, expiry_date, devices_limit, traffic_limit, assigned_squad_uuid, plan_type))
+        key_id = cursor.lastrowid
+        conn.commit()
+
+        subscription_username = remnawave.format_subscription_username(telegram_id, key_id)
+        remnawave_user = None
+
         try:
             remnawave_user = remnawave.remnawave_api.create_user_with_params(
                 telegram_id=telegram_id,
-                username=unique_username,
+                username=subscription_username,
                 days=days,
                 traffic_limit_bytes=traffic_limit or 0,
                 hwid_device_limit=int(devices_limit),
@@ -332,47 +341,34 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
             )
         except Exception as create_error:
             error_msg = str(create_error).lower()
-            # Если username уже существует, пробуем с еще более уникальным именем
             if 'already exists' in error_msg or 'a019' in error_msg:
-                import random
-                unique_username = f"{base_username}_{telegram_id}_{random.randint(1000, 9999)}"
-                logger.info(f"Username collision, trying {unique_username}")
-                remnawave_user = remnawave.remnawave_api.create_user_with_params(
-                    telegram_id=telegram_id,
-                    username=unique_username,
-                    days=days,
-                    traffic_limit_bytes=traffic_limit or 0,
-                    hwid_device_limit=int(devices_limit),
-                    active_internal_squads=squad_uuids if squad_uuids else None,
-                    traffic_limit_strategy=traffic_strategy,
+                logger.warning(
+                    'Remnawave username collision for %s, key_id=%s',
+                    subscription_username, key_id,
                 )
-            else:
-                raise create_error
-        
+            cursor.execute("DELETE FROM vpn_keys WHERE id = ? AND key_uuid IS NULL", (key_id,))
+            conn.commit()
+            conn.close()
+            raise create_error
+
         if not remnawave_user:
+            cursor.execute("DELETE FROM vpn_keys WHERE id = ? AND key_uuid IS NULL", (key_id,))
+            conn.commit()
+            conn.close()
             logger.error(f"Failed to create user in Remnawave: {telegram_id}")
             return None
-        
-        # Получаем uuid - может быть dataclass или dict
+
         user_uuid = remnawave_user.uuid if hasattr(remnawave_user, 'uuid') else remnawave_user.get('uuid')
         subscription_url = remnawave_user.subscription_url if hasattr(remnawave_user, 'subscription_url') else remnawave_user.get('subscription_url', '')
-        
-        # Подписка создана при создании пользователя
+
         subscription = remnawave_user
-        
-        if not subscription:
-            logger.error(f"Failed to create subscription: {user_uuid}")
-            return None
-        
-        # Получаем subscription_url из subscription если доступен
+
         if subscription:
             subscription_url = subscription.subscription_url if hasattr(subscription, 'subscription_url') else (subscription.get('subscription_url') if isinstance(subscription, dict) else subscription_url)
-        
-        # Конвертируем subscription в JSON-сериализуемый формат
+
         subscription_data = None
         if subscription:
             if hasattr(subscription, '__dict__'):
-                # Это dataclass - конвертируем в dict
                 subscription_data = {
                     'uuid': subscription.uuid if hasattr(subscription, 'uuid') else None,
                     'username': subscription.username if hasattr(subscription, 'username') else None,
@@ -385,60 +381,14 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
                 subscription_data = subscription
             else:
                 subscription_data = str(subscription)
-        
-        # Сохраняем ключ в БД
-        conn = database.get_db_connection()
-        cursor = conn.cursor()
-        
-        # Проверяем существует ли уже ключ для этого пользователя
-        cursor.execute("SELECT id, expiry_date FROM vpn_keys WHERE user_id = ? AND key_uuid = ?", (user_id, user_uuid))
-        existing_key = cursor.fetchone()
-        
-        # Определяем squad_uuid для сохранения (первый из списка)
-        assigned_squad_uuid = squad_uuids[0] if squad_uuids else None
-        
-        key_id = None
-        if existing_key:
-            # Обновляем существующий ключ
-            key_id = existing_key['id']
-            current_expiry = existing_key['expiry_date']
-            
-            # Рассчитываем новую дату истечения корректно
-            if current_expiry:
-                try:
-                    if isinstance(current_expiry, str):
-                        expiry_dt = datetime.fromisoformat(current_expiry.replace('Z', '+00:00').replace('+00:00', ''))
-                    else:
-                        expiry_dt = current_expiry
-                    
-                    # Если ключ истёк - от текущей даты, иначе добавляем к существующей
-                    if expiry_dt < datetime.now():
-                        new_expiry_dt = datetime.now() + timedelta(days=days)
-                    else:
-                        new_expiry_dt = expiry_dt + timedelta(days=days)
-                except:
-                    new_expiry_dt = datetime.now() + timedelta(days=days)
-            else:
-                new_expiry_dt = datetime.now() + timedelta(days=days)
-            
-            expiry_date = new_expiry_dt.isoformat()
-            
-            cursor.execute("""
-                UPDATE vpn_keys SET status = 'Active', expiry_date = ?, traffic_limit = ?, 
-                       key_config = ?, squad_uuid = ?, plan_type = ?, devices_limit = ?
-                WHERE id = ?
-            """, (expiry_date, traffic_limit, subscription_url, assigned_squad_uuid, plan_type, devices_limit, key_id))
-        else:
-            # Создаем новый ключ
-            expiry_date = (datetime.now() + timedelta(days=days)).isoformat()
-            cursor.execute("""
-                INSERT INTO vpn_keys (user_id, key_uuid, key_config, status, expiry_date, 
-                                     devices_limit, traffic_limit, squad_uuid, plan_type)
-                VALUES (?, ?, ?, 'Active', ?, ?, ?, ?, ?)
-            """, (user_id, user_uuid, subscription_url, expiry_date, devices_limit,
-                  traffic_limit, assigned_squad_uuid, plan_type))
-            key_id = cursor.lastrowid
-        
+
+        cursor.execute("""
+            UPDATE vpn_keys SET key_uuid = ?, key_config = ?, status = 'Active',
+                   expiry_date = ?, traffic_limit = ?, squad_uuid = ?, plan_type = ?,
+                   devices_limit = ?
+            WHERE id = ?
+        """, (user_uuid, subscription_url, expiry_date, traffic_limit, assigned_squad_uuid,
+              plan_type, devices_limit, key_id))
         conn.commit()
         conn.close()
 

@@ -2465,7 +2465,7 @@ def create_subscription():
         traffic_limit_bytes = int(10 * (1024 ** 3))
         plan_type = 'trial'
     else:
-        # Единая подписка: ровно 1 ТБ (1024 ГБ), сброс трафика раз в месяц
+        # Единая подписка: 2 ТБ (2048 ГБ), сброс трафика раз в месяц
         traffic_limit_bytes = remnawave.VPN_TRAFFIC_LIMIT_BYTES
         plan_type = 'vpn'
     
@@ -3572,15 +3572,6 @@ def create_key():
         return jsonify({'error': 'Пользователь не найден'}), 404
     
     telegram_id = user.get('telegram_id')
-    raw_username = user.get('username') or f"user_{telegram_id}"
-    
-    # Санитизация username для Remnawave (только буквы, цифры, _ и -)
-    import re
-    username = re.sub(r'[^a-zA-Z0-9_-]', '', raw_username)
-    if not username:
-        username = f"user_{telegram_id}"
-    if username[0] in '_-':
-        username = f"u{username}"
     
     # Триальные настройки
     if is_trial:
@@ -3593,87 +3584,52 @@ def create_key():
     try:
         from src.api import remnawave
         
-        # Создаем или получаем пользователя в Remnawave
-        remnawave_user = None
-        existing_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
-        
-        if existing_users and len(existing_users) > 0:
-            # Пользователь уже существует - обновляем подписку
-            remnawave_user = existing_users[0]
-            expire_at = datetime.now() + timedelta(days=days)
-            
-            # Обновляем пользователя
-            logger.info(f"Updating Remnawave user {remnawave_user.uuid} with squads: {squad_uuids}")
-            updated_user = remnawave.remnawave_api.update_user_sync(
-                uuid=remnawave_user.uuid,
-                expire_at=expire_at,
-                traffic_limit_bytes=traffic_bytes,
-                hwid_device_limit=devices,
-                active_internal_squads=squad_uuids if squad_uuids else None
-            )
-            remnawave_user = updated_user
-        else:
-            # Создаём нового пользователя в Remnawave с санитизированным username
-            logger.info(f"Creating Remnawave user {username} with squads: {squad_uuids}")
-            try:
-                remnawave_user = remnawave.remnawave_api.create_user_with_params(
-                    telegram_id=telegram_id,
-                    username=username,
-                    days=days,
-                    traffic_limit_bytes=traffic_bytes,
-                    hwid_device_limit=devices,
-                    active_internal_squads=squad_uuids if squad_uuids else None
-                )
-            except Exception as create_error:
-                error_msg = str(create_error).lower()
-                # Если username уже существует - добавляем telegram_id для уникальности
-                if 'already exists' in error_msg or 'a019' in error_msg:
-                    unique_username = f"{username}_{telegram_id}"
-                    logger.info(f"Username {username} already exists, trying {unique_username}")
-                    remnawave_user = remnawave.remnawave_api.create_user_with_params(
-                        telegram_id=telegram_id,
-                        username=unique_username,
-                        days=days,
-                        traffic_limit_bytes=traffic_bytes,
-                        hwid_device_limit=devices,
-                        active_internal_squads=squad_uuids if squad_uuids else None
-                    )
-                else:
-                    raise create_error
-        
-        if not remnawave_user:
-            return jsonify({'error': 'Не удалось создать пользователя в Remnawave'}), 500
-        
-        # Сохраняем или обновляем ключ в БД
+        expiry_date = format_datetime_msk(datetime.now() + timedelta(days=days))
+        assigned_squad_uuid = squad_uuids[0] if squad_uuids else None
+
         conn = database.get_db_connection()
         cursor = conn.cursor()
-        
-        expiry_date = format_datetime_msk(datetime.now() + timedelta(days=days))
+        cursor.execute("""
+            INSERT INTO vpn_keys (user_id, key_uuid, key_config, status, expiry_date,
+                                 devices_limit, traffic_limit, squad_uuid, plan_type)
+            VALUES (?, NULL, NULL, 'Pending', ?, ?, ?, ?, ?)
+        """, (user_id, expiry_date, devices, traffic_bytes, assigned_squad_uuid, plan_type))
+        key_id = cursor.lastrowid
+        conn.commit()
+
+        subscription_username = remnawave.format_subscription_username(telegram_id, key_id)
+        remnawave_user = None
+
+        try:
+            logger.info(f"Creating Remnawave user {subscription_username} with squads: {squad_uuids}")
+            remnawave_user = remnawave.remnawave_api.create_user_with_params(
+                telegram_id=telegram_id,
+                username=subscription_username,
+                days=days,
+                traffic_limit_bytes=traffic_bytes,
+                hwid_device_limit=devices,
+                active_internal_squads=squad_uuids if squad_uuids else None,
+            )
+        except Exception as create_error:
+            cursor.execute("DELETE FROM vpn_keys WHERE id = ? AND key_uuid IS NULL", (key_id,))
+            conn.commit()
+            conn.close()
+            raise create_error
+
+        if not remnawave_user:
+            cursor.execute("DELETE FROM vpn_keys WHERE id = ? AND key_uuid IS NULL", (key_id,))
+            conn.commit()
+            conn.close()
+            return jsonify({'error': 'Не удалось создать пользователя в Remnawave'}), 500
+
         key_uuid = remnawave_user.uuid if hasattr(remnawave_user, 'uuid') else remnawave_user.get('uuid')
         subscription_url = remnawave_user.subscription_url if hasattr(remnawave_user, 'subscription_url') else remnawave_user.get('subscription_url', '')
-        
-        # Проверяем существует ли уже ключ для этого пользователя
-        cursor.execute("SELECT id FROM vpn_keys WHERE user_id = ? AND key_uuid = ?", (user_id, key_uuid))
-        existing_key = cursor.fetchone()
-        
-        if existing_key:
-            # Обновляем существующий ключ
-            cursor.execute("""
-                UPDATE vpn_keys
-                SET status = 'Active', expiry_date = ?, traffic_limit = ?, devices_limit = ?, 
-                    key_config = ?
-                WHERE id = ?
-            """, (expiry_date, traffic_bytes, devices, subscription_url, existing_key['id']))
-            key_id = existing_key['id']
-        else:
-            # Создаем новый ключ
-            cursor.execute("""
-                INSERT INTO vpn_keys (user_id, key_uuid, key_config, status, expiry_date, 
-                                    devices_limit, traffic_limit, plan_type)
-                VALUES (?, ?, ?, 'Active', ?, ?, ?, ?)
-            """, (user_id, key_uuid, subscription_url, expiry_date, devices, traffic_bytes, plan_type))
-            key_id = cursor.lastrowid
-        
+
+        cursor.execute("""
+            UPDATE vpn_keys SET key_uuid = ?, key_config = ?, status = 'Active',
+                   expiry_date = ?, traffic_limit = ?, devices_limit = ?
+            WHERE id = ?
+        """, (key_uuid, subscription_url, expiry_date, traffic_bytes, devices, key_id))
         conn.commit()
         conn.close()
         
