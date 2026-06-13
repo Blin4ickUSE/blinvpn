@@ -2,14 +2,15 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <meta name="description" content="BlinVPN - безопасный и быстрый VPN-сервис" />
-    <title>BlinVPN - ваш выбор в свободном интернете</title>
-    <link rel="icon" href="/opt/blinvpn/assets/logo.png" type="image/png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="BlinVPN — безопасный и быстрый VPN. Свободный интернет от 67 ₽ в месяц." />
+    <meta name="theme-color" content="#0d0d11" />
+    <title>BlinVPN — свободный интернет от 67 ₽/мес</title>
+    <link rel="icon" href="assets/logo.png" type="image/png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap"
       rel="stylesheet"
     />
     <link
@@ -19,1088 +20,1050 @@
     <script type="application/ld+json">
 {
   "@context": "https://schema.org",
-  "@type": "WebPage",
-  "name": "BlinVPN - Тарифы",
-  "description": "Безопасный и быстрый VPN-сервис. Тарифы от 67₽/мес.",
-  "offers": [
-    {
-      "@type": "Offer",
-      "name": "Базовый",
-      "price": "100",
-      "priceCurrency": "RUB",
-      "description": "Безлимитный трафик, 3 устройства, AES-256 шифрование"
-    },
-    {
-      "@type": "Offer",
-      "name": "Оптимальный",
-      "price": "180",
-      "priceCurrency": "RUB",
-      "description": "Безлимитный трафик, 3 устройства, AES-256 шифрование"
-    },
-    {
-      "@type": "Offer",
-      "name": "Продвинутый",
-      "price": "260",
-      "priceCurrency": "RUB",
-      "description": "Безлимитный трафик, 3 устройства, AES-256 шифрование"
-    }
-  ]
+  "@type": "Product",
+  "name": "BlinVPN",
+  "description": "Безопасный и быстрый VPN-сервис. Тарифы от 67 ₽/мес при оплате за год.",
+  "brand": { "@type": "Brand", "name": "BlinVPN" },
+  "offers": {
+    "@type": "AggregateOffer",
+    "priceCurrency": "RUB",
+    "lowPrice": "99",
+    "highPrice": "8399",
+    "offerCount": "4"
+  }
 }
-</script>
+    </script>
     <style>
       :root {
-        --bg: #140701;
-        --bg-soft: #1f0a02;
-        --card: rgba(31, 13, 6, 0.72);
-        --border: rgba(255, 140, 45, 0.22);
-        --text: #fef8f3;
-        --muted: #e0b596;
-        --accent: #ff7a1a;
-        --accent-2: #ffb36a;
+        --ink: #0d0d11;
+        --ink-1: #121218;
+        --ink-2: #17171f;
+        --ink-3: #1f1f29;
+        --line: rgba(255, 255, 255, 0.08);
+        --line-2: rgba(255, 255, 255, 0.05);
+        --line-warm: rgba(255, 122, 38, 0.26);
+        --text: #f4f1ee;
+        --text-dim: #c9c4bd;
+        --muted: #938d85;
+        --orange: #ff6a1a;
+        --orange-2: #ff8a3d;
+        --ember: #ffb877;
+        --glow: rgba(255, 106, 26, 0.40);
+        --radius: 16px;
+        --radius-lg: 22px;
+        --maxw: 1140px;
+        --header-h: 66px;
+
+        --font-display: "Unbounded", "Inter", sans-serif;
+        --font-body: "Inter", system-ui, sans-serif;
+        --font-mono: "JetBrains Mono", ui-monospace, monospace;
       }
 
       * { box-sizing: border-box; }
       html { scroll-behavior: smooth; }
       html, body { margin: 0; padding: 0; }
       body {
-        font-family: "Manrope", sans-serif;
+        font-family: var(--font-body);
         color: var(--text);
-        line-height: 1.45;
+        line-height: 1.5;
         min-height: 100vh;
-        background:
-          radial-gradient(950px circle at 50% -5%, rgba(255, 128, 35, 0.24), transparent 60%),
-          radial-gradient(850px circle at 50% 20%, rgba(255, 110, 22, 0.09), transparent 70%),
-          linear-gradient(180deg, #1a0701 0%, #110501 100%);
+        background: var(--ink);
+        -webkit-font-smoothing: antialiased;
+        overflow-x: hidden;
       }
 
-      .grid {
+      /* Calm, single ambient warmth — no swirling effects */
+      .ambient {
         position: fixed;
         inset: 0;
+        z-index: 0;
         pointer-events: none;
-        opacity: 0.62;
-        background-image:
-          linear-gradient(rgba(255, 112, 36, 0.1) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255, 112, 36, 0.1) 1px, transparent 1px);
-        background-size: 46px 46px;
-        mask-image: radial-gradient(circle at center, black 35%, transparent 88%);
-        animation: gridPulse 4.5s ease-in-out infinite;
-      }
-      .grid::before {
-        content: "";
-        position: absolute;
-        inset: -20%;
         background:
-          radial-gradient(circle at 18% 28%, rgba(255, 138, 48, 0.3), transparent 54%),
-          radial-gradient(circle at 82% 70%, rgba(255, 168, 92, 0.22), transparent 56%);
-        filter: blur(32px);
-        animation: bgFloat 11s ease-in-out infinite alternate;
+          radial-gradient(720px 460px at 78% -8%, rgba(255, 106, 26, 0.18), transparent 62%),
+          radial-gradient(900px 600px at 10% 4%, rgba(255, 138, 61, 0.07), transparent 64%);
       }
-      .grid::after {
+      .ambient::after {
         content: "";
         position: absolute;
-        inset: -35%;
-        background: conic-gradient(
-          from 0deg at 50% 50%,
-          rgba(255, 132, 44, 0.0) 0deg,
-          rgba(255, 132, 44, 0.22) 80deg,
-          rgba(255, 170, 90, 0.0) 170deg,
-          rgba(255, 132, 44, 0.22) 260deg,
-          rgba(255, 170, 90, 0.0) 360deg
-        );
-        mix-blend-mode: screen;
-        filter: blur(64px);
-        animation: bgSpin 18s linear infinite;
-      }
-      @keyframes bgFloat {
-        0% { transform: translate3d(-2%, -1%, 0) scale(1); }
-        100% { transform: translate3d(2%, 1.5%, 0) scale(1.04); }
-      }
-      @keyframes bgSpin {
-        from { transform: rotate(0deg) scale(1.02); }
-        to { transform: rotate(360deg) scale(1.06); }
-      }
-      @keyframes gridPulse {
-        0%, 100% { opacity: 0.54; }
-        50% { opacity: 0.68; }
+        inset: 0;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+        background-size: 64px 64px;
+        mask-image: radial-gradient(circle at 50% 0%, black, transparent 78%);
       }
 
-      .container {
-        width: min(1120px, 92%);
-        margin: 0 auto;
+      .container { width: min(var(--maxw), 90%); margin: 0 auto; }
+
+      a { color: inherit; }
+      ::selection { background: rgba(255, 106, 26, 0.32); color: #fff; }
+
+      .material-symbols-outlined {
+        font-family: "Material Symbols Outlined";
+        font-weight: normal;
+        font-style: normal;
+        line-height: 1;
+        letter-spacing: normal;
+        text-transform: none;
+        white-space: nowrap;
+        direction: ltr;
+        -webkit-font-feature-settings: "liga";
+        font-feature-settings: "liga";
+        -webkit-font-smoothing: antialiased;
+        font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
       }
 
+      /* ---------- Topbar ---------- */
       .topbar {
         position: sticky;
         top: 0;
-        z-index: 10;
-        backdrop-filter: blur(8px);
-        background: rgba(19, 7, 2, 0.62);
-        border-bottom: 1px solid var(--border);
+        z-index: 50;
+        backdrop-filter: blur(12px);
+        background: rgba(13, 13, 17, 0.72);
+        border-bottom: 1px solid var(--line);
       }
       .topbar-inner {
-        min-height: 64px;
+        min-height: var(--header-h);
         display: flex;
         align-items: center;
         justify-content: space-between;
+        gap: 16px;
       }
       .brand {
         display: inline-flex;
-        gap: 10px;
+        gap: 11px;
         align-items: center;
+        font-family: var(--font-display);
         font-weight: 700;
-        font-size: 14px;
+        font-size: 17px;
+        letter-spacing: -0.01em;
       }
-      .brand-badge {
-        width: 22px;
-        height: 22px;
-        border-radius: 7px;
-        display: grid;
-        place-items: center;
-        font-size: 12px;
-        background: linear-gradient(135deg, #ffd194, #ff9d2f);
-        color: #391700;
+      .brand img {
+        width: 30px; height: 30px; border-radius: 8px; object-fit: contain;
+        box-shadow: 0 0 0 1px var(--line);
       }
-      .top-actions { display: flex; gap: 10px; align-items: center; }
+      .top-actions { display: flex; gap: 12px; align-items: center; }
       .nav {
         display: flex;
-        gap: 8px;
+        gap: 2px;
         align-items: center;
-        padding: 6px;
-        border: 1px solid rgba(255, 153, 72, 0.2);
-        border-radius: 999px;
-        background: rgba(26, 10, 4, 0.7);
-        backdrop-filter: blur(6px);
       }
       .nav a {
-        color: #ffd6b8;
+        color: var(--text-dim);
         text-decoration: none;
-        font-size: 13px;
-        padding: 8px 12px;
-        border-radius: 999px;
-        opacity: 0.86;
-        transition: color 0.2s ease, opacity 0.2s ease, background 0.2s ease;
+        font-size: 14px;
+        font-weight: 500;
+        padding: 8px 13px;
+        border-radius: 9px;
+        transition: color 0.18s ease, background 0.18s ease;
       }
-      .nav a:hover {
-        opacity: 1;
-        color: #fff2e7;
-        background: rgba(255, 139, 52, 0.14);
-      }
-      .nav a.active {
-        opacity: 1;
-        color: #fff8f2;
-        background: rgba(255, 139, 52, 0.22);
-      }
+      .nav a:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+      .nav a.active { color: var(--ember); }
+
+      /* ---------- Buttons ---------- */
       .btn {
+        --b: var(--orange);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
         border: 0;
         border-radius: 12px;
-        padding: 11px 20px;
-        font-size: 14px;
-        font-weight: 700;
+        padding: 12px 20px;
+        font-family: var(--font-body);
+        font-size: 14.5px;
+        font-weight: 600;
         cursor: pointer;
-        color: #2d1202;
-        background: linear-gradient(135deg, var(--accent), var(--accent-2));
-        box-shadow: 0 10px 26px rgba(255, 122, 26, 0.48);
-        transition: transform 0.2s ease, filter 0.2s ease, box-shadow 0.22s ease;
-      }
-      .btn:hover {
-        filter: brightness(1.08);
-        transform: translateY(-2px);
-        box-shadow: 0 14px 34px rgba(255, 122, 26, 0.56);
-      }
-      .btn:active { transform: translateY(1px); }
-      .btn-tg {
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
         text-decoration: none;
+        color: #1a0c02;
+        background: linear-gradient(135deg, var(--orange-2), var(--orange));
+        box-shadow: 0 8px 22px rgba(255, 106, 26, 0.32);
+        transition: transform 0.16s ease, box-shadow 0.2s ease, filter 0.16s ease;
       }
-      .btn:focus-visible,
-      .nav a:focus-visible,
-      .faq-q:focus-visible,
-      .footer-links a:focus-visible,
-      .to-top:focus-visible {
-        outline: 2px solid rgba(255, 180, 110, 0.85);
-        outline-offset: 2px;
-      }
-      .btn.btn-soft {
-        color: #ffd8bd;
-        background: rgba(255, 145, 58, 0.12);
-        border: 1px solid rgba(255, 145, 58, 0.28);
+      .btn:hover { transform: translateY(-2px); box-shadow: 0 12px 30px rgba(255, 106, 26, 0.42); filter: brightness(1.04); }
+      .btn:active { transform: translateY(0); }
+      .btn.ghost {
+        color: var(--text);
+        background: transparent;
+        border: 1px solid var(--line-warm);
         box-shadow: none;
       }
-      .btn.btn-soft:hover {
-        background: rgba(255, 145, 58, 0.2);
-        box-shadow: 0 10px 22px rgba(255, 122, 26, 0.2);
+      .btn.ghost:hover { background: rgba(255, 106, 26, 0.08); border-color: rgba(255, 122, 38, 0.5); filter: none; }
+      .btn.block { width: 100%; }
+      .btn svg { flex-shrink: 0; }
+
+      :focus-visible { outline: 2px solid var(--ember); outline-offset: 3px; border-radius: 6px; }
+
+      /* ---------- Sections ---------- */
+      main { position: relative; z-index: 1; }
+      section { scroll-margin-top: calc(var(--header-h) + 18px); }
+
+      .eyebrow {
+        font-family: var(--font-mono);
+        font-size: 12.5px;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--orange-2);
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+      }
+      .eyebrow::before {
+        content: "";
+        width: 22px; height: 1px;
+        background: var(--orange);
       }
 
-      section { position: relative; z-index: 1; scroll-margin-top: 0; }
-      .panel {
-        min-height: calc(100vh - 64px);
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        padding: 92px 0 34px;
+      .section-head { margin-bottom: 40px; max-width: 620px; }
+      .section-head.center { margin-left: auto; margin-right: auto; text-align: center; }
+      .section-title {
+        font-family: var(--font-display);
+        font-weight: 700;
+        font-size: clamp(28px, 4.2vw, 44px);
+        line-height: 1.08;
+        letter-spacing: -0.02em;
+        margin: 16px 0 12px;
       }
-      .hero {
-        text-align: center;
+      .section-sub { color: var(--muted); font-size: 16.5px; margin: 0; }
+
+      /* ---------- Hero ---------- */
+      .hero { padding: clamp(48px, 8vw, 96px) 0 56px; }
+      .hero-grid {
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        gap: 52px;
         align-items: center;
       }
-      .chip {
-        display: inline-flex;
-        align-self: center;
-        width: fit-content;
-        border: 1px solid var(--border);
-        border-radius: 99px;
-        padding: 5px 11px;
-        font-size: 11px;
-        color: #f3b37f;
-        background: rgba(255, 140, 52, 0.08);
+      .hero h1 {
+        font-family: var(--font-display);
+        font-weight: 800;
+        font-size: clamp(36px, 6vw, 66px);
+        line-height: 1.02;
+        letter-spacing: -0.025em;
+        margin: 22px 0 20px;
       }
-      h1 {
-        font-size: clamp(34px, 6vw, 58px);
-        line-height: 1.04;
-        margin: 20px auto 14px;
-        max-width: 760px;
+      .hero h1 .accent {
+        color: var(--orange);
+        position: relative;
+        white-space: nowrap;
       }
-      .accent { color: #ff8d3a; }
-      .hero p {
-        max-width: 610px;
-        margin: 0 auto 26px;
-        color: var(--muted);
+      .hero-lead {
+        color: var(--text-dim);
         font-size: 18px;
+        max-width: 480px;
+        margin: 0 0 30px;
       }
+      .hero-cta { display: flex; gap: 12px; flex-wrap: wrap; }
       .hero-note {
-        margin-top: 12px;
-        font-size: 13px;
-        color: #d7aa87;
-      }
-      .hero-stats {
-        margin-top: 38px;
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 14px;
-      }
-      .hero-stat {
-        padding: 8px 6px;
-        transition: transform 0.22s ease;
-      }
-      .hero-stat:hover {
-        transform: translateY(-2px);
-      }
-      .hero-stat strong {
-        display: block;
-        font-size: 32px;
-        line-height: 1.05;
-        color: #ffad68;
-        letter-spacing: 0.3px;
-        text-shadow: 0 0 18px rgba(255, 130, 40, 0.28);
-      }
-      .hero-stat span {
-        font-size: 13px;
-        color: #d8ab8a;
-      }
-
-      .section-title {
-        text-align: center;
-        font-size: clamp(28px, 4vw, 42px);
-        margin: 18px 0 10px;
-      }
-      .section-sub {
-        text-align: center;
+        margin-top: 22px;
+        font-family: var(--font-mono);
+        font-size: 12.5px;
         color: var(--muted);
-        margin: 0 auto 30px;
-        max-width: 680px;
+        letter-spacing: 0.01em;
+      }
+      .hero-note b { color: var(--ember); font-weight: 500; }
+
+      /* Signature: encrypted route card */
+      .route-card {
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-lg);
+        background:
+          linear-gradient(180deg, rgba(255, 106, 26, 0.05), transparent 40%),
+          var(--ink-1);
+        padding: 22px 22px 18px;
+        box-shadow: 0 30px 70px rgba(0, 0, 0, 0.45);
+      }
+      .route-card-top {
+        display: flex; align-items: center; justify-content: space-between;
+        font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.08em;
+        color: var(--muted); text-transform: uppercase; margin-bottom: 12px;
+      }
+      .route-live { display: inline-flex; align-items: center; gap: 7px; color: var(--ember); }
+      .route-dot {
+        width: 7px; height: 7px; border-radius: 50%;
+        background: var(--orange);
+        box-shadow: 0 0 0 0 rgba(255, 106, 26, 0.5);
+        animation: ping 2s ease-out infinite;
+      }
+      @keyframes ping {
+        0% { box-shadow: 0 0 0 0 rgba(255, 106, 26, 0.5); }
+        70%, 100% { box-shadow: 0 0 0 7px rgba(255, 106, 26, 0); }
+      }
+      .route-svg { width: 100%; height: auto; display: block; }
+      .route-legend {
+        display: flex; justify-content: space-between; gap: 8px;
+        margin-top: 12px; padding-top: 14px; border-top: 1px solid var(--line-2);
+      }
+      .route-legend div {
+        font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.04em;
+        color: var(--muted); text-align: center; flex: 1; line-height: 1.4;
+      }
+      .route-legend b { display: block; color: var(--text-dim); font-weight: 500; font-size: 11px; }
+
+      /* ---------- Status strip ---------- */
+      .status-strip {
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.012);
+      }
+      .status-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+      }
+      .status-cell {
+        padding: 22px 20px;
+        border-left: 1px solid var(--line);
+      }
+      .status-cell:first-child { border-left: 0; }
+      .status-cell .v {
+        font-family: var(--font-mono);
+        font-weight: 700;
+        font-size: clamp(20px, 2.6vw, 27px);
+        color: var(--ember);
+        letter-spacing: -0.01em;
+      }
+      .status-cell .k {
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: 4px;
       }
 
+      /* ---------- Benefits ---------- */
+      .benefits { padding: 84px 0; }
       .cards {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
-        gap: 16px;
-      }
-      .card {
-        border: 1px solid var(--border);
-        border-radius: 18px;
-        background: var(--card);
-        padding: 20px;
-        transition: transform 0.24s ease, border-color 0.24s ease, box-shadow 0.24s ease;
-      }
-      .card:hover {
-        transform: translateY(-6px);
-        border-color: rgba(255, 171, 95, 0.52);
-        box-shadow: 0 16px 34px rgba(255, 122, 26, 0.16);
-      }
-      .icon {
-        width: 28px;
-        height: 28px;
-        border-radius: 9px;
-        display: grid;
-        place-items: center;
-        margin-bottom: 14px;
-        color: #ffb882;
-        border: 1px solid rgba(255, 149, 74, 0.32);
-        background: rgba(255, 122, 26, 0.12);
-        box-shadow: inset 0 0 18px rgba(255, 136, 40, 0.18);
-      }
-      .icon .material-symbols-outlined {
-        font-size: 18px;
-        line-height: 1;
-        color: #ffad73;
-        font-variation-settings: "FILL" 0, "wght" 500, "GRAD" 0, "opsz" 24;
-      }
-      .card h3 { margin: 0 0 8px; font-size: 21px; color: #ffe8d8; }
-      .card p { margin: 0; color: #d7ab8c; line-height: 1.55; }
-
-      .pricing-wrap, .faq-wrap { margin-top: 0; }
-      .trust-strip {
-        margin: 6px auto 22px;
-        width: min(780px, 100%);
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: 10px;
-      }
-      .trust-pill {
-        border: 1px solid rgba(255, 145, 58, 0.24);
-        border-radius: 999px;
-        padding: 8px 12px;
-        font-size: 13px;
-        color: #ffd7ba;
-        background: rgba(24, 10, 4, 0.55);
-      }
-
-      /* Period carousel */
-      .period-track-wrap {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        justify-content: center;
-        margin-bottom: 22px;
-      }
-      .period-arrow {
-        background: rgba(255, 122, 26, 0.1);
-        border: 1px solid rgba(255, 122, 26, 0.3);
-        color: #ffad73;
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        font-size: 18px;
-        cursor: pointer;
-        display: grid;
-        place-items: center;
-        transition: background 0.2s, transform 0.15s;
-        flex-shrink: 0;
-      }
-      .period-arrow:hover { background: rgba(255, 122, 26, 0.22); transform: scale(1.08); }
-      .period-track {
-        display: flex;
-        gap: 12px;
-        overflow: hidden;
-        width: min(680px, 100%);
-        position: relative;
-      }
-      .period-card {
-        flex: 0 0 calc(25% - 9px);
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        background: var(--card);
-        padding: 14px 16px;
-        text-align: center;
-        cursor: pointer;
-        transition: border-color 0.22s, transform 0.22s, box-shadow 0.22s;
-        user-select: none;
-      }
-      .period-card:hover { border-color: rgba(255, 171, 95, 0.45); transform: translateY(-3px); }
-      .period-card.active {
-        border-color: rgba(255, 171, 95, 0.8);
-        background: rgba(255, 122, 26, 0.12);
-        box-shadow: 0 0 22px rgba(255, 122, 26, 0.2);
-        transform: translateY(-4px);
-      }
-      .period-label { font-size: 13px; color: #d8ab8b; margin-bottom: 6px; }
-      .period-base { font-size: 20px; font-weight: 800; color: #ffca97; }
-      .period-save { font-size: 11px; color: #ffa663; margin-top: 4px; min-height: 16px; }
-
-      /* Pricing result */
-      .pricing-result {
-        display: flex;
-        justify-content: center;
-      }
-      .pricing-result-inner {
-        width: min(460px, 100%);
-        border: 1px solid rgba(255, 171, 95, 0.45);
-        border-radius: 22px;
-        background: rgba(31, 13, 6, 0.82);
-        padding: 28px 30px;
-        box-shadow: 0 20px 50px rgba(255, 122, 26, 0.15);
-      }
-      .device-counter-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 18px;
-      }
-      .device-counter-label { font-size: 14px; color: #d8ab8b; }
-      .device-counter {
-        display: flex;
-        align-items: center;
         gap: 14px;
       }
-      .counter-btn {
-        width: 32px;
-        height: 32px;
-        border-radius: 50%;
-        border: 1px solid rgba(255, 122, 26, 0.4);
-        background: rgba(255, 122, 26, 0.1);
-        color: #ffad73;
-        font-size: 20px;
-        line-height: 1;
-        cursor: pointer;
-        display: grid;
-        place-items: center;
-        transition: background 0.2s, transform 0.15s;
+      .card {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--ink-1);
+        padding: 24px;
+        transition: transform 0.22s ease, border-color 0.22s ease, background 0.22s ease;
       }
-      .counter-btn:hover { background: rgba(255, 122, 26, 0.22); transform: scale(1.1); }
-      .counter-btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
-      .counter-val {
-        font-size: 22px;
-        font-weight: 800;
-        color: #ffca97;
-        min-width: 24px;
-        text-align: center;
+      .card:hover {
+        transform: translateY(-4px);
+        border-color: var(--line-warm);
+        background: var(--ink-2);
       }
-      .price-breakdown {
-        font-size: 13px;
-        color: #d8ab8b;
+      .card .icon {
+        width: 40px; height: 40px;
+        border-radius: 11px;
+        display: grid; place-items: center;
         margin-bottom: 16px;
-        line-height: 1.7;
-        border-top: 1px solid rgba(255, 145, 56, 0.15);
-        padding-top: 14px;
+        color: var(--ember);
+        background: rgba(255, 106, 26, 0.1);
+        border: 1px solid rgba(255, 122, 38, 0.2);
       }
-      .price-breakdown .bd-row { display: flex; justify-content: space-between; }
-      .price-total-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: baseline;
-        border-top: 1px solid rgba(255, 145, 56, 0.18);
-        padding-top: 14px;
-        margin-bottom: 20px;
-      }
-      .price-total-label { font-size: 15px; color: #ffd7ba; font-weight: 600; }
-      .price-total-val {
-        font-size: 32px;
-        font-weight: 800;
-        color: #ffca97;
-        text-shadow: 0 0 20px rgba(255, 140, 40, 0.35);
-        transition: all 0.25s;
-      }
-      .pricing-cta {
-        width: 100%;
-        justify-content: center;
-        border-radius: 14px;
-        padding: 13px;
-        font-size: 15px;
-      }
+      .card .icon .material-symbols-outlined { font-size: 21px; }
+      .card h3 { margin: 0 0 7px; font-size: 17.5px; font-weight: 600; color: var(--text); letter-spacing: -0.01em; }
+      .card p { margin: 0; color: var(--muted); font-size: 14.5px; line-height: 1.6; }
 
-      @media (max-width: 680px) {
-        .period-card { flex: 0 0 calc(50% - 6px); }
-        .period-track { flex-wrap: wrap; }
-        .period-arrow { display: none; }
-        .pricing-result-inner { padding: 20px 18px; }
+      /* ---------- Pricing ---------- */
+      .pricing { padding: 30px 0 88px; }
+      .trust-strip {
+        display: flex; flex-wrap: wrap; justify-content: center;
+        gap: 8px; margin: 0 auto 34px;
       }
-
-      .faq {
-        width: min(860px, 100%);
-        margin: 0 auto;
-      }
-      #faq.panel {
-        min-height: calc(100vh - 210px);
-        justify-content: flex-start;
-        padding-top: 90px;
-      }
-      .faq-item {
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        background: var(--card);
-        margin-bottom: 12px;
-        transition: transform 0.22s ease, border-color 0.2s ease, box-shadow 0.22s ease;
-      }
-      .faq-item:hover {
-        transform: translateY(-3px);
-        border-color: rgba(255, 159, 84, 0.5);
-        box-shadow: 0 12px 24px rgba(255, 122, 26, 0.12);
-      }
-      .faq-q {
-        width: 100%;
-        text-align: left;
-        color: var(--text);
-        background: transparent;
-        border: 0;
-        padding: 20px 18px;
-        font-size: 18px;
-        font-weight: 700;
-        cursor: pointer;
-      }
-      .faq-q::after {
-        content: "+";
-        float: right;
-        color: #ff9c55;
-      }
-      .faq-item.open .faq-q::after { content: "-"; }
-      .faq-a {
-        color: var(--muted);
-        padding: 0 18px 18px;
-        line-height: 1.6;
-        display: none;
-      }
-      .faq-item.open .faq-a { display: block; }
-      .faq-tip {
-        margin: 8px 0 18px;
-        color: #d8ab8b;
-        text-align: center;
-        font-size: 13px;
-      }
-
-      .anim-text {
-        opacity: 0;
-        transform: translateY(12px);
-        filter: blur(4px);
-      }
-      body.loaded .anim-text {
-        animation: textIn 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-        animation-delay: calc(var(--i, 0) * 55ms);
-      }
-      @keyframes textIn {
-        to {
-          opacity: 1;
-          transform: translateY(0);
-          filter: blur(0);
-        }
-      }
-
-      .site-footer {
-        margin-top: 0;
-        min-height: auto;
-        border-top: 1px solid rgba(255, 145, 56, 0.2);
-        background: rgba(11, 5, 2, 0.58);
-      }
-      .to-top {
-        position: fixed;
-        right: 18px;
-        bottom: 18px;
-        z-index: 25;
-        width: 40px;
-        height: 40px;
+      .trust-pill {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        letter-spacing: 0.02em;
+        color: var(--text-dim);
+        border: 1px solid var(--line);
         border-radius: 999px;
-        border: 1px solid rgba(255, 152, 68, 0.35);
-        background: rgba(28, 12, 5, 0.75);
-        color: #ffd9bf;
-        font-size: 18px;
+        padding: 7px 14px;
+        background: var(--ink-1);
+      }
+      .trust-pill .material-symbols-outlined { font-size: 14px; vertical-align: -2px; color: var(--orange-2); margin-right: 5px; }
+
+      .pricing-layout {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: 18px;
+        align-items: start;
+      }
+      .periods {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+      }
+      .period-card {
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--ink-1);
+        padding: 18px 18px 16px;
         cursor: pointer;
-        backdrop-filter: blur(8px);
-        transition: transform 0.2s ease, background 0.2s ease, opacity 0.2s ease;
-        opacity: 0;
-        pointer-events: none;
+        text-align: left;
+        transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+        user-select: none;
       }
-      .to-top.visible {
-        opacity: 1;
-        pointer-events: auto;
+      .period-card:hover { border-color: var(--line-warm); transform: translateY(-2px); }
+      .period-card.active {
+        border-color: var(--orange);
+        background: linear-gradient(180deg, rgba(255, 106, 26, 0.1), rgba(255, 106, 26, 0.02));
+        box-shadow: inset 0 0 0 1px rgba(255, 106, 26, 0.4);
       }
-      .to-top:hover {
-        transform: translateY(-2px);
-        background: rgba(255, 145, 58, 0.2);
+      .period-card .p-label { font-size: 14px; font-weight: 600; color: var(--text-dim); }
+      .period-card .p-price {
+        font-family: var(--font-mono);
+        font-weight: 700;
+        font-size: 26px;
+        color: var(--text);
+        margin-top: 10px;
+        letter-spacing: -0.02em;
       }
-      .footer-inner {
-        padding: 24px 0 14px;
+      .period-card .p-per {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 4px;
       }
+      .period-card.active .p-price { color: var(--ember); }
+      .p-badge {
+        position: absolute;
+        top: -9px; right: 14px;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #1a0c02;
+        background: linear-gradient(135deg, var(--orange-2), var(--orange));
+        padding: 3px 9px;
+        border-radius: 999px;
+        font-weight: 700;
+      }
+      .p-check {
+        position: absolute;
+        top: 14px; right: 14px;
+        width: 18px; height: 18px;
+        border-radius: 50%;
+        border: 1px solid var(--line);
+        display: grid; place-items: center;
+        color: transparent;
+        transition: all 0.18s ease;
+      }
+      .period-card.active .p-check {
+        border-color: var(--orange);
+        background: var(--orange);
+        color: #1a0c02;
+      }
+      .p-check .material-symbols-outlined { font-size: 13px; }
+
+      /* Calculator panel */
+      .calc {
+        border: 1px solid var(--line-warm);
+        border-radius: var(--radius-lg);
+        background: var(--ink-1);
+        padding: 24px;
+        position: sticky;
+        top: calc(var(--header-h) + 14px);
+      }
+      .calc-row {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 12px;
+      }
+      .calc-label { font-size: 14.5px; color: var(--text-dim); font-weight: 500; }
+      .calc-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+      .stepper {
+        display: inline-flex; align-items: center; gap: 4px;
+        border: 1px solid var(--line); border-radius: 11px; padding: 4px;
+        background: var(--ink);
+      }
+      .step-btn {
+        width: 34px; height: 34px;
+        border-radius: 8px;
+        border: 0;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--ember);
+        font-size: 20px; line-height: 1;
+        cursor: pointer;
+        display: grid; place-items: center;
+        transition: background 0.15s ease;
+      }
+      .step-btn:hover { background: rgba(255, 106, 26, 0.18); }
+      .step-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+      .step-val {
+        font-family: var(--font-mono);
+        font-weight: 700;
+        font-size: 18px;
+        color: var(--text);
+        min-width: 34px; text-align: center;
+      }
+      .calc-divider { height: 1px; background: var(--line); margin: 20px 0; }
+      .breakdown { display: grid; gap: 9px; }
+      .bd-row {
+        display: flex; justify-content: space-between;
+        font-family: var(--font-mono);
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .bd-row span:last-child { color: var(--text-dim); }
+      .bd-row.permo span:last-child { color: var(--ember); }
+      .total-row {
+        display: flex; justify-content: space-between; align-items: baseline;
+        margin-top: 18px; padding-top: 18px;
+        border-top: 1px solid var(--line);
+      }
+      .total-label { font-size: 14px; color: var(--text-dim); }
+      .total-val {
+        font-family: var(--font-mono);
+        font-weight: 700;
+        font-size: 34px;
+        color: var(--ember);
+        letter-spacing: -0.02em;
+        transition: transform 0.2s ease;
+      }
+      .total-val.bump { transform: scale(1.06); }
+      .calc .btn { margin-top: 20px; }
+      .calc-fine { font-size: 11.5px; color: var(--muted); text-align: center; margin-top: 12px; line-height: 1.5; }
+
+      /* ---------- FAQ ---------- */
+      .faq { padding: 24px 0 90px; }
+      .faq-list { max-width: 820px; margin: 0 auto; display: grid; gap: 10px; }
+      .faq-item {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--ink-1);
+        overflow: hidden;
+        transition: border-color 0.18s ease;
+      }
+      .faq-item:hover { border-color: var(--line-warm); }
+      .faq-item.open { border-color: var(--line-warm); }
+      .faq-q {
+        width: 100%; text-align: left;
+        background: transparent; border: 0;
+        color: var(--text);
+        padding: 19px 20px;
+        font-family: var(--font-body);
+        font-size: 16px; font-weight: 600;
+        cursor: pointer;
+        display: flex; justify-content: space-between; align-items: center; gap: 16px;
+      }
+      .faq-q .ic {
+        flex-shrink: 0;
+        color: var(--orange-2);
+        transition: transform 0.22s ease;
+        display: grid; place-items: center;
+      }
+      .faq-item.open .faq-q .ic { transform: rotate(45deg); }
+      .faq-a-wrap {
+        display: grid;
+        grid-template-rows: 0fr;
+        transition: grid-template-rows 0.26s ease;
+      }
+      .faq-item.open .faq-a-wrap { grid-template-rows: 1fr; }
+      .faq-a { overflow: hidden; }
+      .faq-a p {
+        margin: 0;
+        padding: 0 20px 20px;
+        color: var(--muted);
+        font-size: 14.5px;
+        line-height: 1.65;
+      }
+
+      /* ---------- Footer ---------- */
+      .site-footer {
+        border-top: 1px solid var(--line);
+        background: rgba(0, 0, 0, 0.25);
+        position: relative; z-index: 1;
+      }
+      .footer-inner { padding: 40px 0 26px; }
       .footer-grid {
         display: grid;
-        grid-template-columns: 1.2fr 1fr 1fr;
-        gap: 24px;
+        grid-template-columns: 1.4fr 1fr 1fr;
+        gap: 28px;
       }
-      .footer-brand {
-        font-weight: 800;
-        letter-spacing: 0.2px;
-        margin-bottom: 10px;
-        color: #ffe3cd;
-      }
-      .footer-note {
-        margin: 0;
-        color: #d8ab8b;
-        line-height: 1.5;
-        max-width: 280px;
-      }
+      .footer-brand { font-family: var(--font-display); font-weight: 700; font-size: 18px; margin-bottom: 12px; }
+      .footer-note { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.6; max-width: 290px; }
       .footer-title {
-        margin: 0 0 10px;
-        font-size: 14px;
-        color: #ffd8bc;
+        margin: 0 0 12px; font-family: var(--font-mono);
+        font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
       }
-      .footer-links {
-        display: grid;
-        gap: 7px;
-      }
-      .footer-links a {
-        color: #d7ad8f;
-        text-decoration: none;
-        font-size: 14px;
-        transition: color 0.2s ease;
-      }
-      .footer-links a:hover {
-        color: #fff1e7;
-      }
+      .footer-links { display: grid; gap: 9px; }
+      .footer-links a { color: var(--text-dim); text-decoration: none; font-size: 14.5px; transition: color 0.15s ease; cursor: pointer; }
+      .footer-links a:hover { color: var(--ember); }
       .footer-bottom {
-        margin-top: 16px;
-        padding-top: 10px;
-        border-top: 1px solid rgba(255, 145, 56, 0.14);
-        color: #b98f72;
-        font-size: 12px;
+        margin-top: 30px; padding-top: 18px;
+        border-top: 1px solid var(--line);
+        display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+        color: var(--muted); font-size: 12.5px;
+        font-family: var(--font-mono);
       }
 
-      @media (max-width: 1000px) {
-        .cards { grid-template-columns: repeat(2, 1fr); }
-        .pricing-grid { grid-template-columns: 1fr; }
-        .nav { display: none; }
-        .footer-grid { grid-template-columns: 1fr 1fr; }
-        .topbar { min-height: 56px; }
-        .topbar-inner { min-height: 56px; }
+      /* ---------- To top ---------- */
+      .to-top {
+        position: fixed; right: 18px; bottom: 18px; z-index: 40;
+        width: 42px; height: 42px; border-radius: 12px;
+        border: 1px solid var(--line-warm);
+        background: rgba(23, 23, 31, 0.85);
+        color: var(--ember); font-size: 20px;
+        cursor: pointer; backdrop-filter: blur(8px);
+        display: grid; place-items: center;
+        opacity: 0; pointer-events: none;
+        transition: opacity 0.2s ease, transform 0.2s ease;
       }
-      @media (max-width: 680px) {
-        :root { font-size: 14px; }
+      .to-top.visible { opacity: 1; pointer-events: auto; }
+      .to-top:hover { transform: translateY(-3px); }
+
+      /* ---------- Reveal animation ---------- */
+      .reveal { opacity: 0; transform: translateY(16px); }
+      body.loaded .reveal {
+        animation: revealIn 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        animation-delay: calc(var(--d, 0) * 70ms);
+      }
+      @keyframes revealIn { to { opacity: 1; transform: none; } }
+
+      /* Route flow animation */
+      .flow-dash {
+        stroke-dasharray: 5 9;
+        animation: dashMove 1.1s linear infinite;
+      }
+      @keyframes dashMove { to { stroke-dashoffset: -28; } }
+      .packet {
+        offset-path: path("M 30 132 C 90 132, 110 56, 165 56 S 250 132, 300 132 S 360 64, 392 64");
+        offset-rotate: 0deg;
+        animation: packetMove 3.4s ease-in-out infinite;
+      }
+      @keyframes packetMove {
+        0% { offset-distance: 0%; opacity: 0; }
+        8% { opacity: 1; }
+        92% { opacity: 1; }
+        100% { offset-distance: 100%; opacity: 0; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html { scroll-behavior: auto; }
+        .reveal { opacity: 1; transform: none; animation: none; }
+        .flow-dash, .packet, .route-dot { animation: none; }
+        .packet { opacity: 1; }
+      }
+
+      /* ---------- Responsive ---------- */
+      @media (max-width: 980px) {
+        .nav { display: none; }
+        .hero-grid { grid-template-columns: 1fr; gap: 36px; }
+        .route-card { max-width: 460px; }
+        .cards { grid-template-columns: repeat(2, 1fr); }
+        .pricing-layout { grid-template-columns: 1fr; gap: 24px; }
+        .calc { position: static; }
+        .footer-grid { grid-template-columns: 1fr 1fr; }
+      }
+      @media (max-width: 640px) {
+        .status-grid { grid-template-columns: 1fr 1fr; }
+        .status-cell:nth-child(3) { border-left: 0; }
+        .status-cell:nth-child(odd) { border-left: 0; }
+        .status-cell { border-top: 1px solid var(--line); }
+        .status-cell:nth-child(1), .status-cell:nth-child(2) { border-top: 0; }
         .cards { grid-template-columns: 1fr; }
-        .hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        h1 { font-size: clamp(28px, 8vw, 38px); }
-        .hero p { font-size: 15px; }
-        .hero-stat strong { font-size: 24px; }
-        .hero-stat span { font-size: 12px; }
+        .periods { grid-template-columns: 1fr 1fr; }
         .footer-grid { grid-template-columns: 1fr; }
-        .panel { min-height: auto; padding: 72px 0 24px; }
-        .site-footer { min-height: auto; }
-        #faq.panel { min-height: auto; padding-top: 72px; }
-        .to-top { right: 12px; bottom: 12px; width: 36px; height: 36px; }
-        .container { width: 94%; }
-        .topbar { min-height: 52px; }
-        .topbar-inner { min-height: 52px; }
-        .brand { font-size: 12px; }
-        .section-title { font-size: 24px; }
-        .section-sub { font-size: 14px; }
-        .card { padding: 16px; }
-        .card h3 { font-size: 18px; }
-        .card p { font-size: 14px; }
-        .plan { padding: 18px; }
-        .pricing-grid { gap: 12px; }
-        .faq-q { font-size: 16px; padding: 16px; }
-        .topbar .top-actions .btn { display: none; }
+        .top-actions .btn.tg-top { display: none; }
+        .hero-lead { font-size: 16.5px; }
       }
     </style>
   </head>
   <body>
-    <div class="grid"></div>
+    <div class="ambient" aria-hidden="true"></div>
 
     <header class="topbar">
       <div class="container topbar-inner">
-        <div class="brand">
-          <img src="assets/logo.png" alt="BlinVPN" style="width:32px;height:32px;border-radius:8px;object-fit:contain;" />
+        <a class="brand" href="#home" style="text-decoration:none">
+          <img src="assets/logo.png" alt="" />
           <span>BlinVPN</span>
-        </div>
+        </a>
         <div class="top-actions">
           <nav class="nav" aria-label="Навигация">
             <a href="#home">Главная</a>
-            <a href="#benefits">Преимущества</a>
+            <a href="#benefits">Возможности</a>
             <a href="#pricing">Тарифы</a>
-            <a href="#faq">FAQ</a>
+            <a href="#faq">Вопросы</a>
           </nav>
-          <a class="btn btn-tg" href="https://t.me/blinvpn_bot" target="_blank" rel="noopener">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.26 13.965l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.888.594z"/></svg>
+          <a class="btn tg-top" href="https://t.me/blinvpn_bot" target="_blank" rel="noopener">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.26 13.965l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.888.594z"/></svg>
             Подключиться
           </a>
         </div>
       </div>
     </header>
 
-    <main class="container">
-      <section id="home" class="hero panel">
-        <span class="chip anim-text">Безопасно. Быстро. Просто.</span>
-        <h1 class="anim-text">BlinVPN - ваш <span class="accent">выбор</span> в свободном интернете</h1>
-        <p class="anim-text">
-          Легкость использования - наш главный приоритет. Подключайтесь в один клик и наслаждайтесь
-          интернетом без границ и ограничений.
-        </p>
-        <div class="anim-text" style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-          <button class="btn js-redirect" type="button">Начать использование</button>
-          <button class="btn btn-soft" type="button" onclick="location.href='#pricing'">Смотреть тарифы</button>
-        </div>
-        <div class="hero-stats">
-          <div class="hero-stat anim-text">
-            <strong>10 Гбит</strong>
-            <span>Скорость серверов</span>
+    <main>
+      <!-- HERO -->
+      <section id="home" class="hero">
+        <div class="container hero-grid">
+          <div class="hero-copy">
+            <h1 class="reveal" style="--d:1">
+              Свободный интернет<br />от <span class="accent">67 ₽</span>
+            </h1>
+            <p class="hero-lead reveal" style="--d:2">
+              Подключайтесь в один клик через Telegram и пользуйтесь сетью без блокировок,
+              ограничений скорости и слежки.            </p>
+            <div class="hero-cta reveal" style="--d:3">
+              <a class="btn" href="https://t.me/blinvpn_bot" target="_blank" rel="noopener">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.26 13.965l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.888.594z"/></svg>
+                Подключиться в Telegram
+              </a>
+              <a class="btn ghost" href="#pricing">Выбрать тариф</a>
+            </div>
+            <div class="hero-note reveal" style="--d:4">
+              подключение за минуту · <b>отмена в любой момент</b>
+            </div>
           </div>
-          <div class="hero-stat anim-text">
-            <strong>AES-256</strong>
-            <span>Шифрование</span>
-          </div>
-          <div class="hero-stat anim-text">
-            <strong>0 логов</strong>
-            <span>Политика хранения</span>
-          </div>
-          <div class="hero-stat anim-text">
-            <strong>24/7</strong>
-            <span>Поддержка</span>
-          </div>
-        </div>
-        <div class="hero-note anim-text">Подключение за 1 минуту. Отмена в любой момент.</div>
-      </section>
 
-      <section id="benefits" class="panel">
-        <h2 class="section-title anim-text">Почему выбирают нас</h2>
-        <p class="section-sub anim-text">
-          Мы создали продукт, который сочетает в себе современные технологии шифрования и невероятную
-          простоту использования.
-        </p>
-        <div class="cards">
-          <article class="card anim-text">
-            <div class="icon" aria-hidden="true">
-              <span class="material-symbols-outlined">bolt</span>
+          <!-- Signature: encrypted route -->
+          <div class="route-card reveal" style="--d:3" aria-hidden="true">
+            <div class="route-card-top">
+              <span>защищённый канал</span>
+              <span class="route-live"><span class="route-dot"></span> онлайн</span>
             </div>
-            <h3>Максимальная скорость</h3>
-            <p>Наши серверы обеспечивают пропускную способность до 10 Гбит/с для стриминга и игр без задержек.</p>
-          </article>
-          <article class="card anim-text">
-            <div class="icon" aria-hidden="true">
-              <span class="material-symbols-outlined">shield</span>
+            <svg class="route-svg" viewBox="0 0 420 180" xmlns="http://www.w3.org/2000/svg" role="img">
+              <!-- base path -->
+              <path d="M 30 132 C 90 132, 110 56, 165 56 S 250 132, 300 132 S 360 64, 392 64"
+                    fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="2.5" stroke-linecap="round"/>
+              <!-- animated encrypted flow -->
+              <path class="flow-dash" d="M 30 132 C 90 132, 110 56, 165 56 S 250 132, 300 132 S 360 64, 392 64"
+                    fill="none" stroke="#ff6a1a" stroke-width="2.5" stroke-linecap="round"/>
+              <!-- nodes -->
+              <g fill="#17171f" stroke="rgba(255,122,38,0.5)" stroke-width="1.5">
+                <circle cx="30" cy="132" r="16"/>
+                <circle cx="165" cy="56" r="18"/>
+                <circle cx="300" cy="132" r="16"/>
+                <circle cx="392" cy="64" r="15"/>
+              </g>
+              <!-- node icons, drawn so they always render -->
+              <g fill="none" stroke="#ffb877" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <!-- device -->
+                <rect x="25" y="124" width="10" height="16" rx="2"/>
+                <line x1="28" y1="137" x2="32" y2="137"/>
+                <!-- lock -->
+                <rect x="158.5" y="55" width="13" height="9" rx="1.5"/>
+                <path d="M 161 55 v -2.5 a 4 4 0 0 1 8 0 V 55"/>
+                <!-- server -->
+                <rect x="293" y="125.5" width="14" height="5.5" rx="1.5"/>
+                <rect x="293" y="133" width="14" height="5.5" rx="1.5"/>
+                <line x1="296" y1="128.2" x2="296.2" y2="128.2"/>
+                <line x1="296" y1="135.7" x2="296.2" y2="135.7"/>
+                <!-- globe -->
+                <circle cx="392" cy="64" r="7.5"/>
+                <ellipse cx="392" cy="64" rx="3" ry="7.5"/>
+                <line x1="384.6" y1="64" x2="399.4" y2="64"/>
+              </g>
+              <!-- moving packet -->
+              <circle class="packet" r="4.5" fill="#fff" stroke="#ff6a1a" stroke-width="2"/>
+            </svg>
+            <div class="route-legend">
+              <div><b>Вы</b>устройство</div>
+              <div><b>AES-256</b>шифрование</div>
+              <div><b>Сервер</b>BlinVPN</div>
+              <div><b>Сеть</b>без границ</div>
             </div>
-            <h3>Полная анонимность</h3>
-            <p>Мы придерживаемся строгой политики отсутствия логов. Ваши действия в сети принадлежат только вам.</p>
-          </article>
-          <article class="card anim-text">
-            <div class="icon" aria-hidden="true">
-              <span class="material-symbols-outlined">settings</span>
-            </div>
-            <h3>Простая настройка</h3>
-            <p>Не нужно быть техническим специалистом. Установка и подключение занимают меньше минуты.</p>
-          </article>
-          <article class="card anim-text">
-            <div class="icon" aria-hidden="true">
-              <span class="material-symbols-outlined">public</span>
-            </div>
-            <h3>Глобальная сеть</h3>
-            <p>Высокопроизводительные серверы в локациях по всему миру для доступа к любому контенту.</p>
-          </article>
-          <article class="card anim-text">
-            <div class="icon" aria-hidden="true">
-              <span class="material-symbols-outlined">hub</span>
-            </div>
-            <h3>Стабильное подключение</h3>
-            <p>Интеллектуальная маршрутизация снижает обрывы и обеспечивает ровную работу даже в часы пик.</p>
-          </article>
-          <article class="card anim-text">
-            <div class="icon" aria-hidden="true">
-              <span class="material-symbols-outlined">payments</span>
-            </div>
-            <h3>Прозрачные тарифы</h3>
-            <p>Фиксированная стоимость без скрытых условий и понятные планы для любых задач.</p>
-          </article>
+          </div>
         </div>
       </section>
 
-      <section id="pricing" class="pricing-wrap panel">
-        <h2 class="section-title anim-text">Тарифы</h2>
-        <p class="section-sub anim-text">Подберите удобный формат подписки и подключайтесь за минуту</p>
-        <div class="trust-strip anim-text">
-          <span class="trust-pill">Моментальная активация</span>
-          <span class="trust-pill">Без скрытых платежей</span>
-          <span class="trust-pill">Безлимит и поддержка 24/7</span>
-        </div>
-
-        <!-- Period carousel -->
-        <div class="period-track-wrap anim-text">
-          <button class="period-arrow" id="periodPrev" aria-label="Назад">&#8592;</button>
-          <div class="period-track" id="periodTrack">
-            <div class="period-card active" data-idx="0">
-              <div class="period-label">1 месяц</div>
-              <div class="period-base">149 ₽</div>
-              <div class="period-save"></div>
-            </div>
-            <div class="period-card" data-idx="1">
-              <div class="period-label">3 месяца</div>
-              <div class="period-base">399 ₽</div>
-              <div class="period-save">≈ 133 ₽/мес</div>
-            </div>
-            <div class="period-card" data-idx="2">
-              <div class="period-label">6 месяцев</div>
-              <div class="period-base">749 ₽</div>
-              <div class="period-save">≈ 125 ₽/мес</div>
-            </div>
-            <div class="period-card" data-idx="3">
-              <div class="period-label">12 месяцев</div>
-              <div class="period-base">1399 ₽</div>
-              <div class="period-save">≈ 117 ₽/мес · 🔥 Выгоднее всего</div>
-            </div>
+      <!-- STATUS STRIP -->
+      <div class="status-strip">
+        <div class="container">
+          <div class="status-grid">
+            <div class="status-cell reveal"><div class="v">10 Гбит/с</div><div class="k">Пропускная способность</div></div>
+            <div class="status-cell reveal" style="--d:1"><div class="v">AES-256</div><div class="k">Шифрование трафика</div></div>
+            <div class="status-cell reveal" style="--d:2"><div class="v">0 логов</div><div class="k">Ничего не храним</div></div>
+            <div class="status-cell reveal" style="--d:3"><div class="v">24 / 7</div><div class="k">Поддержка в чате</div></div>
           </div>
-          <button class="period-arrow" id="periodNext" aria-label="Вперёд">&#8594;</button>
         </div>
+      </div>
 
-        <!-- Price result -->
-        <div class="pricing-result anim-text">
-          <div class="pricing-result-inner">
-            <div class="device-counter-row">
-              <span class="device-counter-label">Количество устройств</span>
-              <div class="device-counter">
-                <button class="counter-btn" id="devMinus">−</button>
-                <span class="counter-val" id="devCount">2</span>
-                <button class="counter-btn" id="devPlus">+</button>
+      <!-- BENEFITS -->
+      <section id="benefits" class="benefits">
+        <div class="container">
+          <div class="section-head reveal">
+            <span class="eyebrow">Возможности</span>
+            <h2 class="section-title">Защита и скорость без компромиссов</h2>
+            <p class="section-sub">Современный протокол VLESS обходит блокировки и держит высокую скорость — а пользоваться так же просто, как мессенджером.</p>
+          </div>
+          <div class="cards">
+            <article class="card reveal">
+              <div class="icon"><span class="material-symbols-outlined">bolt</span></div>
+              <h3>Высокая скорость</h3>
+              <p>Серверы с каналом до 10 Гбит/с — стримы в 4K, игры и загрузки без задержек и обрывов.</p>
+            </article>
+            <article class="card reveal" style="--d:1">
+              <div class="icon"><span class="material-symbols-outlined">shield_lock</span></div>
+              <h3>Полная анонимность</h3>
+              <p>Строгая политика без логов. Трафик шифруется по AES-256 — ваши действия остаются вашими.</p>
+            </article>
+            <article class="card reveal" style="--d:2">
+              <div class="icon"><span class="material-symbols-outlined">touch_app</span></div>
+              <h3>Подключение в клик</h3>
+              <p>Не нужно разбираться в настройках. Получаете доступ в Telegram-боте за минуту.</p>
+            </article>
+            <article class="card reveal" style="--d:3">
+              <div class="icon"><span class="material-symbols-outlined">public</span></div>
+              <h3>Доступ без границ</h3>
+              <p>Открывайте любые сайты и сервисы — блокировки и региональные ограничения остаются позади.</p>
+            </article>
+            <article class="card reveal" style="--d:4">
+              <div class="icon"><span class="material-symbols-outlined">devices</span></div>
+              <h3>До 20 устройств</h3>
+              <p>Телефон, ноутбук, планшет, телевизор — один аккаунт работает на всём, что у вас есть.</p>
+            </article>
+            <article class="card reveal" style="--d:5">
+              <div class="icon"><span class="material-symbols-outlined">savings</span></div>
+              <h3>Честные цены</h3>
+              <p>Платите за период, а не за подписку с автосписаниями. Никаких скрытых условий.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- PRICING -->
+      <section id="pricing" class="pricing">
+        <div class="container">
+          <div class="section-head center reveal">
+            <span class="eyebrow" style="justify-content:center">Тарифы</span>
+            <h2 class="section-title">Соберите свой план</h2>
+            <p class="section-sub">Выберите срок и число устройств — стоимость пересчитается сразу. Чем длиннее период, тем дешевле месяц.</p>
+          </div>
+
+          <div class="trust-strip reveal">
+            <span class="trust-pill"><span class="material-symbols-outlined">flash_on</span>Моментальная активация</span>
+            <span class="trust-pill"><span class="material-symbols-outlined">block</span>Без автосписаний</span>
+            <span class="trust-pill"><span class="material-symbols-outlined">all_inclusive</span>Безлимитный трафик</span>
+          </div>
+
+          <div class="pricing-layout">
+            <div class="periods reveal" id="periods">
+              <button class="period-card active" data-idx="0" type="button">
+                <span class="p-check"><span class="material-symbols-outlined">check</span></span>
+                <div class="p-label">1 месяц</div>
+                <div class="p-price">99 ₽</div>
+                <div class="p-per">99 ₽/мес</div>
+              </button>
+              <button class="period-card" data-idx="1" type="button">
+                <span class="p-check"><span class="material-symbols-outlined">check</span></span>
+                <div class="p-label">3 месяца</div>
+                <div class="p-price">249 ₽</div>
+                <div class="p-per">≈ 83 ₽/мес</div>
+              </button>
+              <button class="period-card" data-idx="2" type="button">
+                <span class="p-check"><span class="material-symbols-outlined">check</span></span>
+                <div class="p-label">6 месяцев</div>
+                <div class="p-price">449 ₽</div>
+                <div class="p-per">≈ 75 ₽/мес</div>
+              </button>
+              <button class="period-card" data-idx="3" type="button">
+                <span class="p-badge">выгодно</span>
+                <span class="p-check"><span class="material-symbols-outlined">check</span></span>
+                <div class="p-label">1 год</div>
+                <div class="p-price">799 ₽</div>
+                <div class="p-per">≈ 67 ₽/мес</div>
+              </button>
+            </div>
+
+            <div class="calc reveal" style="--d:1">
+              <div class="calc-row">
+                <div>
+                  <div class="calc-label">Количество устройств</div>
+                  <div class="calc-sub">от 1 до 20</div>
+                </div>
+                <div class="stepper">
+                  <button class="step-btn" id="devMinus" type="button" aria-label="Меньше">−</button>
+                  <span class="step-val" id="devCount">1</span>
+                  <button class="step-btn" id="devPlus" type="button" aria-label="Больше">+</button>
+                </div>
               </div>
-            </div>
-            <div class="price-breakdown" id="priceBreakdown"></div>
-            <div class="price-total-row">
-              <span class="price-total-label">Итого к оплате</span>
-              <span class="price-total-val" id="totalPrice"></span>
-            </div>
-            <a class="btn btn-tg pricing-cta" href="https://t.me/blinvpn_bot" target="_blank" rel="noopener">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.26 13.965l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.888.594z"/></svg>
-              Подключиться в Telegram
-            </a>
-          </div>
-        </div>
 
-      </section>
+              <div class="calc-divider"></div>
 
-      <section id="faq" class="faq-wrap panel">
-        <h2 class="section-title anim-text">Ответы на вопросы</h2>
-        <p class="faq-tip anim-text">Не нашли ответ? Нажмите "Личный кабинет" и мы поможем в чате поддержки.</p>
-        <div class="faq">
-          <div class="faq-item anim-text">
-            <button class="faq-q" type="button">Что такое BlinVPN и для чего он нужен?</button>
-            <div class="faq-a">
-              Это премиальный VPN-сервис нового поколения, который использует протокол VLESS для обхода
-              блокировок и сохранения максимальной скорости.
-            </div>
-          </div>
-          <div class="faq-item anim-text">
-            <button class="faq-q" type="button">Можно ли использовать подписку на нескольких устройствах?</button>
-            <div class="faq-a">
-              Конечно! Базовая подписка включает 2 устройства. Вы можете добавить любое количество дополнительных устройств — телефоны, планшеты, компьютеры и даже телевизоры. Цена за каждое доп. устройство зависит от выбранного периода.
-            </div>
-          </div>
-          <div class="faq-item anim-text">
-            <button class="faq-q" type="button">Какие платформы поддерживаются?</button>
-            <div class="faq-a">
-              Мы поддерживаем все популярные ОС: iOS, Android, Windows и macOS. Также возможна настройка на
-              роутерах через универсальные клиенты.
-            </div>
-          </div>
-          <div class="faq-item anim-text">
-            <button class="faq-q" type="button">Есть ли ограничения по трафику?</button>
-            <div class="faq-a">
-              Никаких лимитов! Мы предоставляем полностью безлимитный трафик на всех основных тарифах, чтобы
-              вы могли смотреть видео в 4K и скачивать любые файлы.
+              <div class="breakdown" id="breakdown"></div>
+
+              <div class="total-row">
+                <span class="total-label" id="totalLabel">Итого за месяц</span>
+                <span class="total-val" id="totalPrice">99 ₽</span>
+              </div>
+
+              <a class="btn block" id="ctaLink" href="https://t.me/blinvpn_bot" target="_blank" rel="noopener">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.26 13.965l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.888.594z"/></svg>
+                Подключиться в Telegram
+              </a>
+              <p class="calc-fine">Оплата за весь выбранный период. Активация сразу после оплаты.</p>
             </div>
           </div>
         </div>
       </section>
 
+      <!-- FAQ -->
+      <section id="faq" class="faq">
+        <div class="container">
+          <div class="section-head center reveal">
+            <span class="eyebrow" style="justify-content:center">Вопросы</span>
+            <h2 class="section-title">Коротко о главном</h2>
+          </div>
+          <div class="faq-list">
+            <div class="faq-item reveal">
+              <button class="faq-q" type="button">Что такое BlinVPN и зачем он нужен?<span class="ic material-symbols-outlined">add</span></button>
+              <div class="faq-a-wrap"><div class="faq-a"><p>Это VPN-сервис на современных протоколах. Он обходит блокировки, открывает доступ к закрытым сайтам и сервисам и при этом сохраняет высокую скорость соединения.</p></div></div>
+            </div>
+            <div class="faq-item reveal" style="--d:1">
+              <button class="faq-q" type="button">Сколько устройств можно подключить?<span class="ic material-symbols-outlined">add</span></button>
+              <div class="faq-a-wrap"><div class="faq-a"><p>Мы придерживамся гибким ценам. Вы платите за столько устройств, сколько используете. Начать можно с 1 устройства</p></div></div>
+            </div>
+            <div class="faq-item reveal" style="--d:2">
+              <button class="faq-q" type="button">Какие платформы поддерживаются?<span class="ic material-symbols-outlined">add</span></button>
+              <div class="faq-a-wrap"><div class="faq-a"><p>Android, iOS,  Windows, macOS, Linux и даже Android TV. Также возможна настройка на роутерах.</p></div></div>
+            </div>
+            <div class="faq-item reveal" style="--d:3">
+              <button class="faq-q" type="button">Есть ли ограничения по трафику?<span class="ic material-symbols-outlined">add</span></button>
+              <div class="faq-a-wrap"><div class="faq-a"><p>Нет. Трафик безлимитный на всех тарифах — смотрите видео в 4K и скачивайте файлы любого объёма.</p></div></div>
+            </div>
+            <div class="faq-item reveal" style="--d:4">
+              <button class="faq-q" type="button">Как оплатить и начать пользоваться?<span class="ic material-symbols-outlined">add</span></button>
+              <div class="faq-a-wrap"><div class="faq-a"><p>Откройте Telegram-бот, выберите срок и число устройств, оплатите период. Доступ активируется автоматически, а оплата проходит за период — без скрытых автосписаний.</p></div></div>
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
+
     <footer class="site-footer">
       <div class="container footer-inner">
         <div class="footer-grid">
-          <div>
-            <div class="footer-brand anim-text">BlinVPN</div>
-            <p class="footer-note anim-text">Ваша безопасность - наш приоритет. Защита и скорость в одном сервисе.</p>
+          <div class="reveal">
+            <div class="footer-brand">BlinVPN</div>
+            <p class="footer-note">Свободный и безопасный интернет без лишних настроек. Скорость и приватность в одном сервисе.</p>
           </div>
-          <div>
-            <h3 class="footer-title anim-text">Продукт</h3>
+          <div class="reveal" style="--d:1">
+            <h3 class="footer-title">Сервис</h3>
             <div class="footer-links">
               <a href="#benefits">Возможности</a>
               <a href="#pricing">Тарифы</a>
-              <a href="#faq">FAQ</a>
+              <a href="#faq">Вопросы</a>
             </div>
           </div>
-          <div>
-            <h3 class="footer-title anim-text">Аккаунт</h3>
+          <div class="reveal" style="--d:2">
+            <h3 class="footer-title">Аккаунт</h3>
             <div class="footer-links">
-              <a class="js-redirect" href="javascript:void(0)">Личный кабинет</a>
-              <a class="js-redirect" href="javascript:void(0)">Подключить VPN</a>
+              <a class="js-redirect">Личный кабинет</a>
+              <a href="https://t.me/blinvpn_bot" target="_blank" rel="noopener">Telegram-бот</a>
             </div>
           </div>
         </div>
-        <div class="footer-bottom anim-text">© 2025–2026 BlinVPN. Все права защищены.</div>
+        <div class="footer-bottom">
+          <span>© 2025–2026 BlinVPN</span>
+          <span>от 67 ₽/мес</span>
+        </div>
       </div>
     </footer>
+
     <button class="to-top" id="toTop" type="button" aria-label="Наверх">↑</button>
 
     <script>
-      const TARGET_URL = "https://cabinet.blinvpn.ru";
+      // --- Redirect to cabinet ---
+      var TARGET_URL = "https://cabinet.blinvpn.ru";
+      document.querySelectorAll(".js-redirect").forEach(function (el) {
+        el.addEventListener("click", function () { window.location.href = TARGET_URL; });
+      });
 
-      document.querySelectorAll(".js-redirect").forEach(function (button) {
-        button.addEventListener("click", function () {
-          window.location.href = TARGET_URL;
+      // --- FAQ accordion ---
+      document.querySelectorAll(".faq-q").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          btn.closest(".faq-item").classList.toggle("open");
         });
       });
 
-      document.querySelectorAll(".faq-q").forEach(function (button) {
-        button.addEventListener("click", function () {
-          button.parentElement.classList.toggle("open");
-        });
-      });
+      // --- Reveal on load ---
+      requestAnimationFrame(function () { document.body.classList.add("loaded"); });
 
-      const animNodes = document.querySelectorAll(".anim-text");
-      animNodes.forEach(function (node, index) {
-        node.style.setProperty("--i", index);
-      });
-
-      requestAnimationFrame(function () {
-        document.body.classList.add("loaded");
-      });
-
-      const navLinks = document.querySelectorAll(".nav a");
-      const panelSections = Array.from(document.querySelectorAll("main section[id]"));
-      const navMap = new Map(
-        Array.from(navLinks).map(function (link) {
-          return [link.getAttribute("href").slice(1), link];
-        })
-      );
-
-      const setActiveNav = function (id) {
-        navLinks.forEach(function (link) {
-          link.classList.toggle("active", link.getAttribute("href") === "#" + id);
-        });
-      };
-
-      const observer = new IntersectionObserver(
-        function (entries) {
-          entries.forEach(function (entry) {
-            if (entry.isIntersecting && navMap.has(entry.target.id)) {
-              setActiveNav(entry.target.id);
-            }
-          });
-        },
-        { threshold: 0.5 }
-      );
-
-      panelSections.forEach(function (section) {
-        observer.observe(section);
-      });
-
-      const centerToSection = function (id) {
-        const target = document.getElementById(id);
-        if (!target) return;
-        if (id === "faq") {
-          const footer = document.querySelector(".site-footer");
-          if (footer) {
-            footer.scrollIntoView({ behavior: "smooth", block: "end" });
-            return;
+      // --- Nav active state on scroll ---
+      var navLinks = document.querySelectorAll(".nav a");
+      var navMap = {};
+      navLinks.forEach(function (l) { navMap[l.getAttribute("href").slice(1)] = l; });
+      var sections = Array.prototype.slice.call(document.querySelectorAll("main section[id]"));
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting && navMap[e.target.id]) {
+            navLinks.forEach(function (l) { l.classList.remove("active"); });
+            navMap[e.target.id].classList.add("active");
           }
-        }
-        target.scrollIntoView({ behavior: "smooth", block: "center" });
-      };
-
-      navLinks.forEach(function (link) {
-        link.addEventListener("click", function (event) {
-          const hash = link.getAttribute("href");
-          if (!hash || !hash.startsWith("#")) return;
-          event.preventDefault();
-          const id = hash.slice(1);
-          centerToSection(id);
-          history.replaceState(null, "", "#" + id);
-          setActiveNav(id);
         });
-      });
+      }, { rootMargin: "-45% 0px -50% 0px", threshold: 0 });
+      sections.forEach(function (s) { io.observe(s); });
 
-      if (window.location.hash) {
-        const startId = window.location.hash.slice(1);
-        setTimeout(function () {
-          centerToSection(startId);
-          setActiveNav(startId);
-        }, 120);
-      }
+      // --- To top ---
+      var toTop = document.getElementById("toTop");
+      var syncTop = function () { toTop.classList.toggle("visible", window.scrollY > 360); };
+      syncTop();
+      window.addEventListener("scroll", syncTop, { passive: true });
+      toTop.addEventListener("click", function () { window.scrollTo({ top: 0, behavior: "smooth" }); });
 
-      window.addEventListener("hashchange", function () {
-        const id = window.location.hash.slice(1);
-        if (!id) return;
-        centerToSection(id);
-        setActiveNav(id);
-      }, false);
-
-      const toTop = document.getElementById("toTop");
-      const syncToTopState = function () {
-        toTop.classList.toggle("visible", window.scrollY > 280);
-      };
-      syncToTopState();
-      window.addEventListener("scroll", syncToTopState, { passive: true });
-      toTop.addEventListener("click", function () {
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      });
-      // === Interactive pricing ===
-      const PLANS = [
-        { label: "1 месяц",   base: 149,  extra: 50  },
-        { label: "3 месяца",  base: 399,  extra: 150 },
-        { label: "6 месяцев", base: 749,  extra: 300 },
-        { label: "12 месяцев",base: 1399, extra: 600 },
+      // --- Pricing calculator ---
+      // base = цена за 1 устройство на период; extra = за каждое доп. устройство; months = длина периода
+      var PLANS = [
+        { label: "1 месяц",  totalLabel: "Итого за месяц",   base: 99,  extra: 50,  months: 1  },
+        { label: "3 месяца", totalLabel: "Итого за 3 месяца", base: 249, extra: 100, months: 3  },
+        { label: "6 месяцев",totalLabel: "Итого за 6 месяцев",base: 449, extra: 200, months: 6  },
+        { label: "1 год",    totalLabel: "Итого за год",      base: 799, extra: 400, months: 12 }
       ];
+      var MIN_DEV = 1, MAX_DEV = 20;
+      var activePlan = 0;
+      var devices = 1;
 
-      let activePlan = 0;
-      let deviceCount = 2;
+      var cards = document.querySelectorAll(".period-card");
+      var devCountEl = document.getElementById("devCount");
+      var devMinus = document.getElementById("devMinus");
+      var devPlus = document.getElementById("devPlus");
+      var totalEl = document.getElementById("totalPrice");
+      var totalLabelEl = document.getElementById("totalLabel");
+      var breakdownEl = document.getElementById("breakdown");
 
-      const periodCards = document.querySelectorAll(".period-card");
-      const devCountEl = document.getElementById("devCount");
-      const devMinus = document.getElementById("devMinus");
-      const devPlus = document.getElementById("devPlus");
-      const totalPriceEl = document.getElementById("totalPrice");
-      const priceBreakdownEl = document.getElementById("priceBreakdown");
-      const periodTrack = document.getElementById("periodTrack");
+      function fmt(n) { return n.toLocaleString("ru-RU") + " ₽"; }
 
-      function updatePricing() {
-        const plan = PLANS[activePlan];
-        const extraDevices = Math.max(0, deviceCount - 2);
-        const total = plan.base + extraDevices * plan.extra;
+      function update(bump) {
+        var p = PLANS[activePlan];
+        var extraDev = Math.max(0, devices - 1);
+        var total = p.base + extraDev * p.extra;
+        var perMonth = Math.round(total / p.months);
 
-        totalPriceEl.textContent = total + " ₽";
-
-        let html = '<div class="bd-row"><span>Базовая цена (2 уст.)</span><span>' + plan.base + " ₽</span></div>";
-        if (extraDevices > 0) {
-          html += '<div class="bd-row"><span>+ ' + extraDevices + ' доп. уст. × ' + plan.extra + ' ₽</span><span>+' + (extraDevices * plan.extra) + " ₽</span></div>";
+        var html = '<div class="bd-row"><span>1 устройство · ' + p.label + '</span><span>' + fmt(p.base) + '</span></div>';
+        if (extraDev > 0) {
+          html += '<div class="bd-row"><span>+ ' + extraDev + ' доп. × ' + fmt(p.extra) + '</span><span>+' + fmt(extraDev * p.extra) + '</span></div>';
         }
-        priceBreakdownEl.innerHTML = html;
+        html += '<div class="bd-row permo"><span>В пересчёте на месяц</span><span>≈ ' + fmt(perMonth) + '/мес</span></div>';
+        breakdownEl.innerHTML = html;
 
-        devMinus.disabled = deviceCount <= 2;
-        devPlus.disabled = deviceCount >= 20;
+        totalLabelEl.textContent = p.totalLabel;
+        totalEl.textContent = fmt(total);
+
+        devCountEl.textContent = devices;
+        devMinus.disabled = devices <= MIN_DEV;
+        devPlus.disabled = devices >= MAX_DEV;
+
+        if (bump) {
+          totalEl.classList.add("bump");
+          setTimeout(function () { totalEl.classList.remove("bump"); }, 200);
+        }
       }
 
-      periodCards.forEach(function(card) {
-        card.addEventListener("click", function() {
-          activePlan = parseInt(card.dataset.idx);
-          periodCards.forEach(function(c) { c.classList.remove("active"); });
+      cards.forEach(function (card) {
+        card.addEventListener("click", function () {
+          activePlan = parseInt(card.dataset.idx, 10);
+          cards.forEach(function (c) { c.classList.remove("active"); });
           card.classList.add("active");
-          updatePricing();
+          update(true);
         });
       });
-
-      devMinus.addEventListener("click", function() {
-        if (deviceCount > 2) { deviceCount--; devCountEl.textContent = deviceCount; updatePricing(); }
+      devMinus.addEventListener("click", function () {
+        if (devices > MIN_DEV) { devices--; update(true); }
       });
-      devPlus.addEventListener("click", function() {
-        if (deviceCount < 20) { deviceCount++; devCountEl.textContent = deviceCount; updatePricing(); }
-      });
-
-      // Arrow scroll for period track
-      document.getElementById("periodPrev").addEventListener("click", function() {
-        if (activePlan > 0) {
-          activePlan--;
-          periodCards.forEach(function(c) { c.classList.remove("active"); });
-          periodCards[activePlan].classList.add("active");
-          periodCards[activePlan].scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-          updatePricing();
-        }
-      });
-      document.getElementById("periodNext").addEventListener("click", function() {
-        if (activePlan < PLANS.length - 1) {
-          activePlan++;
-          periodCards.forEach(function(c) { c.classList.remove("active"); });
-          periodCards[activePlan].classList.add("active");
-          periodCards[activePlan].scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-          updatePricing();
-        }
+      devPlus.addEventListener("click", function () {
+        if (devices < MAX_DEV) { devices++; update(true); }
       });
 
-      updatePricing();
+      update(false);
     </script>
   </body>
 </html>
