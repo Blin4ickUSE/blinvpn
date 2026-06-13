@@ -26,7 +26,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 
 from src.database import database
 
-logging.basicConfig(level=logging.INFO)
+from src.core.admin_error_reporter import setup_service_logging
+
+setup_service_logging('support_bot')
 logger = logging.getLogger(__name__)
 
 SUPPORT_BOT_TOKEN = os.getenv('SUPPORT_BOT_TOKEN', '')

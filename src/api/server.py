@@ -34,7 +34,9 @@ CORS(
     resources={r"/api/*": {"origins": "*"}},
 )
 
-logging.basicConfig(level=logging.INFO)
+from src.core.admin_error_reporter import setup_service_logging
+
+setup_service_logging('api')
 logger = logging.getLogger(__name__)
 
 

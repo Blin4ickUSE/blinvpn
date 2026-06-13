@@ -12,6 +12,9 @@ from src.core import core
 from src.core import messages as notify_msgs
 from src.core import payment_wait
 
+from src.core.admin_error_reporter import setup_service_logging
+
+setup_service_logging('webhook')
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)

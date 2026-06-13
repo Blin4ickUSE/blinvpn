@@ -28,7 +28,9 @@ from src.api import telegram_stars
 from src.api import remnawave
 import re
 
-logging.basicConfig(level=logging.INFO)
+from src.core.admin_error_reporter import setup_service_logging, exclude_signature
+
+setup_service_logging('bot')
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
@@ -447,6 +449,38 @@ async def unknown_command_handler(message: types.Message):
                 )
             ]])
         )
+
+
+# ========== Исключение типов ошибок из отчётов админу ==========
+
+@dp.callback_query(F.data.startswith('err_excl:'))
+async def handle_error_exclude(callback: CallbackQuery):
+    """Не присылать админу такой тип ошибки в будущем."""
+    try:
+        admin_ids = core.get_admin_telegram_ids()
+        if callback.from_user.id not in admin_ids:
+            await callback.answer('Нет доступа', show_alert=True)
+            return
+
+        signature = callback.data.split(':', 1)[1]
+        if not exclude_signature(signature):
+            await callback.answer('Не удалось сохранить исключение', show_alert=True)
+            return
+
+        await callback.message.edit_reply_markup(
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text='✅ Исключено', callback_data='err_excl_done'),
+            ]]),
+        )
+        await callback.answer('Такие ошибки больше не будут приходить')
+    except Exception as e:
+        logger.error('Error exclude callback failed: %s', e)
+        await callback.answer('Ошибка обработки', show_alert=True)
+
+
+@dp.callback_query(F.data == 'err_excl_done')
+async def handle_error_exclude_done(callback: CallbackQuery):
+    await callback.answer('Уже исключено')
 
 
 # ========== Обработчики callback для запросов на вывод ==========
