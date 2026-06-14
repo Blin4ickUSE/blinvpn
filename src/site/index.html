@@ -20,17 +20,43 @@
     <script type="application/ld+json">
 {
   "@context": "https://schema.org",
-  "@type": "Product",
-  "name": "BlinVPN",
-  "description": "Безопасный и быстрый VPN-сервис. Тарифы от 67 ₽/мес при оплате за год.",
-  "brand": { "@type": "Brand", "name": "BlinVPN" },
-  "offers": {
-    "@type": "AggregateOffer",
-    "priceCurrency": "RUB",
-    "lowPrice": "99",
-    "highPrice": "8399",
-    "offerCount": "4"
-  }
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://blinvpn.cc/#organization",
+      "name": "BlinVPN",
+      "url": "https://blinvpn.cc/",
+      "logo": "https://blinvpn.cc/assets/logo.png",
+      "description": "BlinVPN — безопасный и быстрый VPN. Свободный интернет от 67 ₽ в месяц.",
+      "sameAs": [
+        "https://t.me/blinvpn",
+        "https://t.me/blinvpn_bot"
+      ]
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://blinvpn.cc/#website",
+      "name": "BlinVPN",
+      "url": "https://blinvpn.cc/",
+      "inLanguage": "ru",
+      "publisher": { "@id": "https://blinvpn.cc/#organization" }
+    },
+    {
+      "@type": "Product",
+      "name": "BlinVPN",
+      "description": "Безопасный и быстрый VPN-сервис. Тарифы от 67 ₽/мес.",
+      "url": "https://blinvpn.cc/",
+      "image": "https://blinvpn.cc/assets/logo.png",
+      "brand": { "@id": "https://blinvpn.cc/#organization" },
+      "offers": {
+        "@type": "AggregateOffer",
+        "priceCurrency": "RUB",
+        "lowPrice": "99",
+        "highPrice": "8399",
+        "offerCount": "4"
+      }
+    }
+  ]
 }
     </script>
     <style>
