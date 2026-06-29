@@ -532,6 +532,269 @@ register_cryptopay_webhook() {
     log_info "  ${YELLOW}${webhook_url}${NC}"
 }
 
+# ──────────────────────────────────────────────────────────────
+#  Замена доменов / перевыпуск сертификатов (режим обновления)
+# ──────────────────────────────────────────────────────────────
+
+# Читает значение переменной из .env (последнее вхождение). Возвращает 1, если ключа нет.
+get_env_var() {
+    local key="$1"
+    local file="${2:-.env}"
+    [[ -f "$file" ]] || return 1
+    local line
+    line=$(grep -E "^${key}=" "$file" | tail -n1) || true
+    [[ -n "$line" ]] || return 1
+    printf '%s' "${line#*=}"
+}
+
+# Устанавливает (обновляет или добавляет) переменную в .env.
+set_env_var() {
+    local key="$1"
+    local val="$2"
+    local file="${3:-.env}"
+    local esc="$val"
+    # Экранируем спецсимволы sed для правой части (разделитель «|»).
+    esc=${esc//\\/\\\\}
+    esc=${esc//&/\\&}
+    esc=${esc//|/\\|}
+    if grep -qE "^${key}=" "$file"; then
+        sed -i "s|^${key}=.*|${key}=${esc}|" "$file"
+    else
+        printf '%s=%s\n' "$key" "$val" >> "$file"
+    fi
+}
+
+# Выпускает сертификаты Let's Encrypt для переданных доменов через webroot (порт 80).
+# Существующий SSL-конфиг (порт ${SSL_PORT}) при этом остаётся активным — минимум простоя.
+obtain_certificates() {
+    local email="$1"; shift
+    local domains=("$@")
+    ((${#domains[@]})) || return 0
+
+    local temp_conf="/tmp/blinvpn_certbot_renew.conf"
+    local temp_link="/etc/nginx/sites-enabled/blinvpn-acme.conf"
+
+    log_info "Подготовка временной конфигурации Nginx для ACME-проверки (порт 80)..."
+    sudo mkdir -p /var/www/html/.well-known/acme-challenge
+
+    local blocks="" d
+    for d in "${domains[@]}"; do
+        blocks+="server {
+    listen 80;
+    server_name ${d};
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+}
+"
+    done
+    printf '%s' "$blocks" | sudo tee "$temp_conf" >/dev/null
+    sudo ln -sf "$temp_conf" "$temp_link"
+
+    if ! sudo nginx -t; then
+        log_error "Ошибка проверки конфигурации Nginx. Замена доменов прервана."
+        sudo rm -f "$temp_link" "$temp_conf"
+        sudo systemctl reload nginx || true
+        exit 1
+    fi
+    sudo systemctl reload nginx
+
+    for d in "${domains[@]}"; do
+        log_info "Выпуск сертификата для ${d}..."
+        if sudo certbot certonly --webroot -w /var/www/html -d "$d" \
+            --email "$email" --agree-tos --non-interactive --keep-until-expiring; then
+            log_success "✔ Сертификат для ${d} получен."
+        else
+            log_error "❗ Не удалось получить сертификат для ${d}."
+            log_error "   Проверьте, что A-запись ${d} указывает на этот сервер и порт 80 открыт."
+            sudo rm -f "$temp_link" "$temp_conf"
+            sudo systemctl reload nginx || true
+            exit 1
+        fi
+    done
+
+    sudo rm -f "$temp_link" "$temp_conf"
+    sudo systemctl reload nginx || true
+}
+
+# Обновляет все доменозависимые переменные в .env.
+update_env_domains() {
+    local miniapp="$1"
+    local panel="$2"
+    local site="$3"
+    local ssl_port="$4"
+
+    local port_suffix=""
+    [[ "$ssl_port" != "443" ]] && port_suffix=":${ssl_port}"
+
+    set_env_var MINIAPP_DOMAIN "$miniapp"
+    set_env_var WEBHOOK_DOMAIN "$miniapp"
+    set_env_var PANEL_DOMAIN   "$panel"
+    set_env_var SITE_DOMAIN    "$site"
+
+    set_env_var MINIAPP_URL        "https://${miniapp}${port_suffix}"
+    set_env_var WEBHOOK_URL        "https://${miniapp}${port_suffix}"
+    set_env_var API_URL            "https://${miniapp}${port_suffix}/api"
+    set_env_var PANEL_URL          "https://${panel}${port_suffix}"
+    set_env_var SITE_URL           "https://${site}${port_suffix}"
+    set_env_var PLATEGA_RETURN_URL "https://${miniapp}${port_suffix}/success"
+    set_env_var PLATEGA_FAILED_URL "https://${miniapp}${port_suffix}/failed"
+
+    log_success "✔ .env обновлён."
+}
+
+# Интерактивная замена одного или нескольких доменов с перевыпуском сертификатов.
+replace_domains_flow() {
+    section "Замена доменов и перевыпуск сертификатов"
+
+    if [[ ! -f ".env" ]]; then
+        log_error "Файл .env не найден в $(pwd) — невозможно определить текущие домены."
+        exit 1
+    fi
+
+    # ── Текущие значения из .env ────────────────────────────
+    local cur_miniapp cur_panel cur_site cur_email cur_port
+    cur_miniapp=$(get_env_var MINIAPP_DOMAIN || true)
+    cur_panel=$(get_env_var PANEL_DOMAIN || true)
+    cur_site=$(get_env_var SITE_DOMAIN || true)
+    cur_email=$(get_env_var SSL_EMAIL || true)
+    cur_port=$(get_env_var SSL_PORT || true)
+    [[ -n "$cur_port" ]] || cur_port=443
+
+    log_info "Текущие домены:"
+    printf "  Мини-приложение : ${BOLD}%s${NC}\n" "${cur_miniapp:-—}"
+    printf "  Панель          : ${BOLD}%s${NC}\n" "${cur_panel:-—}"
+    printf "  Сайт            : ${BOLD}%s${NC}\n" "${cur_site:-—}"
+    echo
+
+    if [[ -z "$cur_email" ]]; then
+        prompt "Email для Let's Encrypt (в .env не найден): " cur_email
+        [[ -n "$cur_email" ]] || { log_error "Email обязателен для выпуска сертификатов."; exit 1; }
+    fi
+
+    # ── Выбор и ввод новых доменов ──────────────────────────
+    local new_miniapp="$cur_miniapp" new_panel="$cur_panel" new_site="$cur_site"
+    local -a changed=()     # домены, для которых нужен новый сертификат
+    local -a old_domains=() # заменённые домены — кандидаты на удаление
+    local tmp
+
+    if [[ -n "$cur_miniapp" ]] && confirm "Заменить домен мини-приложения (${cur_miniapp})? (y/n): "; then
+        prompt "  Новый домен мини-приложения: " tmp
+        tmp=$(sanitize_domain "$tmp")
+        [[ -n "$tmp" ]] || { log_error "Некорректный домен."; exit 1; }
+        new_miniapp="$tmp"; changed+=("$new_miniapp"); old_domains+=("$cur_miniapp")
+    fi
+
+    if [[ -n "$cur_panel" ]] && confirm "Заменить домен панели (${cur_panel})? (y/n): "; then
+        prompt "  Новый домен панели: " tmp
+        tmp=$(sanitize_domain "$tmp")
+        [[ -n "$tmp" ]] || { log_error "Некорректный домен."; exit 1; }
+        new_panel="$tmp"; changed+=("$new_panel"); old_domains+=("$cur_panel")
+    fi
+
+    if [[ -n "$cur_site" ]] && confirm "Заменить домен сайта (${cur_site})? (y/n): "; then
+        prompt "  Новый домен сайта: " tmp
+        tmp=$(sanitize_domain "$tmp")
+        [[ -n "$tmp" ]] || { log_error "Некорректный домен."; exit 1; }
+        new_site="$tmp"; changed+=("$new_site"); old_domains+=("$cur_site")
+    fi
+
+    if ((${#changed[@]} == 0)); then
+        log_warn "Ни один домен не выбран для замены. Изменений нет."
+        return 0
+    fi
+
+    log_info "\nНовые домены:"
+    printf "  Мини-приложение : ${BOLD}%s${NC}\n" "$new_miniapp"
+    printf "  Панель          : ${BOLD}%s${NC}\n" "$new_panel"
+    printf "  Сайт            : ${BOLD}%s${NC}\n" "$new_site"
+    echo
+    confirm "Применить замену? (y/n): " || { log_info "Отменено."; return 0; }
+
+    # ── Проверка DNS новых доменов ──────────────────────────
+    local server_ip; server_ip=$(get_server_ip || true)
+    if [[ -n "$server_ip" ]]; then
+        log_info "IP сервера: ${server_ip}"
+        local dip
+        for tmp in "${changed[@]}"; do
+            dip=$(resolve_domain_ip "$tmp" || true)
+            if [[ -z "$dip" ]]; then
+                log_warn "Не удалось определить A-запись для ${tmp} (укажите её на ${server_ip})."
+                confirm "Продолжить всё равно? (y/n): " || exit 1
+            elif [[ "$dip" != "$server_ip" ]]; then
+                log_warn "DNS ${tmp} → ${dip} не совпадает с IP сервера (${server_ip})."
+                confirm "Продолжить всё равно? (y/n): " || exit 1
+            fi
+        done
+    fi
+
+    # ── Firewall: для ACME нужен порт 80 ────────────────────
+    if command -v ufw >/dev/null 2>&1 && sudo ufw status | grep -q 'Status: active'; then
+        log_warn "Активен UFW — открываю порты 80 и ${cur_port}."
+        sudo ufw allow 80/tcp || true
+        sudo ufw allow "${cur_port}/tcp" || true
+    fi
+
+    # ── Выпуск сертификатов ─────────────────────────────────
+    section "Выпуск сертификатов Let's Encrypt"
+    obtain_certificates "$cur_email" "${changed[@]}"
+
+    # ── Перегенерация конфигурации Nginx ────────────────────
+    section "Обновление конфигурации Nginx"
+    configure_nginx "$new_miniapp" "$new_panel" "$new_site" "$cur_port" "$NGINX_CONF" "$NGINX_LINK"
+
+    # ── Обновление .env ─────────────────────────────────────
+    section "Обновление переменных окружения (.env)"
+    update_env_domains "$new_miniapp" "$new_panel" "$new_site" "$cur_port"
+
+    # ── Перезапуск контейнеров (подхват нового .env) ────────
+    section "Перезапуск Docker-контейнеров"
+    if [[ -n "$(sudo docker-compose ps -q 2>/dev/null)" ]]; then
+        sudo docker-compose down
+    fi
+    sudo docker-compose up -d --build
+
+    # ── Перерегистрация вебхуков (если сменился домен мини-приложения) ──
+    if [[ "$new_miniapp" != "$cur_miniapp" ]]; then
+        section "Перерегистрация вебхуков"
+        local bot_token; bot_token=$(get_env_var TELEGRAM_BOT_TOKEN || true)
+        register_telegram_webhook "$bot_token" "$new_miniapp" "$cur_port"
+        register_cryptopay_webhook "$new_miniapp" "$cur_port"
+    fi
+
+    # ── Опциональная очистка старых сертификатов ────────────
+    if ((${#old_domains[@]})) && confirm "Удалить сертификаты заменённых доменов? (y/n): "; then
+        local od
+        for od in "${old_domains[@]}"; do
+            [[ -n "$od" ]] || continue
+            # не трогаем домен, если он всё ещё используется
+            if [[ "$od" == "$new_miniapp" || "$od" == "$new_panel" || "$od" == "$new_site" ]]; then
+                continue
+            fi
+            if [[ -d "/etc/letsencrypt/live/${od}" ]]; then
+                if sudo certbot delete --cert-name "$od" --non-interactive 2>/dev/null; then
+                    log_info "Сертификат ${od} удалён."
+                else
+                    log_warn "Не удалось удалить сертификат ${od} — удалите вручную при необходимости."
+                fi
+            fi
+        done
+    fi
+
+    # ── Итог ────────────────────────────────────────────────
+    local port_suffix=""
+    [[ "$cur_port" != "443" ]] && port_suffix=":${cur_port}"
+    section "Замена доменов завершена"
+    printf "  Сайт            : ${YELLOW}https://%s%s${NC}\n" "$new_site"    "$port_suffix"
+    printf "  Мини-приложение : ${YELLOW}https://%s%s${NC}\n" "$new_miniapp" "$port_suffix"
+    printf "  Панель          : ${YELLOW}https://%s%s${NC}\n" "$new_panel"   "$port_suffix"
+    if [[ "$new_miniapp" != "$cur_miniapp" ]]; then
+        echo
+        log_warn "⚠️  Обновите Web App URL в @BotFather:"
+        printf "     ${CYAN}https://%s%s${NC}\n" "$new_miniapp" "$port_suffix"
+    fi
+}
+
 REPO_URL="https://github.com/Blin4ickUSE/blinvpn.git"
 REPO_BRANCH="${BLINVPN_BRANCH:-2.0-refactoring}"
 PROJECT_DIR="blinvpn"
@@ -543,33 +806,54 @@ SSL_PORT=443
 
 log_success "--- Запуск скрипта установки/обновления BlinVPN ---"
 
-# Режим обновления
+# Режим обновления / обслуживания существующей установки
 if [[ -f "$NGINX_CONF" ]]; then
-    log_info "\nОбнаружена существующая конфигурация. Запускается режим обновления."
+    log_info "\nОбнаружена существующая конфигурация BlinVPN."
     if [[ ! -d "$PROJECT_DIR" ]]; then
         log_error "Конфигурация Nginx найдена, но каталог '${PROJECT_DIR}' отсутствует. Удалите $NGINX_CONF и повторите установку."
         exit 1
     fi
     cd "$PROJECT_DIR"
-    log_info "\nШаг 1: обновление исходного кода"
-    git fetch origin
-    git reset --hard origin/"$REPO_BRANCH"
-    git checkout "$REPO_BRANCH" 2>/dev/null || git checkout -b "$REPO_BRANCH" --track origin/"$REPO_BRANCH"
-    git reset --hard origin/"$REPO_BRANCH"
-    log_success "✔ Репозиторий обновлён."
-    log_info "\nШаг 2: публикация лендинга"
-    deploy_site_files
 
-    log_info "\nШаг 3: пересборка и перезапуск контейнеров"
-    sudo docker-compose down --remove-orphans
-    sudo docker-compose up -d --build
+    section "Существующая установка — выберите действие"
+    step "1)" "Обновить код и перезапустить контейнеры (по умолчанию)"
+    step "2)" "Заменить домен(ы) и перевыпустить сертификаты"
+    step "3)" "Выход"
+    echo
+    prompt "Ваш выбор [1/2/3] (Enter = 1): " ACTION_CHOICE
+    ACTION_CHOICE="${ACTION_CHOICE:-1}"
 
-    if [[ -f "$NGINX_CONF" ]]; then
-        sudo nginx -t && sudo systemctl reload nginx
-    fi
+    case "$ACTION_CHOICE" in
+        2)
+            replace_domains_flow
+            exit 0
+            ;;
+        3)
+            log_info "Выход без изменений."
+            exit 0
+            ;;
+        *)
+            log_info "\nШаг 1: обновление исходного кода"
+            git fetch origin
+            git reset --hard origin/"$REPO_BRANCH"
+            git checkout "$REPO_BRANCH" 2>/dev/null || git checkout -b "$REPO_BRANCH" --track origin/"$REPO_BRANCH"
+            git reset --hard origin/"$REPO_BRANCH"
+            log_success "✔ Репозиторий обновлён."
+            log_info "\nШаг 2: публикация лендинга"
+            deploy_site_files
 
-    log_success "\n🎉 Обновление успешно завершено!"
-    exit 0
+            log_info "\nШаг 3: пересборка и перезапуск контейнеров"
+            sudo docker-compose down --remove-orphans
+            sudo docker-compose up -d --build
+
+            if [[ -f "$NGINX_CONF" ]]; then
+                sudo nginx -t && sudo systemctl reload nginx
+            fi
+
+            log_success "\n🎉 Обновление успешно завершено!"
+            exit 0
+            ;;
+    esac
 fi
 
 # Новая установка
