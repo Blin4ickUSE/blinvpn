@@ -50,10 +50,22 @@ class PayPearAPI:
 
     def __init__(self):
         self.base_url = PAYPEAR_API_URL
-        self.shop_id = PAYPEAR_SHOP_ID
-        self.secret_key = PAYPEAR_SECRET_KEY
-        self.return_url = PAYPEAR_RETURN_URL
-        self.webhook_url = _build_webhook_url()
+
+    @property
+    def shop_id(self) -> str:
+        return (os.getenv('PAYPEAR_SHOP_ID', '') or '').strip()
+
+    @property
+    def secret_key(self) -> str:
+        return (os.getenv('PAYPEAR_SECRET_KEY', '') or '').strip()
+
+    @property
+    def return_url(self) -> str:
+        return (os.getenv('PAYPEAR_RETURN_URL', '') or '').strip()
+
+    @property
+    def webhook_url(self) -> str:
+        return _build_webhook_url()
 
     @property
     def is_configured(self) -> bool:

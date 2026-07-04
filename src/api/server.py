@@ -1168,7 +1168,9 @@ def create_payment():
         elif method in ('paypear_card_ru', 'paypear_card', 'paypear'):
             # Российские карты через PayPear (комиссия 6%)
             if not paypear.paypear_api.is_configured:
-                return jsonify({'error': 'PayPear не настроен'}), 503
+                return jsonify({
+                    'error': 'PayPear не настроен. Укажите PAYPEAR_SHOP_ID и PAYPEAR_SECRET_KEY в .env и перезапустите контейнер api.',
+                }), 503
             payment = paypear.paypear_api.create_card_payment(
                 net_amount,
                 int(user_id),
