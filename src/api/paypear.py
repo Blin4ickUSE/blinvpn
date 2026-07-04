@@ -2,7 +2,7 @@
 API модуль для работы с PayPear (paypear.ru).
 Документация: https://paypear.ru/docs/
 
-Комиссия для российских карт (bank_card): 6%.
+Комиссия для российских карт (BASIC_CARD_HPP / bank_card): 6%.
 """
 import base64
 import hashlib
@@ -10,7 +10,7 @@ import hmac
 import logging
 import os
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -35,12 +35,19 @@ def _build_webhook_url() -> str:
 # Комиссия PayPear для российских карт
 PAYPEAR_CARD_FEE_PERCENT = 6.0
 
-PAYPEAR_METHOD_BANK_CARD = 'bank_card'
+# Hosted page (redirect) — основной тип для карт РФ в PayPear API
+PAYPEAR_METHOD_BANK_CARD = 'BASIC_CARD_HPP'
 PAYPEAR_METHOD_SBP = 'sbp'
 PAYPEAR_METHOD_SBERPAY = 'sberpay'
 PAYPEAR_METHOD_TPAY = 'tpay'
 
-PAYPEAR_SUCCESS_STATUSES = {'CONFIRMED', 'success', 'paid'}
+PAYPEAR_CARD_METHOD_FALLBACKS = (
+    'BASIC_CARD_HPP',
+    'BASIC_CARD',
+    'bank_card',
+)
+
+PAYPEAR_SUCCESS_STATUSES = {'CONFIRMED', 'COMPLETED', 'success', 'paid'}
 PAYPEAR_FAILED_STATUSES = {'CANCELED', 'REFUNDED', 'EXPIRED', 'failed', 'canceled', 'expired'}
 PAYPEAR_PENDING_STATUSES = {'NEW', 'PROCESS', 'pending', 'processing', 'created'}
 
@@ -90,6 +97,47 @@ class PayPearAPI:
             headers['Idempotence-Key'] = idempotence_key
         return headers
 
+    @staticmethod
+    def _extract_error_message(payload: Any) -> str:
+        if not isinstance(payload, dict):
+            return str(payload)
+        error = payload.get('error')
+        if isinstance(error, dict):
+            return str(error.get('message') or error.get('code') or error)
+        return str(payload.get('message') or error or payload)
+
+    @staticmethod
+    def _is_method_not_found_error(message: str) -> bool:
+        text = (message or '').lower()
+        return 'payment method' in text and 'not found' in text
+
+    @staticmethod
+    def _extract_payment_url(result: Dict[str, Any]) -> Optional[str]:
+        confirmation = result.get('confirmation') or {}
+        if isinstance(confirmation, dict):
+            url = confirmation.get('url')
+            if url:
+                return str(url)
+        for key in ('redirect_url', 'redirectUrl', 'payment_url', 'pay_url'):
+            value = result.get(key)
+            if value:
+                return str(value)
+        return None
+
+    def _card_method_candidates(self) -> List[str]:
+        explicit = (os.getenv('PAYPEAR_PAYMENT_METHOD', '') or '').strip()
+        candidates: List[str] = []
+        if explicit:
+            candidates.append(explicit)
+        candidates.extend(PAYPEAR_CARD_METHOD_FALLBACKS)
+        seen: set[str] = set()
+        unique: List[str] = []
+        for item in candidates:
+            if item and item not in seen:
+                seen.add(item)
+                unique.append(item)
+        return unique
+
     def _request(
         self,
         method: str,
@@ -97,10 +145,10 @@ class PayPearAPI:
         data: Optional[Dict] = None,
         *,
         idempotence_key: str = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         if not self.is_configured:
             logger.error('PayPear не настроен: отсутствуют PAYPEAR_SHOP_ID или PAYPEAR_SECRET_KEY')
-            return None
+            return None, 'PayPear не настроен'
 
         url = f'{self.base_url}{endpoint}'
         headers = self._headers(idempotence_key=idempotence_key)
@@ -117,45 +165,38 @@ class PayPearAPI:
             logger.info('PayPear response: %s', response.status_code)
             payload = response.json() if response.content else {}
             if response.status_code >= 400:
+                message = self._extract_error_message(payload)
                 logger.error('PayPear API error: %s', payload)
-                return None
+                return None, message
 
             if isinstance(payload, dict) and payload.get('success') is False:
-                logger.error('PayPear API error: %s', payload.get('message') or payload)
-                return None
+                message = self._extract_error_message(payload)
+                logger.error('PayPear API error: %s', message)
+                return None, message
 
             if isinstance(payload, dict) and payload.get('success') is True:
                 result = payload.get('result')
-                return result if isinstance(result, dict) else payload
+                return (result if isinstance(result, dict) else payload), None
 
-            return payload if isinstance(payload, dict) else None
+            return (payload if isinstance(payload, dict) else None), None
         except requests.exceptions.RequestException as e:
             logger.error('PayPear API error: %s', e)
             if getattr(e, 'response', None) is not None:
                 logger.error('Response: %s', e.response.text)
-            return None
+            return None, str(e)
 
-    def create_payment(
+    def _build_payment_payload(
         self,
+        *,
         amount: float,
         user_id: int,
+        order_id: str,
+        payment_method_type: str,
         description: str = None,
-        payment_method_type: str = PAYPEAR_METHOD_BANK_CARD,
         return_url: str = None,
         webhook_url: str = None,
         metadata: Optional[Dict] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Создать платёж через PayPear.
-
-        Args:
-            amount: сумма в рублях (комиссия 6% для bank_card)
-            payment_method_type: bank_card | sbp | sberpay | tpay
-        """
-        if not self.is_configured:
-            return None
-
-        order_id = f'paypear_{user_id}_{uuid.uuid4().hex[:8]}'
+    ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             'amount': {
                 'value': f'{float(amount):.2f}',
@@ -179,29 +220,27 @@ class PayPearAPI:
         if hook_url:
             payload['webhook_url'] = hook_url
 
-        if metadata:
-            payload['metadata'] = metadata
-        else:
-            payload['metadata'] = {'user_id': user_id, 'source': 'balance_topup'}
+        payload['metadata'] = metadata or {'user_id': user_id, 'source': 'balance_topup'}
+        return payload
 
-        result = self._request(
-            'POST',
-            '/payment/',
-            payload,
-            idempotence_key=str(uuid.uuid4()),
-        )
-        if not result:
-            return None
-
-        confirmation = result.get('confirmation') or {}
-        payment_url = confirmation.get('url') if isinstance(confirmation, dict) else None
+    def _format_payment_result(
+        self,
+        result: Dict[str, Any],
+        *,
+        order_id: str,
+        amount: float,
+        payment_method_type: str,
+    ) -> Dict[str, Any]:
+        payment_url = self._extract_payment_url(result)
         paypear_id = result.get('id')
         status = str(result.get('status') or 'NEW').upper()
+        is_card = payment_method_type in PAYPEAR_CARD_METHOD_FALLBACKS or payment_method_type == PAYPEAR_METHOD_BANK_CARD
 
         logger.info(
-            'PayPear платёж создан: %s для user %s, сумма %s₽',
+            'PayPear платёж создан: %s для order %s, метод %s, сумма %s₽',
             paypear_id,
-            user_id,
+            order_id,
+            payment_method_type,
             amount,
         )
 
@@ -213,8 +252,62 @@ class PayPearAPI:
             'amount': amount,
             'amount_kopeks': int(round(amount * 100)),
             'payment_method': payment_method_type,
-            'fee_percent': PAYPEAR_CARD_FEE_PERCENT if payment_method_type == PAYPEAR_METHOD_BANK_CARD else None,
+            'fee_percent': PAYPEAR_CARD_FEE_PERCENT if is_card else None,
         }
+
+    def create_payment(
+        self,
+        amount: float,
+        user_id: int,
+        description: str = None,
+        payment_method_type: str = PAYPEAR_METHOD_BANK_CARD,
+        return_url: str = None,
+        webhook_url: str = None,
+        metadata: Optional[Dict] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Создать платёж через PayPear.
+
+        Args:
+            amount: сумма в рублях (комиссия 6% для карт РФ)
+            payment_method_type: BASIC_CARD_HPP | BASIC_CARD | sbp | sberpay | tpay
+        """
+        if not self.is_configured:
+            return None
+
+        order_id = f'paypear_{user_id}_{uuid.uuid4().hex[:8]}'
+        payload = self._build_payment_payload(
+            amount=amount,
+            user_id=user_id,
+            order_id=order_id,
+            payment_method_type=payment_method_type,
+            description=description,
+            return_url=return_url,
+            webhook_url=webhook_url,
+            metadata=metadata,
+        )
+
+        result, error = self._request(
+            'POST',
+            '/payment/',
+            payload,
+            idempotence_key=str(uuid.uuid4()),
+        )
+        if not result:
+            if error:
+                logger.error('PayPear create_payment (%s): %s', payment_method_type, error)
+            return None
+
+        formatted = self._format_payment_result(
+            result,
+            order_id=order_id,
+            amount=amount,
+            payment_method_type=payment_method_type,
+        )
+        if not formatted.get('redirect_url'):
+            logger.error('PayPear: нет redirect_url в ответе: %s', result)
+            return None
+        return formatted
 
     def create_card_payment(
         self,
@@ -225,14 +318,45 @@ class PayPearAPI:
         webhook_url: str = None,
     ) -> Optional[Dict[str, Any]]:
         """Создать платёж российской картой (комиссия 6%)."""
-        return self.create_payment(
-            amount,
-            user_id,
-            description=description,
-            payment_method_type=PAYPEAR_METHOD_BANK_CARD,
-            return_url=return_url,
-            webhook_url=webhook_url,
-        )
+        last_error = None
+        for method_type in self._card_method_candidates():
+            order_id = f'paypear_{user_id}_{uuid.uuid4().hex[:8]}'
+            payload = self._build_payment_payload(
+                amount=amount,
+                user_id=user_id,
+                order_id=order_id,
+                payment_method_type=method_type,
+                description=description,
+                return_url=return_url,
+                webhook_url=webhook_url,
+            )
+            result, error = self._request(
+                'POST',
+                '/payment/',
+                payload,
+                idempotence_key=str(uuid.uuid4()),
+            )
+            if result:
+                formatted = self._format_payment_result(
+                    result,
+                    order_id=order_id,
+                    amount=amount,
+                    payment_method_type=method_type,
+                )
+                if formatted.get('redirect_url'):
+                    return formatted
+                logger.error('PayPear (%s): нет redirect_url в ответе: %s', method_type, result)
+                return None
+
+            last_error = error
+            if error and self._is_method_not_found_error(error):
+                logger.info('PayPear: метод %s недоступен для магазина, пробуем другой', method_type)
+                continue
+            break
+
+        if last_error:
+            logger.error('PayPear create_card_payment failed: %s', last_error)
+        return None
 
     def create_sbp_payment(
         self,
@@ -253,12 +377,12 @@ class PayPearAPI:
 
     def check_payment_status(self, payment_id: str) -> Optional[Dict[str, Any]]:
         """GET /payment/{id}/"""
-        result = self._request('GET', f'/payment/{payment_id}/')
+        result, _ = self._request('GET', f'/payment/{payment_id}/')
         return self._normalize_status(result, payment_id=payment_id)
 
     def check_payment_status_by_order(self, order_id: str) -> Optional[Dict[str, Any]]:
         """GET /payment/order/{order_id}/"""
-        result = self._request('GET', f'/payment/order/{order_id}/')
+        result, _ = self._request('GET', f'/payment/order/{order_id}/')
         return self._normalize_status(result, order_id=order_id)
 
     def _normalize_status(
