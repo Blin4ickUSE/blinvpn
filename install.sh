@@ -274,6 +274,14 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
+    location /paypear {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
     location /cryptopay {
         proxy_pass http://127.0.0.1:5000;
         proxy_set_header Host \$host;
@@ -431,6 +439,11 @@ ROLLYPAY_API_KEY=
 ROLLYPAY_SIGNING_SECRET=
 ROLLYPAY_TERMINAL_ID=
 
+# PayPear (российские карты, комиссия 6%)
+PAYPEAR_API_URL=https://api.paypear.ru/v1
+PAYPEAR_SHOP_ID=
+PAYPEAR_SECRET_KEY=
+
 # CryptoBot
 CRYPTOPAY_API_URL=https://pay.crypt.bot/api
 CRYPTOPAY_API_TOKEN=
@@ -443,6 +456,8 @@ WEBHOOK_URL=https://${domain}${port_suffix}
 API_URL=https://${domain}${port_suffix}/api
 PLATEGA_RETURN_URL=https://${domain}${port_suffix}/success
 PLATEGA_FAILED_URL=https://${domain}${port_suffix}/failed
+PAYPEAR_RETURN_URL=https://${domain}${port_suffix}/success
+PAYPEAR_WEBHOOK_URL=https://${domain}${port_suffix}/paypear
 
 # Ports (внутренние)
 API_PORT=8000
@@ -529,6 +544,22 @@ register_cryptopay_webhook() {
 
     log_info "\n${BOLD}CryptoBot (CryptoPay) webhook:${NC}"
     log_info "  Зарегистрируйте вручную в @CryptoBot → My Apps → ваше приложение → Webhooks:"
+    log_info "  ${YELLOW}${webhook_url}${NC}"
+}
+
+register_paypear_webhook() {
+    local domain="$1"
+    local ssl_port="$2"
+
+    local port_suffix=""
+    if [[ "$ssl_port" != "443" ]]; then
+        port_suffix=":${ssl_port}"
+    fi
+
+    local webhook_url="https://${domain}${port_suffix}/paypear"
+
+    log_info "\n${BOLD}PayPear webhook (российские карты):${NC}"
+    log_info "  Укажите в личном кабинете PayPear → Настройки → Webhook URL:"
     log_info "  ${YELLOW}${webhook_url}${NC}"
 }
 
@@ -760,6 +791,7 @@ replace_domains_flow() {
         local bot_token; bot_token=$(get_env_var TELEGRAM_BOT_TOKEN || true)
         register_telegram_webhook "$bot_token" "$new_miniapp" "$cur_port"
         register_cryptopay_webhook "$new_miniapp" "$cur_port"
+        register_paypear_webhook "$new_miniapp" "$cur_port"
     fi
 
     # ── Опциональная очистка старых сертификатов ────────────
@@ -1058,6 +1090,7 @@ log_info "\nШаг 7: регистрация Telegram webhook (Telegram Stars)"
 register_telegram_webhook "$TELEGRAM_BOT_TOKEN" "$DOMAIN" "$SSL_PORT"
 
 register_cryptopay_webhook "$DOMAIN" "$SSL_PORT"
+register_paypear_webhook "$DOMAIN" "$SSL_PORT"
 
 # Формируем URL с портом для вывода
 PORT_SUFFIX=""
@@ -1085,6 +1118,7 @@ printf "\e[1m  Webhooks\e[0m\n"
 printf "\e[0;32m───────────────────────────────────────────────────────────────\e[0m\n"
 printf "  Heleket:          \e[1;33mhttps://%s%s/heleket\e[0m\n"                "${DOMAIN}" "${PORT_SUFFIX}"
 printf "  Platega:          \e[1;33mhttps://%s%s/platega\e[0m\n"                "${DOMAIN}" "${PORT_SUFFIX}"
+printf "  PayPear:          \e[1;33mhttps://%s%s/paypear\e[0m\n"                "${DOMAIN}" "${PORT_SUFFIX}"
 printf "  Telegram Stars:   \e[1;33mhttps://%s%s/api/telegram/webhook\e[0m"     "${DOMAIN}" "${PORT_SUFFIX}"
 printf "  \e[0;32m(авто)\e[0m\n"
 printf "  CryptoBot:        \e[1;33mhttps://%s%s/cryptopay\e[0m\n"             "${DOMAIN}" "${PORT_SUFFIX}"

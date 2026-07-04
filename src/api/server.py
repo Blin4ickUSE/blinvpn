@@ -22,7 +22,7 @@ from src.database import database
 from src.core import core
 from src.core import messages as notify_msgs
 from src.core.blacklist import start_blacklist_updater, update_blacklist
-from src.api import remnawave, heleket, platega, rollypay, cryptopay
+from src.api import remnawave, heleket, platega, rollypay, cryptopay, paypear
 from src.api.payment_poller import start_payment_poller
 from src.core import payment_wait
 
@@ -368,6 +368,8 @@ ENV_SETTINGS_KEYS = {
     'PLATEGA_SECRET_KEY',
     'ROLLYPAY_API_KEY',
     'ROLLYPAY_SIGNING_SECRET',
+    'PAYPEAR_SHOP_ID',
+    'PAYPEAR_SECRET_KEY',
     'HELEKET_MERCHANT',
     'HELEKET_API_KEY',
     'CRYPTOPAY_API_TOKEN',
@@ -1131,7 +1133,7 @@ def create_payment():
                 })
 
         elif method in ('platega_card_ru', 'platega_ru'):
-            # Российские карты: Platega method 11 (карточный эквайринг)
+            # Legacy: Platega. Новые клиенты используют paypear_card_ru.
             payment = platega.platega_api.create_payment(
                 net_amount,
                 int(user_id),
@@ -1163,6 +1165,41 @@ def create_payment():
                     'status': payment.get('status', 'pending')
                 })
 
+        elif method in ('paypear_card_ru', 'paypear_card', 'paypear'):
+            # Российские карты через PayPear (комиссия 6%)
+            if not paypear.paypear_api.is_configured:
+                return jsonify({'error': 'PayPear не настроен'}), 503
+            payment = paypear.paypear_api.create_card_payment(
+                net_amount,
+                int(user_id),
+                description='Пополнение баланса (карта РФ, PayPear)',
+                return_url=return_url,
+            )
+            if payment:
+                try:
+                    conn = database.get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
+                        VALUES (?, 'deposit', ?, 'Pending', 'Карта', 'PayPear', ?, ?)
+                        """,
+                        (int(user_id), net_amount, payment.get('id'), 'Ожидание оплаты PayPear (карта РФ)'),
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception as _e:
+                    logger.warning('PayPear: не удалось создать Pending-транзакцию: %s', _e)
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                return jsonify({
+                    'payment_id': payment.get('id'),
+                    'payment_url': payment.get('redirect_url'),
+                    'status': payment.get('status', 'pending'),
+                })
+        
         elif method in ('platega_card_intl', 'platega_intl'):
             # Иностранные карты: Platega method 12 (международный эквайринг)
             payment = platega.platega_api.create_payment(
@@ -5094,6 +5131,8 @@ def get_settings():
             'PLATEGA_SECRET_KEY': env_raw.get('PLATEGA_SECRET_KEY', os.getenv('PLATEGA_SECRET_KEY', '')),
             'ROLLYPAY_API_KEY': env_raw.get('ROLLYPAY_API_KEY', os.getenv('ROLLYPAY_API_KEY', '')),
             'ROLLYPAY_SIGNING_SECRET': env_raw.get('ROLLYPAY_SIGNING_SECRET', os.getenv('ROLLYPAY_SIGNING_SECRET', '')),
+            'PAYPEAR_SHOP_ID': env_raw.get('PAYPEAR_SHOP_ID', os.getenv('PAYPEAR_SHOP_ID', '')),
+            'PAYPEAR_SECRET_KEY': env_raw.get('PAYPEAR_SECRET_KEY', os.getenv('PAYPEAR_SECRET_KEY', '')),
             'HELEKET_MERCHANT': env_raw.get('HELEKET_MERCHANT', os.getenv('HELEKET_MERCHANT', '')),
             'HELEKET_API_KEY': env_raw.get('HELEKET_API_KEY', os.getenv('HELEKET_API_KEY', '')),
             'CRYPTOPAY_API_TOKEN': env_raw.get('CRYPTOPAY_API_TOKEN', os.getenv('CRYPTOPAY_API_TOKEN', '')),
@@ -5135,6 +5174,8 @@ def update_settings():
             'PLATEGA_SECRET_KEY': str(data.get('PLATEGA_SECRET_KEY', env_raw.get('PLATEGA_SECRET_KEY', ''))),
             'ROLLYPAY_API_KEY': str(data.get('ROLLYPAY_API_KEY', env_raw.get('ROLLYPAY_API_KEY', ''))),
             'ROLLYPAY_SIGNING_SECRET': str(data.get('ROLLYPAY_SIGNING_SECRET', env_raw.get('ROLLYPAY_SIGNING_SECRET', ''))),
+            'PAYPEAR_SHOP_ID': str(data.get('PAYPEAR_SHOP_ID', env_raw.get('PAYPEAR_SHOP_ID', ''))),
+            'PAYPEAR_SECRET_KEY': str(data.get('PAYPEAR_SECRET_KEY', env_raw.get('PAYPEAR_SECRET_KEY', ''))),
             'HELEKET_MERCHANT': str(data.get('HELEKET_MERCHANT', env_raw.get('HELEKET_MERCHANT', ''))),
             'HELEKET_API_KEY': str(data.get('HELEKET_API_KEY', env_raw.get('HELEKET_API_KEY', ''))),
             'CRYPTOPAY_API_TOKEN': str(data.get('CRYPTOPAY_API_TOKEN', env_raw.get('CRYPTOPAY_API_TOKEN', env_raw.get('CRYPTOBOT_API_TOKEN', '')))),

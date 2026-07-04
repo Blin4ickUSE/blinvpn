@@ -26,9 +26,15 @@ from src.core import messages as notify_msgs
 from src.core.blacklist import start_blacklist_updater
 from src.api import telegram_stars
 from src.api import remnawave
+import html
 import re
 
-from src.core.admin_error_reporter import setup_service_logging, exclude_signature
+from src.core.admin_error_reporter import (
+    setup_service_logging,
+    exclude_signature,
+    include_signature,
+    list_error_excludes,
+)
 
 setup_service_logging('bot')
 logger = logging.getLogger(__name__)
@@ -463,13 +469,18 @@ async def handle_error_exclude(callback: CallbackQuery):
             return
 
         signature = callback.data.split(':', 1)[1]
-        if not exclude_signature(signature):
+        normalized = ''
+        if callback.message and callback.message.text:
+            msg_lines = callback.message.text.split('\n')
+            if len(msg_lines) >= 2:
+                normalized = msg_lines[1].strip()
+        if not exclude_signature(signature, normalized=normalized):
             await callback.answer('Не удалось сохранить исключение', show_alert=True)
             return
 
         await callback.message.edit_reply_markup(
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text='✅ Исключено', callback_data='err_excl_done'),
+                InlineKeyboardButton(text='↩️ Вернуть', callback_data=f'err_incl:{signature}'),
             ]]),
         )
         await callback.answer('Такие ошибки больше не будут приходить')
@@ -478,9 +489,64 @@ async def handle_error_exclude(callback: CallbackQuery):
         await callback.answer('Ошибка обработки', show_alert=True)
 
 
-@dp.callback_query(F.data == 'err_excl_done')
-async def handle_error_exclude_done(callback: CallbackQuery):
-    await callback.answer('Уже исключено')
+@dp.callback_query(F.data.startswith('err_incl:'))
+async def handle_error_include(callback: CallbackQuery):
+    """Снова присылать админу такой тип ошибки."""
+    try:
+        admin_ids = core.get_admin_telegram_ids()
+        if callback.from_user.id not in admin_ids:
+            await callback.answer('Нет доступа', show_alert=True)
+            return
+
+        signature = callback.data.split(':', 1)[1]
+        if not include_signature(signature):
+            await callback.answer('Не удалось убрать из исключений', show_alert=True)
+            return
+
+        await callback.message.edit_reply_markup(
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text='🚫 Исключить', callback_data=f'err_excl:{signature}'),
+            ]]),
+        )
+        await callback.answer('Такие ошибки снова будут приходить')
+    except Exception as e:
+        logger.error('Error include callback failed: %s', e)
+        await callback.answer('Ошибка обработки', show_alert=True)
+
+
+@dp.message(Command('error_excludes'))
+async def cmd_error_excludes(message: Message):
+    """Список исключённых типов ошибок с кнопками удаления."""
+    admin_ids = core.get_admin_telegram_ids()
+    if message.from_user.id not in admin_ids:
+        return
+
+    items = list_error_excludes()
+    if not items:
+        await message.answer('Список исключений пуст.')
+        return
+
+    lines = ['<b>Исключённые типы ошибок</b>\n']
+    keyboard_rows = []
+    for idx, item in enumerate(items[:20], start=1):
+        text = item.get('normalized') or item.get('signature', '')
+        sig = item.get('signature', '')
+        lines.append(f'{idx}. <code>{html.escape(text[:120])}</code>')
+        keyboard_rows.append([
+            InlineKeyboardButton(
+                text=f'↩️ Вернуть #{idx}',
+                callback_data=f'err_incl:{sig}',
+            ),
+        ])
+
+    if len(items) > 20:
+        lines.append(f'\n… и ещё {len(items) - 20}')
+
+    await message.answer(
+        '\n'.join(lines),
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
+    )
 
 
 # ========== Обработчики callback для запросов на вывод ==========

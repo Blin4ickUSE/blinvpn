@@ -63,7 +63,7 @@ def _get_pending_transactions() -> list[Dict[str, Any]]:
                    amount, status, created_at
             FROM transactions
             WHERE status = 'Pending'
-              AND payment_provider IN ('CryptoPay', 'Heleket', 'Platega', 'RollyPay')
+              AND payment_provider IN ('CryptoPay', 'Heleket', 'Platega', 'RollyPay', 'PayPear')
               AND payment_id IS NOT NULL
               AND TRIM(payment_id) != ''
             ORDER BY id DESC
@@ -236,6 +236,23 @@ def _check_rollypay(tx: Dict[str, Any]) -> None:
     _credit_if_paid(tx, provider="RollyPay", method_name="СБП", amount=amount, log_label="RollyPay")
 
 
+def _check_paypear(tx: Dict[str, Any]) -> None:
+    """Проверить и при необходимости зачислить PayPear-платёж."""
+    from src.api import paypear
+
+    payment_id = str(tx.get("payment_id") or "")
+    if not payment_id:
+        return
+
+    result = paypear.paypear_api.check_payment_status(payment_id)
+    if not result or not result.get("is_paid"):
+        return
+
+    amount = float(tx.get("amount") or result.get("amount") or 0)
+    method_name = str(tx.get("payment_method") or "Карта")
+    _credit_if_paid(tx, provider="PayPear", method_name=method_name, amount=amount, log_label="PayPear")
+
+
 # ---------------------------------------------------------------------------
 # Основной цикл опроса
 # ---------------------------------------------------------------------------
@@ -245,6 +262,7 @@ _CHECKER_MAP: Dict[str, Callable[[Dict[str, Any]], None]] = {
     "Heleket": _check_heleket,
     "Platega": _check_platega,
     "RollyPay": _check_rollypay,
+    "PayPear": _check_paypear,
 }
 
 

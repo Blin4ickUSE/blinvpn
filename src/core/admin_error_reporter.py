@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 EXCLUDES_SETTING_KEY = 'admin_error_report_excludes'
 FLUSH_DELAY_SEC = 30
-EXCLUDES_CACHE_TTL_SEC = 30
+EXCLUDES_CACHE_TTL_SEC = 5
 MAX_SAMPLE_LEN = 600
 MAX_USERS_SHOWN = 8
 
@@ -80,25 +80,73 @@ class ErrorGroup:
 _excluded_cache: Optional[Set[str]] = None
 _excluded_cache_at: float = 0.0
 _reporting = threading.local()
+_handlers: List['AdminErrorReporterHandler'] = []
 
 
-def _load_excludes() -> Set[str]:
+def _parse_excludes_raw(raw: str) -> List[Dict[str, str]]:
+    import json
+    data = json.loads(raw or '[]')
+    if not isinstance(data, list):
+        return []
+    items: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+    for entry in data:
+        if isinstance(entry, str):
+            sig = entry.strip()
+            normalized = ''
+        elif isinstance(entry, dict):
+            sig = str(entry.get('signature') or entry.get('sig') or '').strip()
+            normalized = str(entry.get('normalized') or entry.get('text') or '').strip()
+        else:
+            continue
+        if not sig or sig in seen:
+            continue
+        seen.add(sig)
+        items.append({'signature': sig, 'normalized': normalized})
+    return items
+
+
+def _load_exclude_items(*, fresh: bool = False) -> List[Dict[str, str]]:
     raw = database.get_system_setting(EXCLUDES_SETTING_KEY, '[]')
     try:
-        import json
-        data = json.loads(raw or '[]')
-        return {str(x) for x in data if x}
+        return _parse_excludes_raw(raw)
     except Exception:
-        return set()
+        return []
+
+
+def _load_excludes(*, fresh: bool = False) -> Set[str]:
+    return {item['signature'] for item in _load_exclude_items(fresh=fresh)}
+
+
+def _save_exclude_items(items: List[Dict[str, str]]) -> bool:
+    import json
+    unique: Dict[str, Dict[str, str]] = {}
+    for item in items:
+        sig = (item.get('signature') or '').strip()
+        if not sig:
+            continue
+        unique[sig] = {
+            'signature': sig,
+            'normalized': (item.get('normalized') or '').strip(),
+        }
+    payload = sorted(unique.values(), key=lambda x: x['signature'])
+    return database.set_system_setting(EXCLUDES_SETTING_KEY, json.dumps(payload, ensure_ascii=False))
 
 
 def _get_excludes() -> Set[str]:
     global _excluded_cache, _excluded_cache_at
     now = time.monotonic()
     if _excluded_cache is None or now - _excluded_cache_at > EXCLUDES_CACHE_TTL_SEC:
-        _excluded_cache = _load_excludes()
+        _excluded_cache = _load_excludes(fresh=True)
         _excluded_cache_at = now
     return _excluded_cache
+
+
+def _is_excluded(signature: str) -> bool:
+    sig = (signature or '').strip()
+    if not sig:
+        return False
+    return sig in _load_excludes(fresh=True)
 
 
 def invalidate_excludes_cache() -> None:
@@ -107,23 +155,60 @@ def invalidate_excludes_cache() -> None:
     _excluded_cache_at = 0.0
 
 
-def exclude_signature(signature: str) -> bool:
+def list_error_excludes() -> List[Dict[str, str]]:
+    """Список исключённых типов ошибок."""
+    return _load_exclude_items(fresh=True)
+
+
+def _drop_pending_group(signature: str) -> None:
+    sig = (signature or '').strip()
+    if not sig:
+        return
+    for handler in _handlers:
+        with handler._lock:
+            handler._groups.pop(sig, None)
+
+
+def exclude_signature(signature: str, normalized: str = None) -> bool:
     """Добавить сигнатуру ошибки в исключения (вызывается из бота)."""
     sig = (signature or '').strip()
     if not sig:
         return False
-    excludes = _load_excludes()
-    if sig in excludes:
+    items = _load_exclude_items(fresh=True)
+    if any(item['signature'] == sig for item in items):
         invalidate_excludes_cache()
+        _drop_pending_group(sig)
         return True
-    excludes.add(sig)
+    items.append({
+        'signature': sig,
+        'normalized': (normalized or '').strip(),
+    })
     try:
-        import json
-        ok = database.set_system_setting(EXCLUDES_SETTING_KEY, json.dumps(sorted(excludes)))
+        ok = _save_exclude_items(items)
         invalidate_excludes_cache()
+        if ok:
+            _drop_pending_group(sig)
         return ok
     except Exception as e:
         logger.error('Failed to save error exclude %s: %s', sig, e)
+        return False
+
+
+def include_signature(signature: str) -> bool:
+    """Убрать сигнатуру из исключений."""
+    sig = (signature or '').strip()
+    if not sig:
+        return False
+    items = _load_exclude_items(fresh=True)
+    filtered = [item for item in items if item['signature'] != sig]
+    if len(filtered) == len(items):
+        return False
+    try:
+        ok = _save_exclude_items(filtered)
+        invalidate_excludes_cache()
+        return ok
+    except Exception as e:
+        logger.error('Failed to remove error exclude %s: %s', sig, e)
         return False
 
 
@@ -135,7 +220,8 @@ def normalize_message(text: str) -> str:
 
 
 def compute_signature(level_name: str, logger_name: str, message: str) -> str:
-    normalized = normalize_message(message)
+    first_line = (message or '').split('\n', 1)[0]
+    normalized = normalize_message(first_line)
     payload = f'{level_name}|{logger_name}|{normalized}'
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()[:12]
 
@@ -305,6 +391,8 @@ class AdminErrorReporterHandler(logging.Handler):
     def _send_group(self, group: ErrorGroup) -> None:
         if group.count <= 0:
             return
+        if _is_excluded(group.signature):
+            return
         try:
             from src.core import core
 
@@ -328,10 +416,14 @@ def attach_admin_error_reporter(service_name: str) -> AdminErrorReporterHandler:
     root = logging.getLogger()
     for handler in root.handlers:
         if isinstance(handler, AdminErrorReporterHandler):
+            if handler not in _handlers:
+                _handlers.append(handler)
             return handler
 
     reporter = AdminErrorReporterHandler(service_name)
     root.addHandler(reporter)
+    if reporter not in _handlers:
+        _handlers.append(reporter)
     reporter.start()
     return reporter
 

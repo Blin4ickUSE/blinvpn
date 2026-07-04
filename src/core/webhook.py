@@ -6,7 +6,7 @@ import logging
 import json
 from typing import Dict, Any, Optional
 from flask import Flask, request, jsonify
-from src.api import heleket, platega, rollypay, cryptopay
+from src.api import heleket, platega, rollypay, cryptopay, paypear
 from src.database import database
 from src.core import core
 from src.core import messages as notify_msgs
@@ -344,6 +344,79 @@ def rollypay_webhook():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/paypear', methods=['POST'])
+def paypear_webhook():
+    """Обработка webhook от PayPear (российские карты). Документация: https://paypear.ru/docs/"""
+    try:
+        raw_body = request.get_data(cache=True) or b''
+
+        try:
+            data = json.loads(raw_body.decode('utf-8') or '{}')
+        except Exception:
+            data = request.json if request.is_json else {}
+
+        received_signature = str(data.get('signature') or '')
+
+        if paypear.paypear_api.can_verify_webhooks:
+            if not paypear.paypear_api.verify_webhook_signature(raw_body, received_signature):
+                logger.error('PayPear webhook: неверная подпись')
+                return jsonify({'status': False}), 403
+
+        logger.info('PayPear webhook: %s', data)
+
+        event = str(data.get('event') or '').strip().lower()
+        obj = data.get('object') if isinstance(data.get('object'), dict) else {}
+
+        paypear_status = str(obj.get('status') or '').upper()
+        is_paid = event == 'payment.confirmed' or paypear_status in paypear.PAYPEAR_SUCCESS_STATUSES
+        if not is_paid:
+            return jsonify({'status': True}), 200
+
+        order_id = str(obj.get('order_id') or '')
+        payment_id = str(obj.get('id') or order_id)
+
+        amount = 0.0
+        amount_info = obj.get('amount')
+        if isinstance(amount_info, dict):
+            try:
+                amount = float(str(amount_info.get('value') or '0').replace(',', '.'))
+            except (TypeError, ValueError):
+                amount = 0.0
+        elif amount_info is not None:
+            try:
+                amount = float(str(amount_info).replace(',', '.'))
+            except (TypeError, ValueError):
+                amount = 0.0
+
+        user_id = None
+        parts = order_id.split('_')
+        if len(parts) >= 2 and parts[0] == 'paypear':
+            try:
+                user_id = int(parts[1])
+            except ValueError:
+                pass
+
+        if not user_id:
+            logger.error('PayPear webhook: не удалось извлечь user_id из order_id %s', order_id)
+            return jsonify({'status': True}), 200
+
+        if amount <= 0:
+            logger.error('PayPear webhook: некорректная сумма %s', amount_info)
+            return jsonify({'status': True}), 200
+
+        credit_deposit_from_payment(
+            user_id=user_id,
+            amount=amount,
+            payment_id=payment_id,
+            provider='PayPear',
+            method_name='Карта',
+        )
+        return jsonify({'status': True}), 200
+    except Exception as e:
+        logger.error('PayPear webhook error: %s', e)
+        return jsonify({'status': True}), 200
+
+
 def handle_cryptopay_webhook():
     """Shared webhook handler for Crypto Pay API (CryptoBot)."""
     try:
@@ -459,6 +532,7 @@ def health_check():
         'heleket_configured': heleket.heleket_api.is_configured,
         'platega_configured': platega.platega_api.is_configured,
         'rollypay_configured': rollypay.rollypay_api.is_configured,
+        'paypear_configured': paypear.paypear_api.is_configured,
     })
 
 if __name__ == '__main__':
