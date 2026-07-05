@@ -1201,6 +1201,8 @@ def create_payment():
                     'payment_url': payment.get('redirect_url'),
                     'status': payment.get('status', 'pending'),
                 })
+            pear_error = paypear.paypear_api.last_error or 'Не удалось создать платёж PayPear'
+            return jsonify({'error': pear_error}), 502
         
         elif method in ('platega_card_intl', 'platega_intl'):
             # Иностранные карты: Platega method 12 (международный эквайринг)

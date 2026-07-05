@@ -1,8 +1,10 @@
 """
-API модуль для работы с PayPear (paypear.ru).
-Документация: https://paypear.ru/docs/
+API модуль для работы с PayPear (Pear).
+Документация: https://paypear.ru/docs/payments/methods/create/
 
-Комиссия для российских карт (BASIC_CARD_HPP / bank_card): 6%.
+Комиссия для российских карт: 6%.
+Тип метода оплаты (payment_method_data.type) берётся из
+личного кабинета Pear → Настройки → Способы оплаты.
 """
 import base64
 import hashlib
@@ -35,19 +37,19 @@ def _build_webhook_url() -> str:
 # Комиссия PayPear для российских карт
 PAYPEAR_CARD_FEE_PERCENT = 6.0
 
-# Hosted page (redirect) — основной тип для карт РФ в PayPear API
-PAYPEAR_METHOD_BANK_CARD = 'BASIC_CARD_HPP'
+# Документация Pear: sbp — единственный type в примерах API.
+# Для карт/SberPay/T-Pay exact type смотрите в кабинете Pear.
 PAYPEAR_METHOD_SBP = 'sbp'
 PAYPEAR_METHOD_SBERPAY = 'sberpay'
 PAYPEAR_METHOD_TPAY = 'tpay'
+# Частый type для банковских карт (если включён в кабинете магазина)
+PAYPEAR_METHOD_BANK_CARD = 'card'
 
 PAYPEAR_CARD_METHOD_FALLBACKS = (
-    'BASIC_CARD_HPP',
-    'BASIC_CARD',
-    'bank_card',
+    PAYPEAR_METHOD_BANK_CARD,
 )
 
-PAYPEAR_SUCCESS_STATUSES = {'CONFIRMED', 'COMPLETED', 'success', 'paid'}
+PAYPEAR_SUCCESS_STATUSES = {'CONFIRMED', 'success', 'paid'}
 PAYPEAR_FAILED_STATUSES = {'CANCELED', 'REFUNDED', 'EXPIRED', 'failed', 'canceled', 'expired'}
 PAYPEAR_PENDING_STATUSES = {'NEW', 'PROCESS', 'pending', 'processing', 'created'}
 
@@ -57,6 +59,7 @@ class PayPearAPI:
 
     def __init__(self):
         self.base_url = PAYPEAR_API_URL
+        self.last_error: Optional[str] = None
 
     @property
     def shop_id(self) -> str:
@@ -94,8 +97,35 @@ class PayPearAPI:
             'Authorization': self._basic_auth_header(),
         }
         if idempotence_key:
+            # Pear docs: Idempotence-Key (fast-start) и Idempotency-Key (create)
             headers['Idempotence-Key'] = idempotence_key
+            headers['Idempotency-Key'] = idempotence_key
         return headers
+
+    @staticmethod
+    def _unwrap_response_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Pear возвращает объект платежа в result или response."""
+        if not isinstance(payload, dict):
+            return None
+        for key in ('result', 'response'):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                return value
+        return payload
+
+    @staticmethod
+    def _extract_payment_url(result: Dict[str, Any]) -> Optional[str]:
+        confirmation = result.get('confirmation') or {}
+        if isinstance(confirmation, dict):
+            for key in ('confirmation_url', 'url'):
+                value = confirmation.get(key)
+                if value:
+                    return str(value)
+        for key in ('confirmation_url', 'redirect_url', 'redirectUrl', 'payment_url', 'pay_url'):
+            value = result.get(key)
+            if value:
+                return str(value)
+        return None
 
     @staticmethod
     def _extract_error_message(payload: Any) -> str:
@@ -110,19 +140,6 @@ class PayPearAPI:
     def _is_method_not_found_error(message: str) -> bool:
         text = (message or '').lower()
         return 'payment method' in text and 'not found' in text
-
-    @staticmethod
-    def _extract_payment_url(result: Dict[str, Any]) -> Optional[str]:
-        confirmation = result.get('confirmation') or {}
-        if isinstance(confirmation, dict):
-            url = confirmation.get('url')
-            if url:
-                return str(url)
-        for key in ('redirect_url', 'redirectUrl', 'payment_url', 'pay_url'):
-            value = result.get(key)
-            if value:
-                return str(value)
-        return None
 
     def _card_method_candidates(self) -> List[str]:
         explicit = (os.getenv('PAYPEAR_PAYMENT_METHOD', '') or '').strip()
@@ -175,8 +192,13 @@ class PayPearAPI:
                 return None, message
 
             if isinstance(payload, dict) and payload.get('success') is True:
-                result = payload.get('result')
-                return (result if isinstance(result, dict) else payload), None
+                result = self._unwrap_response_payload(payload)
+                return result, None
+
+            if isinstance(payload, dict):
+                result = self._unwrap_response_payload(payload)
+                if result and result.get('id'):
+                    return result, None
 
             return (payload if isinstance(payload, dict) else None), None
         except requests.exceptions.RequestException as e:
@@ -270,11 +292,13 @@ class PayPearAPI:
 
         Args:
             amount: сумма в рублях (комиссия 6% для карт РФ)
-            payment_method_type: BASIC_CARD_HPP | BASIC_CARD | sbp | sberpay | tpay
+            payment_method_type: sbp | card | sberpay | tpay (type из кабинета Pear)
         """
         if not self.is_configured:
+            self.last_error = 'PayPear не настроен'
             return None
 
+        self.last_error = None
         order_id = f'paypear_{user_id}_{uuid.uuid4().hex[:8]}'
         payload = self._build_payment_payload(
             amount=amount,
@@ -295,6 +319,7 @@ class PayPearAPI:
         )
         if not result:
             if error:
+                self.last_error = error
                 logger.error('PayPear create_payment (%s): %s', payment_method_type, error)
             return None
 
@@ -305,7 +330,8 @@ class PayPearAPI:
             payment_method_type=payment_method_type,
         )
         if not formatted.get('redirect_url'):
-            logger.error('PayPear: нет redirect_url в ответе: %s', result)
+            self.last_error = 'Pear не вернул confirmation_url для оплаты'
+            logger.error('PayPear: нет confirmation_url в ответе: %s', result)
             return None
         return formatted
 
@@ -318,6 +344,11 @@ class PayPearAPI:
         webhook_url: str = None,
     ) -> Optional[Dict[str, Any]]:
         """Создать платёж российской картой (комиссия 6%)."""
+        if not self.is_configured:
+            self.last_error = 'PayPear не настроен'
+            return None
+
+        self.last_error = None
         last_error = None
         for method_type in self._card_method_candidates():
             order_id = f'paypear_{user_id}_{uuid.uuid4().hex[:8]}'
@@ -345,8 +376,9 @@ class PayPearAPI:
                 )
                 if formatted.get('redirect_url'):
                     return formatted
-                logger.error('PayPear (%s): нет redirect_url в ответе: %s', method_type, result)
-                return None
+                last_error = 'Pear не вернул confirmation_url для оплаты'
+                logger.error('PayPear (%s): нет confirmation_url в ответе: %s', method_type, result)
+                break
 
             last_error = error
             if error and self._is_method_not_found_error(error):
@@ -355,7 +387,11 @@ class PayPearAPI:
             break
 
         if last_error:
-            logger.error('PayPear create_card_payment failed: %s', last_error)
+            self.last_error = (
+                f'{last_error}. Проверьте Pear → Настройки → Способы оплаты: '
+                f'включите «Банковские карты» и задайте PAYPEAR_PAYMENT_METHOD=type из кабинета.'
+            )
+            logger.error('PayPear create_card_payment failed: %s', self.last_error)
         return None
 
     def create_sbp_payment(

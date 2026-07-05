@@ -443,8 +443,8 @@ ROLLYPAY_TERMINAL_ID=
 PAYPEAR_API_URL=https://api.paypear.ru/v1
 PAYPEAR_SHOP_ID=
 PAYPEAR_SECRET_KEY=
-# Метод оплаты для карт РФ: BASIC_CARD_HPP (по умолчанию), BASIC_CARD, bank_card
-PAYPEAR_PAYMENT_METHOD=BASIC_CARD_HPP
+# Метод оплаты для карт: type из Pear → Настройки → Способы оплаты (например bank_card)
+# PAYPEAR_PAYMENT_METHOD=bank_card
 
 # CryptoBot
 CRYPTOPAY_API_URL=https://pay.crypt.bot/api
