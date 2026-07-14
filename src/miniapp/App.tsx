@@ -427,7 +427,7 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
     icon: <img src="https://i.imgur.com/pu9w7tE.png" className="w-8 h-8 object-contain" alt="СБП" />,
     feePercent: 6
   },
-  { id: 'paypear_card_ru', name: 'Российские карты', icon: <img src="https://i.imgur.com/CE6Q9yJ.png" className="w-8 h-8 object-contain" alt="МИР" />, feePercent: 6 },
+  { id: 'platega_card_ru', name: 'Российские карты', icon: <img src="https://i.imgur.com/CE6Q9yJ.png" className="w-8 h-8 object-contain" alt="МИР" />, feePercent: 7 },
   { id: 'platega_card_intl', name: 'Иностранные карты', icon: <img src="https://upload.wikimedia.org/wikipedia/commons/2/2a/Mastercard-logo.svg" className="w-8 h-8 object-contain" alt="Card" />, feePercent: 15 },
   {
     id: 'tg_stars',
@@ -440,12 +440,6 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
     name: 'Криптовалюта',
     icon: <img src="https://i.imgur.com/bdC3E81.png" className="w-8 h-8 object-contain rounded-md" alt="Heleket" />,
     feePercent: 2
-  },
-  {
-    id: 'cryptopay',
-    name: 'CryptoBot',
-    icon: <img src="https://i.imgur.com/gmtauym.png" className="w-8 h-8 object-contain rounded-md" alt="CryptoBot" />,
-    feePercent: 3
   },
 ];
 
@@ -4493,4 +4487,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-          }
+    }
