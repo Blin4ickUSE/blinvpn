@@ -444,6 +444,23 @@ def init_database():
             )
         """)
 
+        # Веб-сессии пользователей (вход в мини-приложение через сайт по Telegram Login Widget)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS web_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_hash TEXT UNIQUE NOT NULL,
+                telegram_id INTEGER NOT NULL,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                ip_address TEXT,
+                user_agent TEXT,
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Ноды для мониторинга
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS monitoring_nodes (
@@ -484,6 +501,8 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_panel_ip_blocks_ip ON panel_ip_blocks(ip_address)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_monitoring_events_node ON monitoring_events(node_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_monitoring_events_created ON monitoring_events(created_at)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_web_sessions_token ON web_sessions(token_hash)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_web_sessions_tg ON web_sessions(telegram_id)")
         
         conn.commit()
         
@@ -1778,6 +1797,132 @@ def delete_panel_session(session_token: str) -> bool:
         cursor.execute("DELETE FROM panel_sessions WHERE session_token = ?", (session_token,))
         conn.commit()
         return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ===== ВЕБ-СЕССИИ ПОЛЬЗОВАТЕЛЕЙ (вход через сайт) =====
+
+def _hash_web_token(token: str) -> str:
+    """Токен храним только в виде SHA-256 хэша (в БД нет сырых токенов)."""
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+
+def create_web_session(
+    telegram_id: int,
+    username: str = None,
+    first_name: str = None,
+    last_name: str = None,
+    ip_address: str = None,
+    user_agent: str = None,
+    ttl_days: int = 30,
+) -> Optional[str]:
+    """
+    Создать веб-сессию для пользователя, вошедшего через Telegram Login Widget на сайте.
+    Возвращает СЫРОЙ токен (клиенту), в БД сохраняется только его хэш.
+    """
+    import secrets
+    token = secrets.token_urlsafe(48)
+    token_hash = _hash_web_token(token)
+    expires = datetime.now() + timedelta(days=ttl_days)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Ограничиваем число живых сессий на пользователя (не копим бесконечно)
+        cursor.execute(
+            """
+            DELETE FROM web_sessions
+            WHERE telegram_id = ? AND id NOT IN (
+                SELECT id FROM web_sessions
+                WHERE telegram_id = ?
+                ORDER BY last_seen_at DESC
+                LIMIT 9
+            )
+            """,
+            (int(telegram_id), int(telegram_id)),
+        )
+        cursor.execute(
+            """
+            INSERT INTO web_sessions
+                (token_hash, telegram_id, username, first_name, last_name, ip_address, user_agent, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                token_hash,
+                int(telegram_id),
+                username,
+                first_name,
+                last_name,
+                ip_address,
+                (user_agent or '')[:400],
+                expires.isoformat(),
+            ),
+        )
+        conn.commit()
+        return token
+    except Exception as e:
+        logger.error(f"create_web_session error: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def verify_web_session(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Проверить веб-сессию по сырому токену. Возвращает данные пользователя или None.
+    Продлевает last_seen_at при успехе.
+    """
+    if not token:
+        return None
+    token_hash = _hash_web_token(token)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT * FROM web_sessions
+            WHERE token_hash = ? AND expires_at > CURRENT_TIMESTAMP
+            """,
+            (token_hash,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        try:
+            cursor.execute(
+                "UPDATE web_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE token_hash = ?",
+                (token_hash,),
+            )
+            conn.commit()
+        except Exception:
+            pass
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def delete_web_session(token: str) -> bool:
+    if not token:
+        return False
+    token_hash = _hash_web_token(token)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM web_sessions WHERE token_hash = ?", (token_hash,))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def cleanup_expired_web_sessions() -> int:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM web_sessions WHERE expires_at <= CURRENT_TIMESTAMP")
+        conn.commit()
+        return cursor.rowcount
     finally:
         conn.close()
 
