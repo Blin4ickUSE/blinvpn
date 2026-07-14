@@ -28,10 +28,14 @@ from src.core import payment_wait
 
 app = Flask(__name__)
 
-# CORS для miniapp и панели
+# CORS для miniapp и панели.
+# По умолчанию '*' (совместимо с текущим поведением). Для усиления безопасности можно
+# задать CORS_ORIGINS=https://blinvpn.cc,https://web.telegram.org — тогда доступ только с них.
+_cors_env = (os.getenv('CORS_ORIGINS', '') or '').strip()
+_cors_origins = [o.strip() for o in _cors_env.split(',') if o.strip()] if _cors_env else '*'
 CORS(
     app,
-    resources={r"/api/*": {"origins": "*"}},
+    resources={r"/api/*": {"origins": _cors_origins}},
 )
 
 from src.core.admin_error_reporter import setup_service_logging
@@ -500,9 +504,33 @@ def telegram_delete_message(chat_id: int, message_id: int) -> bool:
         return False
     return bool(res.status_code == 200 and data.get('ok'))
 
+# Максимальный возраст подписи Telegram (сек). 0 = не проверять срок.
+# initData обновляется при каждом запуске miniapp, поэтому по умолчанию не ограничиваем,
+# чтобы не рвать долгие сессии. Login Widget проверяем строже (см. ниже).
+INITDATA_MAX_AGE = int(os.getenv('TELEGRAM_INITDATA_MAX_AGE', '0') or '0')
+# Данные Telegram Login Widget (вход через сайт) считаем валидными ограниченное время,
+# чтобы перехваченный payload нельзя было переиспользовать позже.
+LOGIN_WIDGET_MAX_AGE = int(os.getenv('TELEGRAM_LOGIN_MAX_AGE', '86400') or '86400')
+
+
+def _auth_date_is_fresh(auth_date_raw, max_age: int) -> bool:
+    """Проверка свежести auth_date. max_age<=0 отключает проверку."""
+    if max_age <= 0:
+        return True
+    try:
+        auth_ts = int(auth_date_raw)
+    except (TypeError, ValueError):
+        return False
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    # небольшой допуск на рассинхрон часов
+    if auth_ts > now_ts + 300:
+        return False
+    return (now_ts - auth_ts) <= max_age
+
+
 def verify_telegram_webapp_data(init_data: str) -> dict | None:
     """
-    Проверяет подлинность данных Telegram WebApp.
+    Проверяет подлинность данных Telegram WebApp (initData из miniapp).
     Возвращает данные пользователя если валидно, иначе None.
     """
     if not init_data:
@@ -527,7 +555,7 @@ def verify_telegram_webapp_data(init_data: str) -> dict | None:
         data_check_arr.sort()
         data_check_string = '\n'.join(data_check_arr)
         
-        # Создаём секретный ключ из токена бота
+        # Создаём секретный ключ из токена бота (схема WebApp)
         secret_key = hmac.new(
             b'WebAppData',
             BOT_TOKEN.encode(),
@@ -541,8 +569,13 @@ def verify_telegram_webapp_data(init_data: str) -> dict | None:
             hashlib.sha256
         ).hexdigest()
         
-        # Проверяем hash
+        # Проверяем hash (защита от подмены данных)
         if not hmac.compare_digest(calculated_hash, received_hash):
+            return None
+
+        # Проверяем срок действия подписи (защита от replay старого initData)
+        if not _auth_date_is_fresh(parsed.get('auth_date', [''])[0], INITDATA_MAX_AGE):
+            logger.warning('initData rejected: auth_date too old')
             return None
         
         # Парсим данные пользователя
@@ -557,6 +590,65 @@ def verify_telegram_webapp_data(init_data: str) -> dict | None:
         logger.error(f"Error verifying Telegram WebApp data: {e}")
         return None
 
+
+def verify_telegram_login_widget(data: dict) -> dict | None:
+    """
+    Проверяет подлинность данных Telegram Login Widget (вход через сайт).
+    Схема отличается от WebApp: secret_key = SHA256(bot_token).
+    Возвращает нормализованные данные пользователя {id, username, first_name, last_name}
+    или None, если подпись/срок невалидны.
+    """
+    if not isinstance(data, dict):
+        return None
+    if not BOT_TOKEN:
+        logger.error('Login Widget verify: TELEGRAM_BOT_TOKEN / BOT_TOKEN не задан')
+        return None
+
+    received_hash = str(data.get('hash') or '')
+    if not received_hash:
+        return None
+
+    try:
+        # Строка проверки строится ТОЛЬКО из полей, которые подписывает Telegram.
+        # Любые посторонние поля (например ref) в неё попадать не должны.
+        allowed = ('auth_date', 'first_name', 'id', 'last_name', 'photo_url', 'username')
+        pairs = []
+        for key in allowed:
+            if key in data and data.get(key) is not None:
+                pairs.append(f"{key}={data.get(key)}")
+        pairs.sort()
+        data_check_string = '\n'.join(pairs)
+
+        secret_key = hashlib.sha256(BOT_TOKEN.encode()).digest()
+        calculated_hash = hmac.new(
+            secret_key,
+            data_check_string.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+        if not hmac.compare_digest(calculated_hash, received_hash):
+            return None
+
+        # Свежесть auth_date (защита от повторного использования утёкшего payload)
+        if not _auth_date_is_fresh(data.get('auth_date'), LOGIN_WIDGET_MAX_AGE):
+            logger.warning('Login Widget rejected: auth_date too old')
+            return None
+
+        tg_id = int(data.get('id') or 0)
+        if not tg_id:
+            return None
+
+        return {
+            'id': tg_id,
+            'username': (data.get('username') or '').strip() or None,
+            'first_name': (data.get('first_name') or '').strip() or None,
+            'last_name': (data.get('last_name') or '').strip() or None,
+            'photo_url': data.get('photo_url'),
+        }
+    except Exception as e:
+        logger.error(f"Error verifying Telegram Login Widget data: {e}")
+        return None
+
 def get_telegram_init_data_from_request() -> str:
     """initData из X-Telegram-Init-Data или Authorization: tma <initData>."""
     init_data = (request.headers.get('X-Telegram-Init-Data') or '').strip()
@@ -568,15 +660,50 @@ def get_telegram_init_data_from_request() -> str:
     return ''
 
 
+def get_web_session_token_from_request() -> str:
+    """Токен веб-сессии из X-Web-Session-Token или Authorization: twa <token>."""
+    token = (request.headers.get('X-Web-Session-Token') or '').strip()
+    if token:
+        return token
+    auth = (request.headers.get('Authorization') or '').strip()
+    if auth.lower().startswith('twa '):
+        return auth[4:].strip()
+    return ''
+
+
+def get_web_session_user_from_request() -> dict | None:
+    """
+    Пользователь из веб-сессии (вход через сайт).
+    Возвращает dict в том же формате, что и initData: {id, username, first_name, last_name}.
+    """
+    token = get_web_session_token_from_request()
+    if not token:
+        return None
+    sess = database.verify_web_session(token)
+    if not sess:
+        return None
+    return {
+        'id': int(sess['telegram_id']),
+        'username': sess.get('username'),
+        'first_name': sess.get('first_name'),
+        'last_name': sess.get('last_name'),
+        '_web_session': True,
+    }
+
+
 def get_telegram_user_from_request() -> dict | None:
     """
     Получает и проверяет Telegram пользователя из запроса.
-    Проверяет X-Telegram-Init-Data / Authorization: tma.
+    1) Telegram WebApp initData (miniapp) — X-Telegram-Init-Data / Authorization: tma.
+    2) Веб-сессия (вход через сайт) — X-Web-Session-Token / Authorization: twa.
     """
     init_data = get_telegram_init_data_from_request()
     if init_data:
-        return verify_telegram_webapp_data(init_data)
-    return None
+        verified = verify_telegram_webapp_data(init_data)
+        if verified:
+            return verified
+    # Фолбэк: пользователь, вошедший через сайт по Login Widget
+    return get_web_session_user_from_request()
 
 
 def miniapp_auth_relaxed() -> bool:
@@ -698,6 +825,91 @@ def require_auth(f):
         return jsonify({'error': 'Unauthorized'}), 401
     wrapper.__name__ = f.__name__
     return wrapper
+
+# ========== Вход через сайт (Telegram Login Widget) ==========
+
+# Простой антибрутфорс на /api/web/auth по IP (в памяти процесса).
+_WEB_AUTH_ATTEMPTS: dict[str, list[float]] = {}
+_WEB_AUTH_WINDOW = 60          # окно, сек
+_WEB_AUTH_MAX_PER_WINDOW = 20  # попыток за окно с одного IP
+
+
+def _web_auth_rate_limited(ip: str) -> bool:
+    import time
+    now = time.time()
+    bucket = [t for t in _WEB_AUTH_ATTEMPTS.get(ip, []) if now - t < _WEB_AUTH_WINDOW]
+    bucket.append(now)
+    _WEB_AUTH_ATTEMPTS[ip] = bucket
+    # лёгкая уборка, чтобы словарь не рос бесконечно
+    if len(_WEB_AUTH_ATTEMPTS) > 5000:
+        for k in list(_WEB_AUTH_ATTEMPTS.keys()):
+            if all(now - t >= _WEB_AUTH_WINDOW for t in _WEB_AUTH_ATTEMPTS[k]):
+                _WEB_AUTH_ATTEMPTS.pop(k, None)
+    return len(bucket) > _WEB_AUTH_MAX_PER_WINDOW
+
+
+@app.route('/api/web/config', methods=['GET'])
+def web_config():
+    """Публичная конфигурация для страницы входа на сайте."""
+    return jsonify({
+        'bot_username': os.getenv('BOT_USERNAME', '') or '',
+        'login_max_age': LOGIN_WIDGET_MAX_AGE,
+    })
+
+
+@app.route('/api/web/auth', methods=['POST'])
+def web_auth():
+    """
+    Авторизация пользователя, зашедшего на сайт (вне Telegram), через Telegram Login Widget.
+    Тело запроса — объект данных виджета (id, first_name, last_name, username, photo_url, auth_date, hash).
+    Возвращает токен веб-сессии, которым клиент авторизует последующие запросы.
+    """
+    ip = get_client_ip()
+    if _web_auth_rate_limited(ip):
+        return jsonify({'error': 'Too many attempts', 'message': 'Слишком много попыток, попробуйте позже'}), 429
+
+    data = request.get_json(silent=True) or {}
+    tg_user = verify_telegram_login_widget(data)
+    if not tg_user:
+        logger.warning('web_auth: invalid Login Widget signature from ip=%s', ip)
+        return jsonify({'error': 'Invalid Telegram authorization'}), 401
+
+    telegram_id = int(tg_user['id'])
+
+    # Блокировки/чёрный список проверяем сразу на входе
+    if core.check_blacklist(telegram_id):
+        return jsonify({'error': 'Forbidden', 'blacklisted': True,
+                        'reason': 'Ваш аккаунт находится в черном списке'}), 403
+
+    token = database.create_web_session(
+        telegram_id=telegram_id,
+        username=tg_user.get('username'),
+        first_name=tg_user.get('first_name'),
+        last_name=tg_user.get('last_name'),
+        ip_address=ip,
+        user_agent=request.headers.get('User-Agent', ''),
+    )
+    if not token:
+        return jsonify({'error': 'Failed to create session'}), 500
+
+    logger.info('web_auth: session issued for telegram_id=%s ip=%s', telegram_id, ip)
+    return jsonify({
+        'token': token,
+        'telegram_id': telegram_id,
+        'username': tg_user.get('username'),
+        'first_name': tg_user.get('first_name'),
+        'last_name': tg_user.get('last_name'),
+    })
+
+
+@app.route('/api/web/logout', methods=['POST'])
+def web_logout():
+    """Завершить веб-сессию."""
+    token = get_web_session_token_from_request()
+    if token:
+        database.delete_web_session(token)
+    return jsonify({'success': True})
+
 
 # ========== Шифрование ссылки для Happ ==========
 
@@ -968,7 +1180,11 @@ def get_user_info():
             'blacklisted': ban_status.get('blacklisted', False)
         }), 403
 
-    if not check_required_channel_subscription(telegram_id):
+    # Проверка подписки на канал только для входа через Telegram (miniapp/бот).
+    # Пользователи, вошедшие через сайт (веб-сессия), освобождены от этого требования.
+    _tg_req = get_telegram_user_from_request()
+    _is_web = bool(_tg_req and _tg_req.get('_web_session'))
+    if not _is_web and not check_required_channel_subscription(telegram_id):
         return jsonify({
             'required_subscription': True,
             'channel_id': REQUIRED_CHANNEL_ID,
@@ -6619,5 +6835,13 @@ if __name__ == '__main__':
 
     # Мониторинг VPN-нод
     start_monitoring_service()
+
+    # Чистим протухшие веб-сессии на старте
+    try:
+        removed = database.cleanup_expired_web_sessions()
+        if removed:
+            logger.info("Cleaned %s expired web sessions", removed)
+    except Exception as e:
+        logger.warning("web sessions cleanup failed: %s", e)
 
     app.run(host='0.0.0.0', port=int(os.getenv('API_PORT', 8000)))
