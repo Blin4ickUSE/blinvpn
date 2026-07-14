@@ -24,25 +24,101 @@ const rawEnvMini: any =
 const API_BASE_URL_MINI: string = rawEnvMini.VITE_API_URL || rawEnvMini.REACT_APP_API_URL || '/api';
 const SUPPORT_URL: string = rawEnvMini.VITE_SUPPORT_URL || rawEnvMini.REACT_APP_SUPPORT_URL || 'https://t.me/blinteams';
 const BOT_USERNAME_MINI: string = rawEnvMini.VITE_BOT_USERNAME || rawEnvMini.REACT_APP_BOT_USERNAME || 'blinvpn_bot';
+// База сайта для реферальных ссылок при входе через веб (без завершающего слэша)
+const SITE_URL_MINI: string = (
+  rawEnvMini.VITE_SITE_URL ||
+  rawEnvMini.REACT_APP_SITE_URL ||
+  (typeof window !== 'undefined' ? window.location.origin : '')
+).replace(/\/+$/, '');
+
+// ==== Веб-сессия (вход через сайт по Telegram Login Widget) ====
+const WEB_SESSION_KEY = 'blin_web_session_v1';
+
+interface WebIdentity {
+  token: string;
+  telegram_id: number;
+  username?: string;
+  first_name?: string;
+  last_name?: string;
+}
+
+function getWebIdentity(): WebIdentity | null {
+  try {
+    const raw = localStorage.getItem(WEB_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.token && parsed.telegram_id) return parsed as WebIdentity;
+  } catch {}
+  return null;
+}
+
+function saveWebIdentity(d: any): void {
+  try {
+    localStorage.setItem(
+      WEB_SESSION_KEY,
+      JSON.stringify({
+        token: d.token,
+        telegram_id: d.telegram_id,
+        username: d.username,
+        first_name: d.first_name,
+        last_name: d.last_name,
+      }),
+    );
+  } catch {}
+}
+
+function clearWebIdentity(): void {
+  try { localStorage.removeItem(WEB_SESSION_KEY); } catch {}
+}
+
+function getWebToken(): string {
+  const id = getWebIdentity();
+  return id ? id.token : '';
+}
+
+/** true, если приложение открыто как Telegram Mini App (есть подписанный initData). */
+function hasTelegramInitData(): boolean {
+  return !!((window as any).Telegram?.WebApp?.initData || '');
+}
+
+/** Заголовки авторизации: initData внутри Telegram, иначе токен веб-сессии. */
+function buildAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const initData = (window as any).Telegram?.WebApp?.initData || '';
+  if (initData) {
+    headers['X-Telegram-Init-Data'] = initData;
+    headers['Authorization'] = `tma ${initData}`;
+  } else {
+    const token = getWebToken();
+    if (token) {
+      headers['X-Web-Session-Token'] = token;
+      headers['Authorization'] = `twa ${token}`;
+    }
+  }
+  return headers;
+}
 
 async function miniApiFetch(path: string, options: RequestInit = {}): Promise<any> {
   // Всегда используем относительный путь /api - nginx проксирует на backend
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   const url = `/api${cleanPath}`;
-  const initData = (window as any).Telegram?.WebApp?.initData || '';
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    ...buildAuthHeaders(),
     ...(options.headers as Record<string, string> | undefined),
   };
-  if (initData) {
-    headers['X-Telegram-Init-Data'] = initData;
-    headers['Authorization'] = `tma ${initData}`;
-  }
 
   const res = await fetch(url, {
     ...options,
     headers,
   });
+
+  // Протухшая/невалидная веб-сессия — сбрасываем токен и уводим на повторный вход
+  if (res.status === 401 && !hasTelegramInitData()) {
+    clearWebIdentity();
+    try { window.location.reload(); } catch {}
+    throw new Error('Web session expired');
+  }
   
   // Обработка бана (статус 403)
   if (res.status === 403) {
@@ -1194,6 +1270,11 @@ export default function App() {
   const [isBanned, setIsBanned] = useState(false);
   const [banReason, setBanReason] = useState<string>('');
   const [userLoadFailed, setUserLoadFailed] = useState(false);
+  // Режим входа: 'telegram' (Mini App) или 'web' (через сайт)
+  const [entryMode, setEntryMode] = useState<'telegram' | 'web'>(hasTelegramInitData() ? 'telegram' : 'web');
+  // Нужен экран входа через Telegram Login Widget (сайт, нет валидной веб-сессии)
+  const [needsWebLogin, setNeedsWebLogin] = useState(false);
+  const [webLoginError, setWebLoginError] = useState<string>('');
   const [needsChannelSubscription, setNeedsChannelSubscription] = useState(false);
   const [requiredChannelLink, setRequiredChannelLink] = useState<string>('https://t.me/blinvpn');
 
@@ -1304,58 +1385,75 @@ export default function App() {
     let tgUsername: string = '';
     let tgFirstName: string = '';
     let referralId: number | null = null;
-    
-    const tgUser = await waitForTelegramUser();
-    if (tgUser) {
-      tgId = Number(tgUser.id);
-      tgUsername = tgUser.username || '';
-      tgFirstName = tgUser.first_name || '';
-      
-      // Извлекаем реферальный ID из start_param (формат: ref123456789)
-      const startParam = win.Telegram.WebApp.initDataUnsafe?.start_param;
-      if (startParam && typeof startParam === 'string') {
-        const refMatch = startParam.match(/ref(\d+)/);
-        if (refMatch) {
-          referralId = parseInt(refMatch[1], 10);
-          // Нельзя быть своим собственным рефералом
-          if (referralId === tgId) {
-            referralId = null;
+
+    // Реферал из URL (?ref=ID) — актуально для входа через сайт
+    const urlParams = new URLSearchParams(window.location.search);
+    const refFromUrl = urlParams.get('ref');
+    const parseRef = (raw: string | null): number | null => {
+      if (!raw) return null;
+      const v = parseInt(raw, 10);
+      return Number.isNaN(v) ? null : v;
+    };
+
+    // Есть подписанный initData => это Telegram Mini App
+    if (hasTelegramInitData()) {
+      setEntryMode('telegram');
+      const tgUser = await waitForTelegramUser();
+      if (tgUser) {
+        tgId = Number(tgUser.id);
+        tgUsername = tgUser.username || '';
+        tgFirstName = tgUser.first_name || '';
+
+        // Реферальный ID из start_param (формат: ref123456789)
+        const startParam = win.Telegram.WebApp.initDataUnsafe?.start_param;
+        if (startParam && typeof startParam === 'string') {
+          const refMatch = startParam.match(/ref(\d+)/);
+          if (refMatch) referralId = parseInt(refMatch[1], 10);
+        }
+        // Резервно — из URL
+        if (!referralId) referralId = parseRef(refFromUrl);
+        if (referralId === tgId) referralId = null;
+
+        // Уведомляем Telegram что приложение готово
+        win.Telegram.WebApp.ready();
+        try { win.Telegram.WebApp.expand(); } catch {}
+        try {
+          if (typeof win.Telegram.WebApp.requestFullscreen === 'function') {
+            win.Telegram.WebApp.requestFullscreen();
           }
-        }
+        } catch {}
+        try {
+          if (typeof win.Telegram.WebApp.disableVerticalSwipes === 'function') {
+            win.Telegram.WebApp.disableVerticalSwipes();
+          }
+        } catch {}
       }
-      
-      // Уведомляем Telegram что приложение готово
-      win.Telegram.WebApp.ready();
-      try { win.Telegram.WebApp.expand(); } catch {}
-      try {
-        if (typeof win.Telegram.WebApp.requestFullscreen === 'function') {
-          win.Telegram.WebApp.requestFullscreen();
-        }
-      } catch {}
-      try {
-        if (typeof win.Telegram.WebApp.disableVerticalSwipes === 'function') {
-          win.Telegram.WebApp.disableVerticalSwipes();
-        }
-      } catch {}
     } else {
-      const params = new URLSearchParams(window.location.search);
-      const fromQuery = params.get('telegram_id');
-      if (fromQuery) tgId = Number(fromQuery);
-      tgUsername = params.get('username') || '';
-      tgFirstName = params.get('first_name') || '';
-      // Также проверяем ref параметр из URL
-      const refParam = params.get('ref');
-      if (refParam) {
-        referralId = parseInt(refParam, 10);
-        if (isNaN(referralId) || referralId === tgId) {
-          referralId = null;
-        }
+      // Вход через сайт: нужна веб-сессия (Telegram Login Widget)
+      setEntryMode('web');
+      referralId = parseRef(refFromUrl);
+
+      const identity = getWebIdentity();
+      if (identity) {
+        tgId = Number(identity.telegram_id);
+        tgUsername = identity.username || '';
+        tgFirstName = identity.first_name || '';
+        if (referralId === tgId) referralId = null;
+      } else {
+        // Нет валидной веб-сессии — показываем экран входа через Telegram
+        setNeedsWebLogin(true);
+        return;
       }
     }
-    
+
     if (!tgId) {
-      console.error('Telegram ID не определен. Приложение работает только через Telegram.');
-      setUserLoadFailed(true);
+      console.error('Не удалось определить пользователя.');
+      if (entryMode === 'web' || !hasTelegramInitData()) {
+        clearWebIdentity();
+        setNeedsWebLogin(true);
+      } else {
+        setUserLoadFailed(true);
+      }
       return;
     }
 
@@ -1367,13 +1465,7 @@ export default function App() {
     // Аватар через наш API (Telegram CDN в РФ часто недоступен)
     (async () => {
       try {
-        const initData = win.Telegram?.WebApp?.initData || '';
-        const headers: Record<string, string> = {};
-        if (initData) {
-          headers['X-Telegram-Init-Data'] = initData;
-          headers['Authorization'] = `tma ${initData}`;
-        }
-        const res = await fetch(`/api/user/avatar?telegram_id=${tgId}`, { headers });
+        const res = await fetch(`/api/user/avatar?telegram_id=${tgId}`, { headers: buildAuthHeaders() });
         if (res.ok && res.status !== 204) {
           const blob = await res.blob();
           if (blob.size > 0) {
@@ -1397,13 +1489,15 @@ export default function App() {
           userUrl += `&ref=${referralId}`;
         }
         userData = await miniApiFetch(userUrl);
-        if (!userData && win.Telegram?.WebApp?.initData) {
+        const hasAuth = hasTelegramInitData() || !!getWebToken();
+        if (!userData && hasAuth) {
           await new Promise((r) => setTimeout(r, 300));
           userData = await miniApiFetch(userUrl);
         }
       } catch (err) {
         console.error('Ошибка загрузки профиля:', err);
-        if (win.Telegram?.WebApp?.initData) {
+        const hasAuth = hasTelegramInitData() || !!getWebToken();
+        if (hasAuth) {
           try {
             await new Promise((r) => setTimeout(r, 400));
             let retryUrl = `/user/info?telegram_id=${tgId}`;
@@ -3731,21 +3825,46 @@ export default function App() {
 
       <div className="bg-zinc-800 p-4 rounded-xl border border-zinc-700 mb-6">
         <label className="text-xs text-zinc-500 mb-2 block uppercase font-bold tracking-wider">Ваша ссылка</label>
-        <div className="flex gap-2">
-          <div className="bg-zinc-900 flex-1 p-3 rounded-lg text-zinc-300 font-mono text-sm truncate">
-            {telegramId ? `https://t.me/${BOT_USERNAME_MINI}?start=ref${telegramId}` : 'Загрузка...'}
-          </div>
-          <button
-            onClick={() => {
-              if (telegramId) {
-                handleCopy(`https://t.me/${BOT_USERNAME_MINI}?start=ref${telegramId}`);
-              }
-            }}
-            className="bg-orange-600 px-4 rounded-lg text-white hover:bg-orange-500"
-          >
-            <Copy size={18} />
-          </button>
-        </div>
+        {(() => {
+          const botLink = `https://t.me/${BOT_USERNAME_MINI}?start=ref${telegramId}`;
+          const siteLink = `${SITE_URL_MINI}/?ref=${telegramId}`;
+          // Основная ссылка — по способу входа: через сайт → на сайт, через бота → на бота
+          const primaryLink = entryMode === 'web' ? siteLink : botLink;
+          const secondaryLink = entryMode === 'web' ? botLink : siteLink;
+          const secondaryLabel = entryMode === 'web' ? 'Ссылка для Telegram' : 'Ссылка на сайт';
+          return (
+            <>
+              <div className="flex gap-2">
+                <div className="bg-zinc-900 flex-1 p-3 rounded-lg text-zinc-300 font-mono text-sm truncate">
+                  {telegramId ? primaryLink : 'Загрузка...'}
+                </div>
+                <button
+                  onClick={() => { if (telegramId) handleCopy(primaryLink); }}
+                  className="bg-orange-600 px-4 rounded-lg text-white hover:bg-orange-500"
+                >
+                  <Copy size={18} />
+                </button>
+              </div>
+              {telegramId && (
+                <div className="mt-3 flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[11px] text-zinc-500 uppercase tracking-wider mb-0.5">{secondaryLabel}</div>
+                    <div className="text-zinc-400 font-mono text-xs truncate">{secondaryLink}</div>
+                  </div>
+                  <button
+                    onClick={() => handleCopy(secondaryLink)}
+                    className="bg-zinc-700 px-3 py-2 rounded-lg text-zinc-200 hover:bg-zinc-600 shrink-0"
+                  >
+                    <Copy size={15} />
+                  </button>
+                </div>
+              )}
+              <p className="mt-3 text-[11px] text-zinc-500 leading-relaxed">
+                Обе ссылки работают: приглашённый попадёт {entryMode === 'web' ? 'на сайт' : 'в Telegram-бота'} по основной или {entryMode === 'web' ? 'в бота' : 'на сайт'} по второй.
+              </p>
+            </>
+          );
+        })()}
       </div>
 
       
@@ -3978,6 +4097,108 @@ export default function App() {
   };
 
   // Страница "Доступ ограничен"
+  // ==== Вход через сайт: обработчик Telegram Login Widget ====
+  const handleWebTelegramAuth = React.useCallback(async (tgAuthUser: any) => {
+    setWebLoginError('');
+    try {
+      // ref НЕ передаём в теле: он не подписан Telegram и сломал бы проверку.
+      // Реферал остаётся в URL (?ref=...) и обрабатывается на /user/info после входа.
+      const res = await fetch('/api/web/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tgAuthUser),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.token) {
+        setWebLoginError(data.message || data.error || 'Не удалось войти. Попробуйте ещё раз.');
+        return;
+      }
+      saveWebIdentity(data);
+      // Перезагружаем страницу: init подхватит веб-сессию, параметр ?ref остаётся в URL
+      window.location.reload();
+    } catch (e) {
+      setWebLoginError('Ошибка сети. Попробуйте позже.');
+    }
+  }, []);
+
+  useEffect(() => {
+    (window as any).onTelegramAuth = (u: any) => { handleWebTelegramAuth(u); };
+    return () => { try { delete (window as any).onTelegramAuth; } catch {} };
+  }, [handleWebTelegramAuth]);
+
+  if (needsWebLogin) {
+    const TelegramLoginButton: React.FC = () => {
+      const boxRef = useRef<HTMLDivElement>(null);
+      useEffect(() => {
+        if (!boxRef.current) return;
+        boxRef.current.innerHTML = '';
+        const s = document.createElement('script');
+        s.src = 'https://telegram.org/js/telegram-widget.js?22';
+        s.async = true;
+        s.setAttribute('data-telegram-login', BOT_USERNAME_MINI);
+        s.setAttribute('data-size', 'large');
+        s.setAttribute('data-radius', '12');
+        s.setAttribute('data-request-access', 'write');
+        s.setAttribute('data-userpic', 'true');
+        s.setAttribute('data-onauth', 'onTelegramAuth(user)');
+        boxRef.current.appendChild(s);
+      }, []);
+      return <div ref={boxRef} className="flex justify-center min-h-[52px] items-center" />;
+    };
+
+    return (
+      <AnimatedBackground>
+        <div className="p-4 min-h-screen flex flex-col items-center justify-center">
+          <div className="w-full max-w-sm rounded-3xl border border-zinc-800 bg-gradient-to-b from-zinc-950/90 to-black/90 p-6 shadow-2xl shadow-orange-950/25 animate-scale-in overflow-hidden relative">
+            <div className="absolute -top-24 -right-24 w-72 h-72 bg-orange-600/20 blur-3xl rounded-full" />
+            <div className="absolute -bottom-24 -left-24 w-72 h-72 bg-green-600/10 blur-3xl rounded-full" />
+
+            <div className="relative">
+              <div className="w-16 h-16 rounded-2xl bg-orange-600/15 border border-orange-500/20 flex items-center justify-center mb-4">
+                <Shield size={28} className="text-orange-400" />
+              </div>
+
+              <h1 className="text-2xl font-extrabold text-white mb-2 leading-tight">
+                Вход в БлинВПН
+              </h1>
+              <p className="text-sm text-zinc-400 mb-6 leading-relaxed">
+                Войдите через Telegram, чтобы открыть личный кабинет. Мы получим только имя и username — доступа к переписке нет.
+              </p>
+
+              <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-4 mb-5 flex justify-center">
+                <TelegramLoginButton />
+              </div>
+
+              {webLoginError && (
+                <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 mb-4 text-sm text-red-400 text-center">
+                  {webLoginError}
+                </div>
+              )}
+
+              <div className="text-center">
+                <a
+                  href={`https://t.me/${BOT_USERNAME_MINI}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                >
+                  Или откройте приложение прямо в Telegram
+                </a>
+              </div>
+
+              <p className="text-center text-xs text-zinc-600 mt-5 px-2 leading-relaxed">
+                Продолжая, вы соглашаетесь с{' '}
+                <button onClick={() => openDoc("Договор оферты", publicPages.offer)} className="text-zinc-400 underline underline-offset-2 hover:text-zinc-200 transition-colors">договором оферты</button>
+                {' '}и{' '}
+                <button onClick={() => openDoc("Политика конфиденциальности", publicPages.privacy)} className="text-zinc-400 underline underline-offset-2 hover:text-zinc-200 transition-colors">политикой конфиденциальности</button>
+              </p>
+            </div>
+          </div>
+        </div>
+      </AnimatedBackground>
+    );
+  }
+
   if (needsChannelSubscription) {
     return (
       <AnimatedBackground>
@@ -4159,8 +4380,18 @@ export default function App() {
               Не удалось определить пользователя
             </h2>
             <p className="text-zinc-400 text-sm text-center leading-relaxed mb-8">
-              Возможно, вы открываете приложение через сторонний браузер или произошла ошибка. Пожалуйста, откройте его через Telegram.
+              {entryMode === 'web'
+                ? 'Не удалось загрузить профиль. Попробуйте войти через Telegram заново.'
+                : 'Возможно, вы открываете приложение через сторонний браузер или произошла ошибка. Пожалуйста, откройте его через Telegram.'}
             </p>
+            {entryMode === 'web' && (
+              <button
+                onClick={() => { clearWebIdentity(); try { window.location.reload(); } catch {} }}
+                className="flex items-center justify-center gap-2 w-full py-4 mb-3 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded-2xl transition-all"
+              >
+                Войти заново
+              </button>
+            )}
             {/* Support button */}
             <a
               href={SUPPORT_URL}
@@ -4487,4 +4718,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-    }
+}
