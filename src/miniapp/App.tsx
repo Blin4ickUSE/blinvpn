@@ -753,8 +753,8 @@ function getInstructionSteps(platformId: PlatformId, plainSecondDevice: boolean)
 // 3. UI COMPONENTS
 // ==========================================
 
-const AnimatedBackground: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="max-w-md mx-auto min-h-screen w-full relative text-zinc-200 font-sans selection:bg-orange-500/30 tg-safe-padding overflow-x-clip" style={{ background: '#000', isolation: 'isolate', paddingTop: '56px' }}>
+const AnimatedBackground: React.FC<{ children: React.ReactNode; topPad?: number }> = ({ children, topPad = 0 }) => (
+  <div className="max-w-md mx-auto min-h-screen w-full relative text-zinc-200 font-sans selection:bg-orange-500/30 tg-safe-padding overflow-x-clip" style={{ background: '#000', isolation: 'isolate', paddingTop: topPad > 0 ? `${topPad}px` : undefined }}>
     <style>{`
       @keyframes drift1 {
         0%   { transform: translate(0px, 0px); }
@@ -4336,7 +4336,7 @@ export default function App() {
   }
 
   return (
-    <AnimatedBackground>
+    <AnimatedBackground topPad={entryMode === 'telegram' ? 56 : 0}>
       <div className={`p-4 min-h-screen flex flex-col overflow-x-clip ${userLoadFailed ? 'pointer-events-none select-none user-load-failed opacity-60' : ''}`}>
         <div
           key={transitionKey}
