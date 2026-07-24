@@ -568,7 +568,7 @@ const INSTRUCTIONS: Record<string, PlatformData> = {
     steps: [
       {
         title: '1. Установка приложения',
-        desc: 'Установите приложение Incy из App Store.',
+        desc: 'Установите приложение из App Store.',
         actions: [
           { label: 'App Store', url: 'https://apps.apple.com/ru/app/incy/id6756943388', primary: true }
         ]
@@ -1003,10 +1003,6 @@ const AnimatedBackground: React.FC<{ children: React.ReactNode; topPad?: number 
         from { transform: scaleX(0); }
         to   { transform: scaleX(1); }
       }
-      @keyframes setupIconBob {
-        0%, 100% { transform: translateY(0); }
-        50%      { transform: translateY(-6px); }
-      }
       @keyframes setupCheckBurst {
         0%   { transform: scale(0.4); opacity: 0; }
         55%  { transform: scale(1.12); opacity: 1; }
@@ -1038,7 +1034,7 @@ const AnimatedBackground: React.FC<{ children: React.ReactNode; topPad?: number 
         background: linear-gradient(145deg, rgba(234,88,12,0.18), rgba(24,24,27,0.9));
         box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
       }
-      .setup-icon-bob { position: relative; z-index: 1; color: #fb923c; animation: setupIconBob 3.2s ease-in-out infinite; }
+      .setup-icon-static { position: relative; z-index: 1; color: #fb923c; }
       .setup-done-burst { animation: setupCheckBurst 0.65s cubic-bezier(0.34,1.56,0.64,1) both; }
       .setup-spark { animation: setupSpark 0.55s cubic-bezier(0.22,1,0.36,1) both; }
       .setup-progress-fill {
@@ -3582,7 +3578,6 @@ export default function App() {
     const installStep = steps[0];
     const middleSteps = steps.slice(1, -1);
     const lastStep = steps[steps.length - 1];
-    const hasTriggerAdd = steps.some((s) => s.actions?.some((a) => a.type === 'trigger_add'));
     const hasCopyPlain = steps.some((s) => s.actions?.some((a) => a.type === 'copy_plain_sub'));
     const connectAction = lastStep?.actions?.find((a) => a.url?.startsWith('incy://connect'));
     const plainUrl = getPlainSubscriptionUrl();
@@ -3594,25 +3589,16 @@ export default function App() {
         title: 'Установить',
         icon: <Download size={28} />,
         headline: pid === 'androidtv' ? 'Incy на TV' : 'Установите Incy',
-        sub: pid === 'androidtv'
-          ? 'Поставьте приложение на телевизор — телефон пригодится дальше.'
-          : 'Клиент для вашего устройства — за минуту.',
       },
       {
         title: 'Подписка',
         icon: <Link2 size={28} />,
         headline: pid === 'androidtv' ? 'Свяжите устройства' : 'Добавьте подписку',
-        sub: pid === 'androidtv'
-          ? 'Перенесите подписку с телефона на TV через QR.'
-          : instructionPlainLinkMode
-            ? 'Скопируйте ссылку и вставьте в Incy.'
-            : 'Одна кнопка — подписка откроется в Incy.',
       },
       {
         title: 'Готово',
         icon: <Sparkles size={28} />,
         headline: 'Всё готово!',
-        sub: 'Обновите список серверов и подключайтесь.',
       },
     ] as const;
 
@@ -3701,15 +3687,14 @@ export default function App() {
             <div className="setup-icon-wrap">
               <div className="setup-icon-glow" />
               <div className="setup-icon-ring" />
-              <div className={`setup-icon-bob ${step === 3 ? 'setup-done-burst' : ''}`}>
+              <div className={`setup-icon-static ${step === 3 ? 'setup-done-burst' : ''}`}>
                 {step === 3 ? <CheckCircle size={34} className="text-green-400" /> : stepMeta[step - 1].icon}
               </div>
             </div>
             <div className="setup-spark inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-orange-400/90 bg-orange-500/10 px-2.5 py-1 rounded-full border border-orange-500/20 mb-2.5">
               Шаг {step} из 3
             </div>
-            <h2 className="text-2xl font-black text-white tracking-tight mb-1.5">{stepMeta[step - 1].headline}</h2>
-            <p className="text-zinc-400 text-sm leading-relaxed px-2">{stepMeta[step - 1].sub}</p>
+            <h2 className="text-2xl font-black text-white tracking-tight">{stepMeta[step - 1].headline}</h2>
           </div>
 
           {step === 1 && (
@@ -3797,23 +3782,6 @@ export default function App() {
                   )
                 )}
               </div>
-
-              {pid !== 'androidtv' && (
-                <button
-                  type="button"
-                  onClick={() => setInstructionPlainLinkMode((v) => !v)}
-                  className={`w-full py-2.5 px-3 rounded-xl text-xs font-semibold border transition-colors flex items-center justify-center gap-2 ${
-                    instructionPlainLinkMode
-                      ? 'border-orange-500/40 bg-orange-600/12 text-orange-100'
-                      : 'border-zinc-800 bg-zinc-900/40 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'
-                  }`}
-                >
-                  <Monitor size={15} className="shrink-0 opacity-80" />
-                  {instructionPlainLinkMode
-                    ? 'Обычная установка на это устройство'
-                    : 'Ставлю на другое устройство'}
-                </button>
-              )}
             </div>
           )}
 
@@ -3865,25 +3833,13 @@ export default function App() {
                   </p>
                 </>
               ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await openIncyWithSubscription(instructionSourceDeviceId ?? undefined);
-                    }}
-                    className="ripple w-full py-5 rounded-2xl font-bold text-white bg-gradient-to-br from-orange-600 via-orange-500 to-amber-500 shadow-[0_12px_40px_-12px_rgba(234,88,12,0.65)] active:scale-[0.98] transition-transform flex flex-col items-center gap-2"
-                  >
-                    <span className="flex items-center gap-2 text-base">
-                      <Rocket size={18} /> Добавить подписку
-                    </span>
-                    <span className="text-[11px] font-medium text-orange-100/80">Откроется приложение Incy</span>
-                  </button>
-                  {hasTriggerAdd && (
-                    <p className="text-zinc-500 text-xs text-center leading-relaxed px-3">
-                      Подтвердите импорт в Incy — затем вернитесь сюда и нажмите «Далее».
-                    </p>
-                  )}
-                </>
+                <Button
+                  onClick={async () => {
+                    await openIncyWithSubscription(instructionSourceDeviceId ?? undefined);
+                  }}
+                >
+                  <Plus size={16} /> Добавить подписку
+                </Button>
               )}
 
               {middleSteps.map((s, idx) => (
@@ -3898,32 +3854,12 @@ export default function App() {
           )}
 
           {step === 3 && (
-            <div className="space-y-4 flex-1">
-              <div className="rounded-2xl border border-green-500/20 bg-green-500/5 p-4 text-center">
-                <div className="text-green-300 font-bold text-sm mb-1">VPN почти в деле</div>
-                <p className="text-zinc-400 text-xs leading-relaxed">
-                  {lastStep?.desc || 'В Incy обновите подписку, выберите сервер и подключитесь.'}
-                </p>
-              </div>
-
+            <div className="flex-1">
               {connectAction?.url && (
                 <Button onClick={() => openUrl(connectAction.url!)}>
                   <Zap size={16} /> {connectAction.label || 'Подключиться!'}
                 </Button>
               )}
-
-              <div className="grid grid-cols-3 gap-2 pt-1">
-                {[
-                  { icon: <Shield size={16} />, t: 'Защита' },
-                  { icon: <Zap size={16} />, t: 'Скорость' },
-                  { icon: <Globe size={16} />, t: 'Локации' },
-                ].map((f) => (
-                  <div key={f.t} className="rounded-xl border border-zinc-800 bg-zinc-950/50 py-3 px-2 flex flex-col items-center gap-1.5 text-zinc-400">
-                    <span className="text-orange-400/90">{f.icon}</span>
-                    <span className="text-[10px] font-semibold">{f.t}</span>
-                  </div>
-                ))}
-              </div>
             </div>
           )}
 
