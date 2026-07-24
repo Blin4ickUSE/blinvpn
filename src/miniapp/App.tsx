@@ -3506,8 +3506,7 @@ export default function App() {
   );
 
   const InstructionView = () => {
-    // Платформа всегда с текущего устройства
-    const pid = detectClientPlatform();
+    const pid = (PLATFORMS.some((p) => p.id === activePlatform) ? activePlatform : detectClientPlatform()) as PlatformId;
     const steps = getInstructionSteps(pid, instructionPlainLinkMode);
     const installStep = steps[0];
     const middleSteps = steps.slice(1, -1);
@@ -3565,7 +3564,6 @@ export default function App() {
 
     const addSubscription = async () => {
       await openIncyWithSubscription(instructionSourceDeviceId ?? undefined);
-      setInstructionSetupStep(3);
     };
 
     return (
@@ -3623,7 +3621,33 @@ export default function App() {
           </div>
 
           {step === 1 && (
-            <div className="flex-1">
+            <div className="space-y-4 flex-1">
+              <div>
+                <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-2 block">Платформа</label>
+                <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 custom-scrollbar">
+                  {PLATFORMS.map((p) => {
+                    const active = pid === p.id;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => setActivePlatform(p.id)}
+                        className={`setup-chip shrink-0 flex flex-col items-center gap-1.5 w-[76px] py-2.5 px-2 rounded-2xl border ${
+                          active ? 'active text-orange-100' : 'border-zinc-800 bg-zinc-950/50 text-zinc-400'
+                        }`}
+                      >
+                        <span className={active ? 'text-orange-400' : 'text-zinc-500'} style={{ transform: 'scale(0.72)' }}>
+                          {p.icon}
+                        </span>
+                        <span className="text-[10px] font-semibold leading-tight text-center">
+                          {p.name.replace(' (iPhone)', '').replace(' PC', '')}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div className="rounded-2xl border border-zinc-800/90 bg-zinc-950/55 p-4">
                 <div className="flex items-center gap-3 mb-3">
                   <div className="w-11 h-11 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-orange-400 shrink-0">
@@ -3708,8 +3732,8 @@ export default function App() {
               </Button>
             )}
             {step === 2 && (
-              instructionPlainLinkMode || hasCopyPlain ? (
-                <>
+              <>
+                {instructionPlainLinkMode || hasCopyPlain ? (
                   <Button
                     onClick={() => {
                       if (plainUrl) handleCopy(plainUrl);
@@ -3719,15 +3743,15 @@ export default function App() {
                   >
                     <Copy size={16} /> Скопировать ссылку
                   </Button>
-                  <Button variant="secondary" onClick={() => setInstructionSetupStep(3)}>
-                    Далее <ArrowRight size={18} />
+                ) : (
+                  <Button onClick={addSubscription}>
+                    <Plus size={16} /> Добавить подписку
                   </Button>
-                </>
-              ) : (
-                <Button onClick={addSubscription}>
-                  <Plus size={16} /> Добавить подписку
+                )}
+                <Button variant="secondary" onClick={() => setInstructionSetupStep(3)}>
+                  Далее <ArrowRight size={18} />
                 </Button>
-              )
+              </>
             )}
             {step === 3 && (
               <Button variant="secondary" onClick={finishSetup}>
