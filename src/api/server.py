@@ -911,43 +911,52 @@ def web_logout():
     return jsonify({'success': True})
 
 
-# ========== Шифрование ссылки для Happ ==========
+# ========== Шифрование ссылки для Incy (crypt1) ==========
+# AES-256-GCM K1 из @incy/link-encoder (fingerprint b6bf7084…)
+_INCY_CRYPT1_KEY = bytes.fromhex(
+    'f6d40ea0c8a8899d7c682d09ba0d4165dfe2b3dd45e6bb3e25cb233cf00c2462'
+)
+
+
+def _encrypt_incy_crypt1(url: str, name: str = 'BlinVPN') -> str:
+    """Собирает deep link incy://crypt1/<base64url(iv||ciphertext||tag)>."""
+    import base64
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    payload = {'url': url, 'v': 1}
+    if name:
+        payload['n'] = name[:128]
+    # Компактный JSON с отсортированными ключами — как в клиентах INCY
+    plaintext = '{' + ','.join(
+        f'{json.dumps(k)}:{json.dumps(payload[k])}' for k in sorted(payload)
+    ) + '}'
+    iv = secrets.token_bytes(12)
+    wire = iv + AESGCM(_INCY_CRYPT1_KEY).encrypt(iv, plaintext.encode('utf-8'), None)
+    return 'incy://crypt1/' + base64.urlsafe_b64encode(wire).decode('ascii').rstrip('=')
+
 
 @app.route('/api/encrypt-link', methods=['POST'])
-def encrypt_link_for_happ():
-    """Проксирует запрос на шифрование ссылки через crypto.happ.su"""
-    import requests as req
-    
+def encrypt_link_for_incy():
+    """Шифрует URL подписки в incy://crypt1/... (AES-256-GCM)."""
     data = request.get_json()
     url = data.get('url') if data else None
-    
+    name = (data.get('name') if data else None) or 'BlinVPN'
+
     if not url:
         return jsonify({'error': 'URL is required'}), 400
-    
+
     try:
-        response = req.post(
-            'https://crypto.happ.su/api.php',
-            json={'url': url},
-            headers={'Content-Type': 'application/json'},
-            timeout=10
-        )
-        
-        if response.ok:
-            result = response.json()
-            if result and result.get('encrypted_link'):
-                return jsonify({'encrypted_link': result['encrypted_link']})
-        
-        logger.error(f"Happ encryption API failed: {response.status_code} - {response.text}")
-        return jsonify({'error': 'Encryption failed'}), 500
+        encrypted_link = _encrypt_incy_crypt1(url, name=name)
+        return jsonify({'encrypted_link': encrypted_link})
     except Exception as e:
-        logger.error(f"Happ encryption API error: {e}")
+        logger.error(f"Incy crypt1 encryption error: {e}")
         return jsonify({'error': str(e)}), 500
 
-# ========== Редирект для открытия Happ ==========
+# ========== Редирект для открытия Incy ==========
 
 @app.route('/api/redirect')
-def redirect_to_happ():
-    """Страница редиректа для открытия приложения Happ"""
+def redirect_to_incy():
+    """Страница редиректа для открытия приложения Incy"""
     from flask import Response
     
     url = request.args.get('url', '')
@@ -957,7 +966,7 @@ def redirect_to_happ():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Открываем Happ...</title>
+    <title>Открываем Incy...</title>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{

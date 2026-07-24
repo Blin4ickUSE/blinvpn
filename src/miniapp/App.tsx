@@ -274,7 +274,7 @@ const OFFER_AGREEMENT_TEXT = `
 
 **1.2. Ключ доступа (Конфигурация)** — уникальный цифровой код/файл, генерируемый Сервисом, являющийся техническим средством аутентификации Пользователя в системе.
 
-**1.3. Стороннее ПО** — программное обеспечение третьих лиц (в т.ч. приложение «Happ», V2Ray и аналоги), устанавливаемое Пользователем на своё устройство для взаимодействия с Сервисом.
+**1.3. Стороннее ПО** — программное обеспечение третьих лиц (в т.ч. приложение «Incy», V2Ray и аналоги), устанавливаемое Пользователем на своё устройство для взаимодействия с Сервисом.
 
 **1.4. Аномальная активность** — паттерны сетевого поведения, отклоняющиеся от стандартного профиля использования (в т.ч. массовые рассылки, сканирование портов, превышение лимитов сессий).
 
@@ -302,7 +302,7 @@ const OFFER_AGREEMENT_TEXT = `
 
 **3.3. Лицензионные ограничения.** Одновременное количество подключённых устройств ограничено условиями выбранного Тарифа. Система автоматически фиксирует превышение данного лимита. При выявлении нарушения Ключ блокируется автоматически без возврата средств.
 
-**3.4. Стороннее ПО.** Исполнитель не является разработчиком клиентских приложений (Happ и др.) и не несёт ответственности за их удаление из магазинов приложений (AppStore/Google Play), сбои в их работе или некорректные обновления.
+**3.4. Стороннее ПО.** Исполнитель не является разработчиком клиентских приложений (Incy и др.) и не несёт ответственности за их удаление из магазинов приложений (AppStore/Google Play), сбои в их работе или некорректные обновления.
 
 **3.5. Ограниченная совместимость с отдельными ресурсами.** Исполнитель не гарантирует доступ через Сервис к ресурсам, которые по техническим или юридическим причинам блокируют трафик VPN-серверов. Сервис не несёт ответственности за недоступность следующих категорий ресурсов и не рассматривает их недоступность как основание для возврата средств: онлайн-казино и азартные игры; сайты категории «для взрослых» (18+); букмекерские конторы; ресурсы организаций, признанных нежелательными или запрещёнными на территории РФ; ресурсы, связанные с оборотом запрещённых веществ. Факт посещения Пользователем ресурсов из перечисленных категорий фиксируется на уровне метаданных и **автоматически лишает Пользователя права на возврат средств** по любому основанию в рамках данной подписки.
 
@@ -542,10 +542,10 @@ const INSTRUCTIONS: Record<string, PlatformData> = {
     steps: [
       {
         title: '1. Установка приложения',
-        desc: 'Установите приложение из Google Play или скачайте APK.',
+        desc: 'Установите приложение Incy из Google Play или скачайте APK.',
         actions: [
-          { label: 'Google Play', url: 'https://play.google.com/store/apps/details?id=com.happproxy', primary: true },
-          { label: 'Скачать .APK', url: 'https://github.com/Happ-proxy/happ-android/releases/latest/download/Happ.apk', primary: false }
+          { label: 'Google Play', url: 'https://play.google.com/store/apps/details?id=llc.itdev.incy', primary: true },
+          { label: 'Скачать .APK', url: 'https://github.com/INCY-DEV/incy-platforms/releases/latest/download/Incy.apk', primary: false }
         ]
       },
       {
@@ -568,9 +568,9 @@ const INSTRUCTIONS: Record<string, PlatformData> = {
     steps: [
       {
         title: '1. Установка приложения',
-        desc: 'Установите приложение из App Store.',
+        desc: 'Установите приложение Incy из App Store.',
         actions: [
-          { label: 'App Store', url: 'https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973', primary: true }
+          { label: 'App Store', url: 'https://apps.apple.com/ru/app/incy/id6756943388', primary: true }
         ]
       },
       {
@@ -584,7 +584,7 @@ const INSTRUCTIONS: Record<string, PlatformData> = {
         title: '3. Подключение',
         desc: 'Нажмите (🔄) в приложении, выберите сервер и подключитесь.',
         actions: [
-          { label: 'Подключиться!', url: 'happ://connect', primary: true }
+          { label: 'Подключиться!', url: 'incy://connect', primary: true }
         ]
       }
     ]
@@ -596,9 +596,9 @@ const INSTRUCTIONS: Record<string, PlatformData> = {
     steps: [
       {
         title: '1. Установка',
-        desc: 'Скачайте и установите .EXE файл.',
+        desc: 'Скачайте и установите .EXE файл Incy.',
         actions: [
-          { label: 'Скачать .EXE', url: 'https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe', primary: true }
+          { label: 'Скачать .EXE', url: 'https://github.com/INCY-DEV/incy-platforms/releases/latest/download/incy-windows-setup.exe', primary: true }
         ]
       },
       {
@@ -621,9 +621,9 @@ const INSTRUCTIONS: Record<string, PlatformData> = {
     steps: [
       {
         title: '1. Установка',
-        desc: 'Установите через AppStore.',
+        desc: 'Установите Incy через App Store.',
         actions: [
-          { label: 'App Store', url: 'https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973', primary: true }
+          { label: 'App Store', url: 'https://apps.apple.com/ru/app/incy/id6756943388', primary: true }
         ]
       },
       {
@@ -642,9 +642,9 @@ const INSTRUCTIONS: Record<string, PlatformData> = {
     steps: [
       {
         title: '1. Установка',
-        desc: 'Скачайте релиз с GitHub.',
+        desc: 'Скачайте релиз Incy с GitHub.',
         actions: [
-          { label: 'GitHub Releases', url: 'https://github.com/Happ-proxy/happ-desktop/releases/', primary: true }
+          { label: 'GitHub Releases', url: 'https://github.com/INCY-DEV/incy-platforms/releases/', primary: true }
         ]
       },
       {
@@ -671,7 +671,7 @@ const INSTRUCTIONS: Record<string, PlatformData> = {
       },
       {
         title: '2. Установка на TV',
-        desc: 'Найдите "Happ" в Google Play на телевизоре и установите.'
+        desc: 'Найдите "Incy" в Google Play на телевизоре и установите.'
       },
       {
         title: '3. Синхронизация',
@@ -693,12 +693,12 @@ function getInstructionSteps(platformId: PlatformId, plainSecondDevice: boolean)
         pack.steps[0],
         {
           title: '2. Ссылка подписки',
-          desc: 'Скопируйте ссылку ниже — она понадобится в приложении Happ.',
+          desc: 'Скопируйте ссылку ниже — она понадобится в приложении Incy.',
           actions: [{ label: 'Скопировать ссылку', type: 'copy_plain_sub', primary: true }],
         },
         {
-          title: '3. Вставка в Happ',
-          desc: 'Откройте Happ, нажмите «+» вверху и выберите «Вставить из буфера обмена».',
+          title: '3. Вставка в Incy',
+          desc: 'Откройте Incy, нажмите «+» вверху и выберите «Вставить из буфера обмена».',
         },
         pack.steps[2],
       ];
@@ -711,13 +711,13 @@ function getInstructionSteps(platformId: PlatformId, plainSecondDevice: boolean)
           actions: [{ label: 'Скопировать ссылку', type: 'copy_plain_sub', primary: true }],
         },
         {
-          title: '3. Вставка в Happ',
+          title: '3. Вставка в Incy',
           desc: 'В приложении нажмите «+» и выберите «Вставить из буфера обмена».',
         },
         {
           title: '4. Подключение',
-          desc: 'Нажмите «🔄» в Happ, выберите сервер и подключитесь.',
-          actions: [{ label: 'Подключиться!', url: 'happ://connect', primary: true }],
+          desc: 'Нажмите «🔄» в Incy, выберите сервер и подключитесь.',
+          actions: [{ label: 'Подключиться!', url: 'incy://connect', primary: true }],
         },
       ];
     case 'windows':
@@ -725,7 +725,7 @@ function getInstructionSteps(platformId: PlatformId, plainSecondDevice: boolean)
         pack.steps[0],
         {
           title: pack.steps[1].title,
-          desc: 'Скопируйте ссылку подписки ниже. В Happ нажмите «+» — при необходимости вставьте ссылку из буфера.',
+          desc: 'Скопируйте ссылку подписки ниже. В Incy нажмите «+» — при необходимости вставьте ссылку из буфера.',
           actions: [{ label: 'Скопировать ссылку', type: 'copy_plain_sub', primary: true }],
         },
         pack.steps[2],
@@ -736,7 +736,7 @@ function getInstructionSteps(platformId: PlatformId, plainSecondDevice: boolean)
         pack.steps[0],
         {
           title: pack.steps[1].title,
-          desc: 'Скопируйте ссылку подписки ниже. В Happ нажмите «+» — при необходимости вставьте ссылку из буфера.',
+          desc: 'Скопируйте ссылку подписки ниже. В Incy нажмите «+» — при необходимости вставьте ссылку из буфера.',
           actions: [{ label: 'Скопировать ссылку', type: 'copy_plain_sub', primary: true }],
         },
         {
@@ -1782,13 +1782,13 @@ export default function App() {
     return null;
   };
 
-  // Получить Happ зашифрованную ссылку через наш бэкенд (который проксирует на crypto.happ.su)
-  const getHappEncryptedLink = async (subscriptionUrl: string): Promise<string | null> => {
+  // Получить Incy crypt1-ссылку через бэкенд
+  const getIncyEncryptedLink = async (subscriptionUrl: string): Promise<string | null> => {
     try {
       const response = await fetch('/api/encrypt-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: subscriptionUrl })
+        body: JSON.stringify({ url: subscriptionUrl, name: 'BlinVPN' })
       });
       
       if (response.ok) {
@@ -1821,9 +1821,9 @@ export default function App() {
     return null;
   };
 
-  // Открыть Happ с зашифрованной ссылкой через редирект-страницу
-  const openHappWithSubscription = async (deviceId?: number) => {
-    console.log('openHappWithSubscription called, deviceId:', deviceId);
+  // Открыть Incy с зашифрованной crypt1-ссылкой через редирект-страницу
+  const openIncyWithSubscription = async (deviceId?: number) => {
+    console.log('openIncyWithSubscription called, deviceId:', deviceId);
     console.log('Available devices:', devices);
     console.log('Device keys:', Array.from(deviceKeys.entries()));
     
@@ -1847,9 +1847,9 @@ export default function App() {
       return;
     }
     
-    // Шифруем ссылку
+    // Шифруем ссылку (incy://crypt1/...)
     console.log('Encrypting URL:', subscriptionUrl);
-    const encryptedLink = await getHappEncryptedLink(subscriptionUrl);
+    const encryptedLink = await getIncyEncryptedLink(subscriptionUrl);
     console.log('Encrypted link:', encryptedLink);
     
     if (!encryptedLink) {
@@ -1865,7 +1865,7 @@ export default function App() {
     // Открываем редирект-страницу
     const win = window as any;
     if (win.Telegram?.WebApp?.openLink) {
-      // openLink открывает во внешнем браузере - там сработает редирект на happ://
+      // openLink открывает во внешнем браузере - там сработает редирект на incy://
       win.Telegram.WebApp.openLink(redirectUrl);
     } else {
       // Fallback - открываем в новом окне
@@ -2592,7 +2592,7 @@ export default function App() {
                 }`}
               >
                 {wizardSuccessPlainDevice
-                  ? 'Вернуться к обычной установке (кнопка в Happ)'
+                  ? 'Вернуться к обычной установке (кнопка в Incy)'
                   : 'Поставить на другое устройство — по ссылке'}
               </button>
             )}
@@ -2628,14 +2628,14 @@ export default function App() {
                                 key={aIdx}
                                 onClick={async () => {
                                     if (action.type === 'trigger_add') {
-                                        await openHappWithSubscription();
+                                        await openIncyWithSubscription();
                                     } else if (action.type === 'copy_plain_sub') {
                                       const plain = getPlainSubscriptionUrl();
                                       if (plain) handleCopy(plain);
                                       else alert('Ссылка ещё не загружена. Попробуйте через несколько секунд или откройте «Мои подписки».');
                                     } else if (action.url) {
                                         const w = window as any;
-                                        if (action.url.startsWith('happ://') && w.Telegram?.WebApp?.openLink) {
+                                        if (action.url.startsWith('incy://') && w.Telegram?.WebApp?.openLink) {
                                           w.Telegram.WebApp.openLink(action.url);
                                         } else {
                                           window.open(action.url, '_blank');
@@ -2912,7 +2912,7 @@ export default function App() {
             </div>
             <div className="text-white font-semibold mb-2">Нет подключённых устройств</div>
             <div className="text-zinc-500 text-sm leading-relaxed">
-              Устройства появятся здесь после первого подключения по подписке в Happ.
+              Устройства появятся здесь после первого подключения по подписке в Incy.
             </div>
           </div>
         ) : (
@@ -3663,7 +3663,7 @@ export default function App() {
                       key={aIdx}
                       onClick={async () => {
                         if (action.type === 'trigger_add') {
-                          await openHappWithSubscription(instructionSourceDeviceId ?? undefined);
+                          await openIncyWithSubscription(instructionSourceDeviceId ?? undefined);
                         } else if (action.type === 'copy_plain_sub') {
                           const plain = getPlainSubscriptionUrl();
                           if (plain) handleCopy(plain);
@@ -3674,7 +3674,7 @@ export default function App() {
                           setActivePlatform('ios');
                         } else if (action.url) {
                           const w = window as any;
-                          if (action.url.startsWith('happ://') && w.Telegram?.WebApp?.openLink) {
+                          if (action.url.startsWith('incy://') && w.Telegram?.WebApp?.openLink) {
                             w.Telegram.WebApp.openLink(action.url);
                           } else {
                             window.open(action.url, '_blank');
