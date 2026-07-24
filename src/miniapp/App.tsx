@@ -1277,6 +1277,15 @@ export default function App() {
 
   const [balance, setBalance] = useState<number>(0);
   const [nextDiscountPercent, setNextDiscountPercent] = useState<number>(0);
+  const [globalDiscountPercent, setGlobalDiscountPercent] = useState<number>(0);
+  const [depositMultiplierPromo, setDepositMultiplierPromo] = useState<{
+    id: number;
+    name: string;
+    value: number;
+    min_amount: number | null;
+    max_amount: number | null;
+    expires_at: string | null;
+  } | null>(null);
   const [referralInviteDiscountActive, setReferralInviteDiscountActive] = useState(false);
   const [isTrialUsed, setIsTrialUsed] = useState<boolean>(false);
   const [userId, setUserId] = useState<number | null>(null);
@@ -1588,6 +1597,27 @@ export default function App() {
       }
 
       try {
+        const promoData = await miniApiFetch('/promotions/active');
+        const gPct = Number(promoData?.global_discount_percent || 0) || 0;
+        setGlobalDiscountPercent(gPct > 0 ? gPct : 0);
+        const dep = promoData?.deposit_multiplier;
+        if (dep && Number(dep.value) > 1) {
+          setDepositMultiplierPromo({
+            id: Number(dep.id),
+            name: String(dep.name || ''),
+            value: Number(dep.value),
+            min_amount: dep.min_amount != null ? Number(dep.min_amount) : null,
+            max_amount: dep.max_amount != null ? Number(dep.max_amount) : null,
+            expires_at: dep.expires_at || null,
+          });
+        } else {
+          setDepositMultiplierPromo(null);
+        }
+      } catch (e) {
+        console.error('Failed to load promotions', e);
+      }
+
+      try {
         // Устройства
         const devicesData = await miniApiFetch(`/user/devices?telegram_id=${tgId}`);
         if (Array.isArray(devicesData)) {
@@ -1603,7 +1633,8 @@ export default function App() {
             days_left: d.days_left,
             hours_left: d.hours_left,
             is_expired: d.is_expired,
-            expiry_date: d.expiry_date
+            expiry_date: d.expiry_date,
+            devices_limit: d.devices_limit != null ? Number(d.devices_limit) : 1,
           }));
           setDevices(devicesList);
           
@@ -1699,6 +1730,12 @@ export default function App() {
     return Math.max(0, Math.round(price * (100 - nextDiscountPercent) / 100));
   };
 
+  const applyGlobalDiscount = (price: number): number => {
+    if (!globalDiscountPercent || globalDiscountPercent <= 0) return price;
+    if (price <= 0) return price;
+    return Math.max(0, Math.round(price * (100 - globalDiscountPercent) / 100));
+  };
+
   const applyReferralInviteFirst = (price: number): number => {
     if (!referralInviteDiscountActive || price <= 0) return price;
     return Math.max(0, Math.round(price * 0.9));
@@ -1709,8 +1746,26 @@ export default function App() {
     return applyReferralInviteFirst(computePlanPrice(plan, devices));
   };
 
+  const hasAnyProductDiscount = nextDiscountPercent > 0 || globalDiscountPercent > 0;
+
   const priceFinal = (plan: Plan | null, devices: number): number => {
-    return applyNextDiscount(priceAfterReferralOnly(plan, devices));
+    // Порядок как на сервере: рефералка → промокод → глобальная скидка
+    return applyGlobalDiscount(applyNextDiscount(priceAfterReferralOnly(plan, devices)));
+  };
+
+  const previewDepositCredit = (amount: number): { credit: number; bonus: number; mult: number } => {
+    const m = depositMultiplierPromo;
+    if (!m || !m.value || m.value <= 1 || amount <= 0) {
+      return { credit: amount, bonus: 0, mult: 1 };
+    }
+    if (m.min_amount != null && amount < m.min_amount) {
+      return { credit: amount, bonus: 0, mult: 1 };
+    }
+    if (m.max_amount != null && amount > m.max_amount) {
+      return { credit: amount, bonus: 0, mult: 1 };
+    }
+    const credit = Math.round(amount * m.value);
+    return { credit, bonus: Math.max(0, credit - amount), mult: m.value };
   };
   
   const addHistoryItem = (type: string, title: string, amount: number) => {
@@ -1741,7 +1796,8 @@ export default function App() {
           days_left: d.days_left,
           hours_left: d.hours_left,
           is_expired: d.is_expired,
-          expiry_date: d.expiry_date
+          expiry_date: d.expiry_date,
+          devices_limit: d.devices_limit != null ? Number(d.devices_limit) : 1,
         }));
         setDevices(devicesList);
 
@@ -2448,6 +2504,11 @@ export default function App() {
                 −10% на первую покупку по реферальной ссылке уже учтена в ценах
               </div>
             )}
+            {globalDiscountPercent > 0 && (
+              <div className="text-center text-xs text-amber-400/90 mb-3 font-medium">
+                Акция: −{globalDiscountPercent}% на все тарифы
+              </div>
+            )}
 
             <div className="space-y-3 flex-1">
                 {(vpnPlans || VPN_PLANS_DEFAULT).filter(plan => !plan.isTrial || !isTrialUsed).map((plan) => {
@@ -2458,7 +2519,7 @@ export default function App() {
                       ? `${Math.round(shownPrice / months)} ₽/месяц`
                       : null;
                     const shown = shownPrice;
-                    const prePromo = !plan.isTrial && nextDiscountPercent > 0 ? priceAfterReferralOnly(plan, wizardDeviceCount) : null;
+                    const prePromo = !plan.isTrial && hasAnyProductDiscount ? priceAfterReferralOnly(plan, wizardDeviceCount) : null;
                     return (
                     <div 
                         key={plan.id}
@@ -2506,7 +2567,7 @@ export default function App() {
                 )}
                 <div className="border-t border-zinc-800 pt-4 flex justify-between items-center">
                     <span className="text-zinc-400">Итого:</span>
-                    {!wizardPlan.isTrial && nextDiscountPercent > 0 ? (
+                    {!wizardPlan.isTrial && hasAnyProductDiscount ? (
                       <div className="flex items-baseline gap-2.5">
                         <span className="text-lg font-semibold text-zinc-500 line-through decoration-zinc-500/60 decoration-2 tabular-nums">
                           {priceAfterReferralOnly(wizardPlan, wizardDeviceCount)} ₽
@@ -2536,7 +2597,7 @@ export default function App() {
             <div className="mt-auto">
                 <div className="flex justify-between items-center mb-6 text-lg">
                   <span className="text-zinc-400">К оплате</span>
-                  {!wizardPlan.isTrial && nextDiscountPercent > 0 ? (
+                  {!wizardPlan.isTrial && hasAnyProductDiscount ? (
                     <div className="flex items-baseline gap-2.5">
                       <span className="text-base font-semibold text-zinc-500 line-through decoration-zinc-500/60 decoration-2 tabular-nums">
                         {priceAfterReferralOnly(wizardPlan, wizardDeviceCount)} ₽
@@ -2967,7 +3028,11 @@ export default function App() {
           <div className="grid gap-3">
             {plansForExtend.map(plan => {
               const fin = priceForExtend(plan);
-              const pre = nextDiscountPercent > 0 ? priceAfterReferralOnly(plan, extPricingCnt) : null;
+              const pre = hasAnyProductDiscount ? priceAfterReferralOnly(plan, extPricingCnt) : null;
+              const discLabel = [
+                nextDiscountPercent > 0 ? `−${nextDiscountPercent}%` : null,
+                globalDiscountPercent > 0 ? `−${globalDiscountPercent}%` : null,
+              ].filter(Boolean).join(' · ');
               return (
               <button
                 key={plan.id}
@@ -2992,7 +3057,9 @@ export default function App() {
                           <span className="text-sm font-semibold text-zinc-500 line-through tabular-nums">{pre} ₽</span>
                           <span className="text-lg font-bold tabular-nums">{fin} ₽</span>
                         </div>
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400/85">−{nextDiscountPercent}%</span>
+                        {discLabel && (
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400/85">{discLabel}</span>
+                        )}
                       </div>
                     ) : (
                       <div className="text-lg font-bold tabular-nums">{fin} ₽</div>
@@ -3033,11 +3100,37 @@ export default function App() {
       {topupStep === 1 && (
         <>
           <div className="flex-1">
+            {depositMultiplierPromo && (
+              <div className="mb-4 px-4 py-3 rounded-xl border border-emerald-500/30 bg-emerald-950/30 text-sm">
+                <div className="text-emerald-400 font-semibold">
+                  Акция: x{depositMultiplierPromo.value} к пополнению
+                </div>
+                <div className="text-zinc-400 text-xs mt-1">
+                  {[
+                    depositMultiplierPromo.min_amount != null ? `от ${depositMultiplierPromo.min_amount} ₽` : null,
+                    depositMultiplierPromo.max_amount != null ? `до ${depositMultiplierPromo.max_amount} ₽` : null,
+                  ].filter(Boolean).join(' · ') || 'На любое пополнение'}
+                  {depositMultiplierPromo.expires_at
+                    ? ` · до ${new Date(depositMultiplierPromo.expires_at).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`
+                    : ''}
+                </div>
+              </div>
+            )}
             <div className="text-center py-6">
                <div className="text-zinc-400 text-sm mb-2">Выберите сумму</div>
                <div className="text-5xl font-bold text-white tracking-tight">
                  {topupAmount > 0 ? topupAmount : 0}<span className="text-zinc-600 text-3xl ml-1">₽</span>
                </div>
+               {(() => {
+                 const prev = previewDepositCredit(topupAmount);
+                 if (prev.bonus <= 0) return null;
+                 return (
+                   <div className="mt-3 text-emerald-400 text-sm font-medium">
+                     На баланс придёт {prev.credit} ₽
+                     <span className="text-zinc-500 font-normal"> (+{prev.bonus} ₽ по акции)</span>
+                   </div>
+                 );
+               })()}
             </div>
 
             <div className="grid grid-cols-3 gap-3 mb-6">
@@ -3084,7 +3177,7 @@ export default function App() {
              <div className="bg-zinc-800/50 p-4 rounded-xl border border-zinc-700 mb-6 space-y-2">
                 <div className="flex justify-between items-center text-sm">
                    <span className="text-zinc-400">
-                     {isTelegramStarsMethod() ? 'На баланс:' : 'Сумма:'}
+                     {isTelegramStarsMethod() ? 'Сумма:' : 'Сумма:'}
                    </span>
                    <span className="text-white">
                      {isTelegramStarsMethod()
@@ -3092,6 +3185,16 @@ export default function App() {
                        : formatPaymentUnit(topupAmount)}
                    </span>
                 </div>
+                {(() => {
+                  const prev = previewDepositCredit(topupAmount);
+                  if (prev.bonus <= 0) return null;
+                  return (
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-emerald-400">Акция x{prev.mult}:</span>
+                      <span className="text-emerald-400 font-medium">на баланс {prev.credit} ₽</span>
+                    </div>
+                  );
+                })()}
                 {selectedMethod && getSelectedFeePercent() > 0 && !isTelegramStarsMethod() && (
                   <div className="flex justify-between items-center text-sm">
                      <span className="text-zinc-400">
@@ -3613,9 +3716,6 @@ export default function App() {
               <div className={`setup-icon-static ${step === 3 ? 'setup-done-burst' : ''}`}>
                 {step === 3 ? <CheckCircle size={34} className="text-orange-400" /> : stepMeta[step - 1].icon}
               </div>
-            </div>
-            <div className="setup-spark inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-orange-400/90 bg-orange-500/10 px-2.5 py-1 rounded-full border border-orange-500/20 mb-2.5">
-              Шаг {step} из 3
             </div>
             <h2 className="text-2xl font-black text-white tracking-tight">{stepMeta[step - 1].headline}</h2>
           </div>

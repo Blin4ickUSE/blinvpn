@@ -124,10 +124,18 @@ def _in_elapsed_notif_window(elapsed_seconds: float, delay_seconds: float) -> bo
     return delay_seconds <= elapsed_seconds < delay_seconds + _NOTIF_CATCHUP_SEC
 
 
-def _get_renewal_price(devices_limit: int) -> float:
+def _get_renewal_price(devices_limit: int) -> tuple:
+    """(price, global_promo_id|None)"""
     devices = max(1, int(devices_limit or 1))
     price = database.compute_vpn_subscription_price(_AUTO_RENEWAL_DAYS, devices)
-    return float(price if price is not None else 99)
+    price = float(price if price is not None else 99)
+    global_pct, global_promo = database.get_active_global_discount()
+    promo_id = None
+    if global_pct > 0:
+        price = round(price * (100 - global_pct) / 100)
+        if global_promo:
+            promo_id = int(global_promo['id'])
+    return float(price), promo_id
 
 
 def _expiry_notification_sent(cursor, key_id: int, notif_type: str) -> bool:
@@ -224,7 +232,7 @@ def _should_send_expiry_warning(row, now_utc, target_seconds: float, notif_type:
         return False
     if _expiry_notification_sent(cursor, key_id, notif_type):
         return False
-    renewal_price = _get_renewal_price(row['devices_limit'])
+    renewal_price, _ = _get_renewal_price(row['devices_limit'])
     balance = float(row['balance'] or 0)
     return balance < renewal_price
 
@@ -814,7 +822,7 @@ async def subscription_notifications_task():
                     if not _should_send_expiry_warning(row, now_utc, target_secs, notif_type, cursor):
                         continue
                     key_id = row['id']
-                    renewal_price = _get_renewal_price(row['devices_limit'])
+                    renewal_price, _ = _get_renewal_price(row['devices_limit'])
                     balance = float(row['balance'] or 0)
                     topup = max(0.0, round(renewal_price - balance, 2))
                     msg = notify_msgs.build_expiry_warning_message(
@@ -836,7 +844,7 @@ async def subscription_notifications_task():
                 if secs_left > _NOTIF_WINDOW_SEC:
                     continue
 
-                renewal_price = _get_renewal_price(row['devices_limit'])
+                renewal_price, _ = _get_renewal_price(row['devices_limit'])
                 balance = float(row['balance'] or 0)
 
                 if balance >= renewal_price:
@@ -1120,7 +1128,7 @@ async def auto_renewal_task():
                 telegram_id = row['telegram_id']
                 balance = float(row['balance'] or 0)
                 
-                renewal_price = _get_renewal_price(row['devices_limit'])
+                renewal_price, global_promo_id = _get_renewal_price(row['devices_limit'])
                 renewal_days = _AUTO_RENEWAL_DAYS
                 
                 # Проверяем, достаточно ли средств на балансе
@@ -1166,6 +1174,12 @@ async def auto_renewal_task():
                             """, (user_id, -renewal_price))
                             
                             conn.commit()
+
+                            if global_promo_id:
+                                try:
+                                    database.consume_promotion_use(int(global_promo_id))
+                                except Exception:
+                                    pass
                             
                             await _send_user_notification(
                                 telegram_id,

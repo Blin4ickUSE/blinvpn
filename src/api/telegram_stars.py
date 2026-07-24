@@ -161,18 +161,28 @@ def process_successful_payment(successful: Dict[str, Any]) -> bool:
             logger.error("Stars payment: cannot resolve user_id for payload=%s", payload)
             return False
 
-        credit_amount = float(total_amount)
+        paid_amount = float(total_amount)
         if row and row["amount"] is not None:
             try:
                 pending_amount = float(row["amount"])
                 if pending_amount > 0:
-                    credit_amount = pending_amount
+                    paid_amount = pending_amount
             except (TypeError, ValueError):
                 pass
+
+        # Акция xN к пополнению (только депозит)
+        credit_amount, promo_bonus, promo = database.calc_deposit_credit(paid_amount)
+        if promo and promo.get("uses_limit") is not None:
+            if not database.consume_promotion_use(int(promo["id"])):
+                credit_amount, promo_bonus, promo = float(paid_amount), 0.0, None
+        elif promo:
+            database.consume_promotion_use(int(promo["id"]))
 
         database.update_user_balance(int(user_id), credit_amount)
 
         desc = f"Telegram Stars: {charge_ref}" if charge_ref else "Telegram Stars"
+        if promo and promo_bonus > 0:
+            desc = f"{desc} · акция x{promo['value']}"
         if row:
             cursor.execute(
                 """
@@ -192,6 +202,18 @@ def process_successful_payment(successful: Dict[str, Any]) -> bool:
                 VALUES (?, 'deposit', ?, 'Success', 'Telegram Stars', 'Telegram', ?, ?)
                 """,
                 (int(user_id), credit_amount, payload, desc),
+            )
+        if promo and promo_bonus > 0:
+            cursor.execute(
+                """
+                INSERT INTO transactions (user_id, type, amount, status, description)
+                VALUES (?, 'bonus', ?, 'Success', ?)
+                """,
+                (
+                    int(user_id),
+                    float(promo_bonus),
+                    f"Бонус: x{promo['value']}: {promo.get('name') or 'акция'}",
+                ),
             )
         conn.commit()
     except Exception as e:
@@ -213,7 +235,7 @@ def process_successful_payment(successful: Dict[str, Any]) -> bool:
             )
             core.send_notification_to_admin(
                 notify_msgs.build_admin_deposit_notification(
-                    credit_amount,
+                    paid_amount,
                     user.get("username", "N/A"),
                     user.get("telegram_id", "N/A"),
                     "Telegram Stars",
@@ -222,7 +244,10 @@ def process_successful_payment(successful: Dict[str, Any]) -> bool:
         except Exception as e:
             logger.warning("Stars payment notifications failed: %s", e)
 
-    logger.info("Stars payment credited: user_id=%s amount=%s payload=%s", user_id, total_amount, payload)
+    logger.info(
+        "Stars payment credited: user_id=%s paid=%s credited=%s payload=%s",
+        user_id, paid_amount, credit_amount, payload,
+    )
     from src.core import payment_wait
 
     payment_wait.notify_payment_completed(int(user_id))

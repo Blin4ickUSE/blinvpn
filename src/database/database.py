@@ -291,6 +291,24 @@ def init_database():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Акции: xN к пополнению и глобальная скидка
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS promotions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                value REAL NOT NULL,
+                min_amount REAL,
+                max_amount REAL,
+                uses_limit INTEGER,
+                uses_count INTEGER DEFAULT 0,
+                expires_at TIMESTAMP,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         
         # Публичные страницы
         cursor.execute("""
@@ -697,6 +715,219 @@ def get_effective_discount_percent(user: Dict[str, Any]) -> int:
     except Exception:
         return 0
     return pct
+
+
+def _parse_promo_expires(expires_raw) -> Optional[Any]:
+    from datetime import datetime, timedelta
+    if not expires_raw:
+        return None
+    try:
+        exp = datetime.fromisoformat(str(expires_raw).replace('Z', '+00:00').replace('+00:00', ''))
+        if getattr(exp, 'tzinfo', None):
+            off = exp.utcoffset()
+            exp = exp.replace(tzinfo=None) - (timedelta(seconds=off.total_seconds()) if off else timedelta(0))
+        return exp
+    except Exception:
+        return None
+
+
+def _promo_is_usable(row) -> bool:
+    """Проверка is_active / срока / лимита использований."""
+    from datetime import datetime
+    if not row:
+        return False
+    if not int(row['is_active'] or 0):
+        return False
+    uses_limit = row['uses_limit']
+    if uses_limit is not None:
+        try:
+            if int(row['uses_count'] or 0) >= int(uses_limit):
+                return False
+        except (TypeError, ValueError):
+            pass
+    exp = _parse_promo_expires(row['expires_at'] if 'expires_at' in row.keys() else None)
+    if exp is not None and datetime.utcnow() >= exp:
+        return False
+    return True
+
+
+def _promo_row_to_dict(row) -> Dict[str, Any]:
+    return {
+        'id': row['id'],
+        'name': row['name'],
+        'type': row['type'],
+        'value': float(row['value']),
+        'min_amount': float(row['min_amount']) if row['min_amount'] is not None else None,
+        'max_amount': float(row['max_amount']) if row['max_amount'] is not None else None,
+        'uses_limit': int(row['uses_limit']) if row['uses_limit'] is not None else None,
+        'uses_count': int(row['uses_count'] or 0),
+        'expires_at': row['expires_at'],
+        'is_active': bool(row['is_active']),
+        'created_at': row['created_at'] if 'created_at' in row.keys() else None,
+        'updated_at': row['updated_at'] if 'updated_at' in row.keys() else None,
+    }
+
+
+def list_promotions() -> list:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT * FROM promotions ORDER BY id DESC")
+        return [_promo_row_to_dict(r) for r in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_active_deposit_multiplier(amount: float) -> Optional[Dict[str, Any]]:
+    """Лучший (макс. множитель) активный xN к пополнению для суммы amount."""
+    amount = float(amount or 0)
+    if amount <= 0:
+        return None
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT * FROM promotions
+            WHERE type = 'deposit_multiplier' AND is_active = 1
+            ORDER BY value DESC, id DESC
+        """)
+        best = None
+        for row in cursor.fetchall():
+            if not _promo_is_usable(row):
+                continue
+            min_a = row['min_amount']
+            max_a = row['max_amount']
+            if min_a is not None and amount < float(min_a):
+                continue
+            if max_a is not None and amount > float(max_a):
+                continue
+            try:
+                mult = float(row['value'])
+            except (TypeError, ValueError):
+                continue
+            if mult <= 1:
+                continue
+            best = _promo_row_to_dict(row)
+            break
+        return best
+    finally:
+        conn.close()
+
+
+def calc_deposit_credit(amount: float) -> tuple:
+    """
+    Сколько зачислить на баланс при пополнении на amount.
+    Возвращает (credit_total, bonus_amount, promo_dict|None).
+    """
+    amount = float(amount or 0)
+    if amount <= 0:
+        return 0.0, 0.0, None
+    promo = get_active_deposit_multiplier(amount)
+    if not promo:
+        return amount, 0.0, None
+    mult = float(promo['value'])
+    credit_total = round(amount * mult, 2)
+    bonus = round(credit_total - amount, 2)
+    if bonus < 0:
+        bonus = 0.0
+        credit_total = amount
+    return credit_total, bonus, promo
+
+
+def get_active_global_discount() -> tuple:
+    """(percent, promo_dict|None) — лучшая активная глобальная скидка."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT * FROM promotions
+            WHERE type = 'global_discount' AND is_active = 1
+            ORDER BY value DESC, id DESC
+        """)
+        for row in cursor.fetchall():
+            if not _promo_is_usable(row):
+                continue
+            try:
+                pct = int(float(row['value']))
+            except (TypeError, ValueError):
+                continue
+            if pct <= 0:
+                continue
+            pct = min(90, pct)
+            return pct, _promo_row_to_dict(row)
+        return 0, None
+    finally:
+        conn.close()
+
+
+def consume_promotion_use(promo_id: int) -> bool:
+    """Атомарно увеличить uses_count (с учётом лимита)."""
+    if not promo_id:
+        return False
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE promotions
+            SET uses_count = uses_count + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND is_active = 1
+              AND (uses_limit IS NULL OR uses_count < uses_limit)
+        """, (int(promo_id),))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_public_active_promotions() -> Dict[str, Any]:
+    """Публичные активные акции для мини-приложения."""
+    global_pct, global_promo = get_active_global_discount()
+    # Для UI множителя берём лучший без суммы (покажем условия)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    deposit = None
+    try:
+        cursor.execute("""
+            SELECT * FROM promotions
+            WHERE type = 'deposit_multiplier' AND is_active = 1
+            ORDER BY value DESC, id DESC
+        """)
+        for row in cursor.fetchall():
+            if not _promo_is_usable(row):
+                continue
+            try:
+                mult = float(row['value'])
+            except (TypeError, ValueError):
+                continue
+            if mult <= 1:
+                continue
+            deposit = {
+                'id': row['id'],
+                'name': row['name'],
+                'value': mult,
+                'min_amount': float(row['min_amount']) if row['min_amount'] is not None else None,
+                'max_amount': float(row['max_amount']) if row['max_amount'] is not None else None,
+                'expires_at': row['expires_at'],
+            }
+            break
+    finally:
+        conn.close()
+    return {
+        'deposit_multiplier': deposit,
+        'global_discount_percent': int(global_pct or 0),
+        'global_discount': (
+            {
+                'id': global_promo['id'],
+                'name': global_promo['name'],
+                'value': global_pct,
+                'expires_at': global_promo.get('expires_at'),
+            }
+            if global_promo and global_pct > 0
+            else None
+        ),
+    }
 
 
 def grant_24h_discount_offer(user_id: int) -> str:

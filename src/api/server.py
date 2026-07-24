@@ -2410,8 +2410,9 @@ def extend_subscription():
         else:
             new_dev = cur_dev
         
-        # Apply one-time discount from promocode
+        # Apply one-time discount from promocode + global promotion discount
         discount = database.get_effective_discount_percent(user)
+        global_pct, global_promo = database.get_active_global_discount()
 
         server_price = database.compute_vpn_subscription_price(int(days), int(new_dev))
         if server_price is None:
@@ -2424,6 +2425,12 @@ def extend_subscription():
         if discount > 0 and price and float(price) > 0:
             try:
                 price = round(float(price) * (100 - discount) / 100)
+            except Exception:
+                pass
+
+        if global_pct > 0 and price and float(price) > 0:
+            try:
+                price = round(float(price) * (100 - int(global_pct)) / 100)
             except Exception:
                 pass
 
@@ -2459,6 +2466,11 @@ def extend_subscription():
                         conn_d.close()
                     except Exception:
                         pass
+            if global_promo and global_pct > 0:
+                try:
+                    database.consume_promotion_use(int(global_promo['id']))
+                except Exception:
+                    pass
         
         # Рассчитываем новую дату истечения
         from datetime import datetime, timedelta
@@ -2603,6 +2615,9 @@ def create_subscription():
             'banned': True
         }), 403
     
+    discount = 0
+    global_pct = 0
+    global_promo = None
     # Проверка пробного периода
     if is_trial:
         days = 3
@@ -2667,8 +2682,9 @@ def create_subscription():
         finally:
             conn_trial.close()
     else:
-        # Apply one-time discount from promocode
+        # Apply one-time discount from promocode + global promotion discount
         discount = database.get_effective_discount_percent(user)
+        global_pct, global_promo = database.get_active_global_discount()
 
         server_price = database.compute_vpn_subscription_price(int(days), requested_devices)
         if server_price is None:
@@ -2681,6 +2697,12 @@ def create_subscription():
         if discount > 0:
             try:
                 price = round(float(price) * (100 - discount) / 100)
+            except Exception:
+                pass
+
+        if global_pct > 0:
+            try:
+                price = round(float(price) * (100 - int(global_pct)) / 100)
             except Exception:
                 pass
 
@@ -2699,8 +2721,8 @@ def create_subscription():
                 pass
 
         logger.info(
-            'subscription/create: user=%s days=%s devices=%s price=%s',
-            user_id, days, requested_devices, price,
+            'subscription/create: user=%s days=%s devices=%s price=%s personal_disc=%s global_disc=%s',
+            user_id, days, requested_devices, price, discount, global_pct,
         )
     
     # Для пробного периода не списываем баланс
@@ -2713,15 +2735,21 @@ def create_subscription():
             )
             return jsonify({'error': 'Insufficient balance'}), 400
         # Discount consumed on purchase
-        try:
-            conn_d = database.get_db_connection()
-            cur_d = conn_d.cursor()
-            cur_d.execute("UPDATE users SET next_discount_percent = 0 WHERE id = ?", (user_id,))
-            conn_d.commit()
-            conn_d.close()
-        except Exception:
+        if discount > 0:
             try:
+                conn_d = database.get_db_connection()
+                cur_d = conn_d.cursor()
+                cur_d.execute("UPDATE users SET next_discount_percent = 0 WHERE id = ?", (user_id,))
+                conn_d.commit()
                 conn_d.close()
+            except Exception:
+                try:
+                    conn_d.close()
+                except Exception:
+                    pass
+        if global_promo and global_pct > 0:
+            try:
+                database.consume_promotion_use(int(global_promo['id']))
             except Exception:
                 pass
     
@@ -2964,6 +2992,233 @@ def delete_promocode(promo_id: int):
         conn.commit()
         if cursor.rowcount <= 0:
             return jsonify({'success': False, 'error': 'Promocode not found'}), 404
+        return jsonify({'success': True})
+    finally:
+        conn.close()
+
+
+@app.route('/api/promotions/active', methods=['GET'])
+def get_active_promotions_public():
+    """Активные акции для мини-приложения (без авторизации панели)."""
+    try:
+        return jsonify(database.get_public_active_promotions())
+    except Exception as e:
+        logger.error('get_active_promotions_public: %s', e)
+        return jsonify({
+            'deposit_multiplier': None,
+            'global_discount_percent': 0,
+            'global_discount': None,
+        })
+
+
+@app.route('/api/panel/promotions', methods=['GET'])
+@require_auth
+def panel_list_promotions():
+    return jsonify(database.list_promotions())
+
+
+@app.route('/api/panel/promotions', methods=['POST'])
+@require_auth
+def panel_create_promotion():
+    data = request.json or {}
+    name = str(data.get('name') or '').strip()
+    promo_type = str(data.get('type') or '').strip()
+    if not name:
+        return jsonify({'success': False, 'error': 'Укажите название'}), 400
+    if promo_type not in ('deposit_multiplier', 'global_discount'):
+        return jsonify({'success': False, 'error': 'Некорректный тип акции'}), 400
+
+    try:
+        value = float(data.get('value'))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'Некорректное значение'}), 400
+
+    if promo_type == 'deposit_multiplier':
+        if value <= 1:
+            return jsonify({'success': False, 'error': 'Множитель должен быть больше 1'}), 400
+        if value > 100:
+            return jsonify({'success': False, 'error': 'Множитель слишком большой'}), 400
+    else:
+        value = int(value)
+        if value < 1 or value > 90:
+            return jsonify({'success': False, 'error': 'Скидка должна быть от 1 до 90%'}), 400
+
+    def _opt_float(key):
+        raw = data.get(key)
+        if raw is None or raw == '':
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            raise ValueError(key)
+
+    def _opt_int(key):
+        raw = data.get(key)
+        if raw is None or raw == '':
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            raise ValueError(key)
+
+    try:
+        min_amount = _opt_float('min_amount') if promo_type == 'deposit_multiplier' else None
+        max_amount = _opt_float('max_amount') if promo_type == 'deposit_multiplier' else None
+        uses_limit = _opt_int('uses_limit')
+    except ValueError as ve:
+        return jsonify({'success': False, 'error': f'Некорректное поле: {ve}'}), 400
+
+    if min_amount is not None and min_amount < 0:
+        return jsonify({'success': False, 'error': 'min_amount не может быть отрицательным'}), 400
+    if max_amount is not None and max_amount < 0:
+        return jsonify({'success': False, 'error': 'max_amount не может быть отрицательным'}), 400
+    if min_amount is not None and max_amount is not None and min_amount > max_amount:
+        return jsonify({'success': False, 'error': 'min_amount больше max_amount'}), 400
+    if uses_limit is not None and uses_limit < 1:
+        return jsonify({'success': False, 'error': 'Лимит должен быть ≥ 1'}), 400
+
+    expires_at = data.get('expires_at') or None
+    if expires_at:
+        expires_at = str(expires_at).strip() or None
+
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO promotions (
+                name, type, value, min_amount, max_amount, uses_limit, expires_at, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name,
+                promo_type,
+                value,
+                min_amount,
+                max_amount,
+                uses_limit,
+                expires_at,
+                1 if data.get('is_active', 1) else 0,
+            ),
+        )
+        conn.commit()
+        promo_id = cursor.lastrowid
+        cursor.execute("SELECT * FROM promotions WHERE id = ?", (promo_id,))
+        row = cursor.fetchone()
+        return jsonify({'success': True, 'id': promo_id, 'promotion': database._promo_row_to_dict(row)})
+    finally:
+        conn.close()
+
+
+@app.route('/api/panel/promotions/<int:promo_id>', methods=['PUT'])
+@require_auth
+def panel_update_promotion(promo_id: int):
+    data = request.json or {}
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT * FROM promotions WHERE id = ?", (promo_id,))
+        existing = cursor.fetchone()
+        if not existing:
+            return jsonify({'success': False, 'error': 'Акция не найдена'}), 404
+
+        promo_type = str(data.get('type') or existing['type'])
+        if promo_type not in ('deposit_multiplier', 'global_discount'):
+            return jsonify({'success': False, 'error': 'Некорректный тип акции'}), 400
+
+        fields = []
+        values = []
+
+        if 'name' in data:
+            name = str(data.get('name') or '').strip()
+            if not name:
+                return jsonify({'success': False, 'error': 'Укажите название'}), 400
+            fields.append('name = ?')
+            values.append(name)
+
+        if 'type' in data:
+            fields.append('type = ?')
+            values.append(promo_type)
+
+        if 'value' in data:
+            try:
+                value = float(data.get('value'))
+            except (TypeError, ValueError):
+                return jsonify({'success': False, 'error': 'Некорректное значение'}), 400
+            if promo_type == 'deposit_multiplier':
+                if value <= 1 or value > 100:
+                    return jsonify({'success': False, 'error': 'Множитель должен быть > 1 и ≤ 100'}), 400
+            else:
+                value = int(value)
+                if value < 1 or value > 90:
+                    return jsonify({'success': False, 'error': 'Скидка должна быть от 1 до 90%'}), 400
+            fields.append('value = ?')
+            values.append(value)
+
+        for key, col in (('min_amount', 'min_amount'), ('max_amount', 'max_amount')):
+            if key in data:
+                raw = data.get(key)
+                if raw is None or raw == '':
+                    fields.append(f'{col} = ?')
+                    values.append(None)
+                else:
+                    try:
+                        fields.append(f'{col} = ?')
+                        values.append(float(raw))
+                    except (TypeError, ValueError):
+                        return jsonify({'success': False, 'error': f'Некорректное поле: {key}'}), 400
+
+        if 'uses_limit' in data:
+            raw = data.get('uses_limit')
+            if raw is None or raw == '':
+                fields.append('uses_limit = ?')
+                values.append(None)
+            else:
+                try:
+                    lim = int(raw)
+                except (TypeError, ValueError):
+                    return jsonify({'success': False, 'error': 'Некорректный лимит'}), 400
+                if lim < 1:
+                    return jsonify({'success': False, 'error': 'Лимит должен быть ≥ 1'}), 400
+                fields.append('uses_limit = ?')
+                values.append(lim)
+
+        if 'expires_at' in data:
+            exp = data.get('expires_at')
+            fields.append('expires_at = ?')
+            values.append(str(exp).strip() if exp else None)
+
+        if 'is_active' in data:
+            fields.append('is_active = ?')
+            values.append(1 if data.get('is_active') else 0)
+
+        if not fields:
+            return jsonify({'success': False, 'error': 'Nothing to update'}), 400
+
+        fields.append('updated_at = CURRENT_TIMESTAMP')
+        values.append(promo_id)
+        cursor.execute(
+            f"UPDATE promotions SET {', '.join(fields)} WHERE id = ?",
+            tuple(values),
+        )
+        conn.commit()
+        cursor.execute("SELECT * FROM promotions WHERE id = ?", (promo_id,))
+        row = cursor.fetchone()
+        return jsonify({'success': True, 'promotion': database._promo_row_to_dict(row)})
+    finally:
+        conn.close()
+
+
+@app.route('/api/panel/promotions/<int:promo_id>', methods=['DELETE'])
+@require_auth
+def panel_delete_promotion(promo_id: int):
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM promotions WHERE id = ?", (promo_id,))
+        conn.commit()
+        if cursor.rowcount <= 0:
+            return jsonify({'success': False, 'error': 'Акция не найдена'}), 404
         return jsonify({'success': True})
     finally:
         conn.close()

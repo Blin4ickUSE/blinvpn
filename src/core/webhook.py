@@ -115,8 +115,22 @@ def credit_deposit_from_payment(
         except (TypeError, ValueError):
             pass
 
-    bonus_amount, bonus_name = _calc_deposit_bonus(credit_amount, method_name)
-    total_amount = credit_amount + bonus_amount
+    # Акция xN к пополнению (только депозит, не покупка)
+    promo_credit, promo_bonus, promo = database.calc_deposit_credit(credit_amount)
+    if promo and promo.get('uses_limit') is not None:
+        if not database.consume_promotion_use(int(promo['id'])):
+            promo_credit, promo_bonus, promo = float(credit_amount), 0.0, None
+    elif promo:
+        database.consume_promotion_use(int(promo['id']))
+
+    if promo and promo_bonus > 0:
+        total_amount = float(promo_credit)
+        bonus_amount = float(promo_bonus)
+        bonus_name = f"x{promo['value']}: {promo.get('name') or 'акция'}"
+    else:
+        bonus_amount, bonus_name = _calc_deposit_bonus(credit_amount, method_name)
+        total_amount = float(credit_amount) + float(bonus_amount)
+
     database.update_user_balance(user_id, total_amount)
 
     if pending_tx_id is not None:

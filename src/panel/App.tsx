@@ -2216,7 +2216,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             {[
                 { category: "Главное", items: [{ name: "Главная страница", icon: Home }, { name: "Финансы", icon: DollarSign }] },
                 { category: "Пользователи", items: [{ name: "Пользователи", icon: Users }, { name: "Подписки", icon: Key }] },
-                { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Промокоды", icon: Gift }, { name: "Специальные ссылки", icon: Link }] },
+                { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Промокоды", icon: Gift }, { name: "Акции", icon: Percent }, { name: "Специальные ссылки", icon: Link }] },
                 { category: "Другое", items: [{ name: "Мониторинг", icon: Activity }, { name: "Настройки", icon: Settings }] }
             ].map((section, idx) => (
                 <div key={idx}>
@@ -2242,6 +2242,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             {activePage === 'Подписки' && <KeysPage keySearch={keySearch} setKeySearch={setKeySearch} setIsCreateKeyOpen={setIsCreateKeyOpen} setEditingKey={setEditingKey} />}
             {activePage === 'Рассылка' && <MailingPage onToast={addToast} />}
             {activePage === 'Промокоды' && <PromocodesPage promos={promos} onToast={addToast} />}
+            {activePage === 'Акции' && <PromotionsPage onToast={addToast} />}
             {activePage === 'Специальные ссылки' && <TrackingLinksPage onToast={addToast} />}
             {activePage === 'Мониторинг' && <MonitoringPage onToast={addToast} />}
             {activePage === 'Настройки' && <SettingsPage onToast={addToast} />}
@@ -3295,6 +3296,420 @@ const PromocodesPage: React.FC<{ promos: Promo[]; onToast: (title: string, msg: 
                         <div className="flex gap-3 mt-5">
                             <button onClick={() => setEditingPromo(null)} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Отмена</button>
                             <button onClick={handleSavePromo} className="flex-1 px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg">Сохранить</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+type PromotionType = 'deposit_multiplier' | 'global_discount';
+type PromotionItem = {
+    id: number;
+    name: string;
+    type: PromotionType;
+    value: number;
+    min_amount: number | null;
+    max_amount: number | null;
+    uses_limit: number | null;
+    uses_count: number;
+    expires_at: string | null;
+    is_active: boolean;
+};
+
+const PromotionsPage: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
+    const emptyForm = {
+        name: '',
+        type: 'deposit_multiplier' as PromotionType,
+        value: '',
+        min_amount: '',
+        max_amount: '',
+        uses_limit: '',
+        expires_at: '',
+        is_active: true,
+    };
+    const [items, setItems] = useState<PromotionItem[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [form, setForm] = useState(emptyForm);
+    const [editing, setEditing] = useState<PromotionItem | null>(null);
+
+    const loadItems = async () => {
+        setLoading(true);
+        try {
+            const data = await apiFetch('/panel/promotions');
+            setItems(Array.isArray(data) ? data : []);
+        } catch {
+            onToast('Ошибка', 'Не удалось загрузить акции', 'error');
+            setItems([]);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        loadItems();
+    }, []);
+
+    const toPayload = (src: typeof form | PromotionItem) => {
+        const isEdit = 'id' in src;
+        const type = src.type;
+        const valueRaw = isEdit ? String((src as PromotionItem).value) : (src as typeof form).value;
+        const minRaw = isEdit
+            ? ((src as PromotionItem).min_amount != null ? String((src as PromotionItem).min_amount) : '')
+            : (src as typeof form).min_amount;
+        const maxRaw = isEdit
+            ? ((src as PromotionItem).max_amount != null ? String((src as PromotionItem).max_amount) : '')
+            : (src as typeof form).max_amount;
+        const limitRaw = isEdit
+            ? ((src as PromotionItem).uses_limit != null ? String((src as PromotionItem).uses_limit) : '')
+            : (src as typeof form).uses_limit;
+        const expiresRaw = isEdit
+            ? ((src as PromotionItem).expires_at || '')
+            : ((src as typeof form).expires_at || '');
+        let expires_at: string | null = null;
+        if (expiresRaw) {
+            const d = new Date(expiresRaw);
+            expires_at = Number.isNaN(d.getTime()) ? String(expiresRaw) : d.toISOString();
+        }
+        return {
+            name: src.name.trim(),
+            type,
+            value: valueRaw,
+            min_amount: type === 'deposit_multiplier' && minRaw !== '' ? Number(minRaw) : null,
+            max_amount: type === 'deposit_multiplier' && maxRaw !== '' ? Number(maxRaw) : null,
+            uses_limit: limitRaw !== '' ? Number(limitRaw) : null,
+            expires_at,
+            is_active: isEdit ? (src as PromotionItem).is_active : (src as typeof form).is_active,
+        };
+    };
+
+    const parseApiError = (e: any, fallback: string) => {
+        try {
+            const parsed = JSON.parse(e?.message || '');
+            if (parsed?.error) return String(parsed.error);
+        } catch { /* ignore */ }
+        return fallback;
+    };
+
+    const handleCreate = async () => {
+        if (!form.name.trim() || !form.value || !form.expires_at) {
+            onToast('Ошибка', 'Заполните название, значение и дату окончания', 'error');
+            return;
+        }
+        try {
+            await apiFetch('/panel/promotions', {
+                method: 'POST',
+                body: JSON.stringify(toPayload(form)),
+            });
+            onToast('Успех', 'Акция создана', 'success');
+            setForm(emptyForm);
+            await loadItems();
+        } catch (e: any) {
+            onToast('Ошибка', parseApiError(e, 'Не удалось создать акцию'), 'error');
+        }
+    };
+
+    const handleSave = async () => {
+        if (!editing) return;
+        if (!editing.name.trim() || !editing.expires_at) {
+            onToast('Ошибка', 'Заполните название и дату окончания', 'error');
+            return;
+        }
+        try {
+            await apiFetch(`/panel/promotions/${editing.id}`, {
+                method: 'PUT',
+                body: JSON.stringify(toPayload(editing)),
+            });
+            onToast('Успех', 'Акция обновлена', 'success');
+            setEditing(null);
+            await loadItems();
+        } catch (e: any) {
+            onToast('Ошибка', parseApiError(e, 'Не удалось обновить акцию'), 'error');
+        }
+    };
+
+    const handleDelete = async (id: number) => {
+        if (!confirm('Удалить акцию?')) return;
+        try {
+            await apiFetch(`/panel/promotions/${id}`, { method: 'DELETE' });
+            onToast('Успех', 'Акция удалена', 'success');
+            await loadItems();
+        } catch {
+            onToast('Ошибка', 'Не удалось удалить акцию', 'error');
+        }
+    };
+
+    const handleToggle = async (item: PromotionItem) => {
+        try {
+            await apiFetch(`/panel/promotions/${item.id}`, {
+                method: 'PUT',
+                body: JSON.stringify({ is_active: !item.is_active }),
+            });
+            await loadItems();
+        } catch {
+            onToast('Ошибка', 'Не удалось изменить статус', 'error');
+        }
+    };
+
+    const typeLabel = (t: PromotionType) =>
+        t === 'deposit_multiplier' ? 'xN к пополнению' : 'Глобальная скидка';
+
+    const fmtExpires = (s: string | null) => {
+        if (!s) return 'Без срока';
+        try {
+            return new Date(s).toLocaleString('ru-RU', {
+                day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+            });
+        } catch {
+            return s;
+        }
+    };
+
+    const toDatetimeLocal = (s: string | null) => {
+        if (!s) return '';
+        try {
+            const d = new Date(s);
+            if (Number.isNaN(d.getTime())) return '';
+            const pad = (n: number) => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        } catch {
+            return '';
+        }
+    };
+
+    return (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div>
+                <h2 className="text-2xl font-bold text-white">Акции</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                    xN к пополнению работает только при депозите. Глобальная скидка — на все товары без промокода.
+                </p>
+            </div>
+
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4">
+                <h3 className="text-lg font-bold text-gray-200">Новая акция</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <input
+                        type="text"
+                        value={form.name}
+                        onChange={e => setForm({ ...form, name: e.target.value })}
+                        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                        placeholder="Название"
+                    />
+                    <select
+                        value={form.type}
+                        onChange={e => setForm({ ...form, type: e.target.value as PromotionType, value: '', min_amount: '', max_amount: '' })}
+                        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                    >
+                        <option value="deposit_multiplier">xN к пополнению</option>
+                        <option value="global_discount">Глобальная скидка %</option>
+                    </select>
+                    <input
+                        type="number"
+                        step="any"
+                        value={form.value}
+                        onChange={e => setForm({ ...form, value: e.target.value })}
+                        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                        placeholder={form.type === 'deposit_multiplier' ? 'Множитель (напр. 2)' : 'Скидка % (напр. 15)'}
+                    />
+                </div>
+                {form.type === 'deposit_multiplier' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <input
+                            type="number"
+                            value={form.min_amount}
+                            onChange={e => setForm({ ...form, min_amount: e.target.value })}
+                            className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                            placeholder="Мин. сумма (необяз.)"
+                        />
+                        <input
+                            type="number"
+                            value={form.max_amount}
+                            onChange={e => setForm({ ...form, max_amount: e.target.value })}
+                            className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                            placeholder="Макс. сумма (необяз.)"
+                        />
+                    </div>
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <input
+                        type="number"
+                        value={form.uses_limit}
+                        onChange={e => setForm({ ...form, uses_limit: e.target.value })}
+                        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                        placeholder="Лимит использований (необяз.)"
+                    />
+                    <input
+                        type="datetime-local"
+                        value={form.expires_at}
+                        onChange={e => setForm({ ...form, expires_at: e.target.value })}
+                        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                    />
+                </div>
+                <button onClick={handleCreate} className="px-6 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg">
+                    Создать
+                </button>
+            </div>
+
+            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+                <div className="p-4 border-b border-gray-800">
+                    <h3 className="text-lg font-bold text-gray-200">Список акций</h3>
+                </div>
+                {loading ? (
+                    <div className="p-8 text-center text-gray-500">Загрузка...</div>
+                ) : items.length === 0 ? (
+                    <div className="p-8 text-center text-gray-500">Акций пока нет</div>
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left min-w-[900px]">
+                            <thead>
+                                <tr className="bg-gray-800/50 text-gray-400 text-xs uppercase">
+                                    <th className="px-4 py-3">Название</th>
+                                    <th className="px-4 py-3">Тип</th>
+                                    <th className="px-4 py-3">Значение</th>
+                                    <th className="px-4 py-3">Диапазон</th>
+                                    <th className="px-4 py-3">Исп.</th>
+                                    <th className="px-4 py-3">До</th>
+                                    <th className="px-4 py-3">Статус</th>
+                                    <th className="px-4 py-3 text-right">Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-800">
+                                {items.map((p) => (
+                                    <tr key={p.id} className={!p.is_active ? 'opacity-50' : ''}>
+                                        <td className="px-4 py-3 text-white font-medium">{p.name}</td>
+                                        <td className="px-4 py-3 text-gray-300">{typeLabel(p.type)}</td>
+                                        <td className="px-4 py-3 text-orange-400 font-semibold">
+                                            {p.type === 'deposit_multiplier' ? `x${p.value}` : `−${p.value}%`}
+                                        </td>
+                                        <td className="px-4 py-3 text-gray-400 text-sm">
+                                            {p.type === 'deposit_multiplier'
+                                                ? [
+                                                    p.min_amount != null ? `от ${p.min_amount}` : null,
+                                                    p.max_amount != null ? `до ${p.max_amount}` : null,
+                                                ].filter(Boolean).join(' ') || 'любая сумма'
+                                                : '—'}
+                                        </td>
+                                        <td className="px-4 py-3 text-gray-400">
+                                            {p.uses_count}{p.uses_limit != null ? ` / ${p.uses_limit}` : ''}
+                                        </td>
+                                        <td className="px-4 py-3 text-gray-400 text-sm">{fmtExpires(p.expires_at)}</td>
+                                        <td className="px-4 py-3">
+                                            <button
+                                                onClick={() => handleToggle(p)}
+                                                className={`text-xs px-2 py-1 rounded-md border ${
+                                                    p.is_active
+                                                        ? 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10'
+                                                        : 'border-gray-600 text-gray-400 bg-gray-800'
+                                                }`}
+                                            >
+                                                {p.is_active ? 'Активна' : 'Выкл'}
+                                            </button>
+                                        </td>
+                                        <td className="px-4 py-3 text-right">
+                                            <div className="inline-flex gap-2">
+                                                <button
+                                                    onClick={() => setEditing({ ...p })}
+                                                    className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg"
+                                                >
+                                                    <Edit2 size={14} className="text-gray-200" />
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDelete(p.id)}
+                                                    className="p-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg"
+                                                >
+                                                    <Trash2 size={14} className="text-red-400" />
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+
+            {editing && (
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setEditing(null)}>
+                    <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="text-xl font-bold text-white mb-4">Редактировать акцию</h3>
+                        <div className="space-y-3">
+                            <input
+                                type="text"
+                                value={editing.name}
+                                onChange={e => setEditing({ ...editing, name: e.target.value })}
+                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                                placeholder="Название"
+                            />
+                            <select
+                                value={editing.type}
+                                onChange={e => setEditing({ ...editing, type: e.target.value as PromotionType })}
+                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                            >
+                                <option value="deposit_multiplier">xN к пополнению</option>
+                                <option value="global_discount">Глобальная скидка %</option>
+                            </select>
+                            <input
+                                type="number"
+                                step="any"
+                                value={editing.value}
+                                onChange={e => setEditing({ ...editing, value: Number(e.target.value) })}
+                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                            />
+                            {editing.type === 'deposit_multiplier' && (
+                                <div className="grid grid-cols-2 gap-3">
+                                    <input
+                                        type="number"
+                                        value={editing.min_amount ?? ''}
+                                        onChange={e => setEditing({
+                                            ...editing,
+                                            min_amount: e.target.value === '' ? null : Number(e.target.value),
+                                        })}
+                                        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                                        placeholder="Мин. сумма"
+                                    />
+                                    <input
+                                        type="number"
+                                        value={editing.max_amount ?? ''}
+                                        onChange={e => setEditing({
+                                            ...editing,
+                                            max_amount: e.target.value === '' ? null : Number(e.target.value),
+                                        })}
+                                        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                                        placeholder="Макс. сумма"
+                                    />
+                                </div>
+                            )}
+                            <input
+                                type="number"
+                                value={editing.uses_limit ?? ''}
+                                onChange={e => setEditing({
+                                    ...editing,
+                                    uses_limit: e.target.value === '' ? null : Number(e.target.value),
+                                })}
+                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                                placeholder="Лимит"
+                            />
+                            <input
+                                type="datetime-local"
+                                value={toDatetimeLocal(editing.expires_at)}
+                                onChange={e => setEditing({ ...editing, expires_at: e.target.value || null })}
+                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+                            />
+                            <label className="flex items-center gap-2 text-sm text-gray-300">
+                                <input
+                                    type="checkbox"
+                                    checked={!!editing.is_active}
+                                    onChange={e => setEditing({ ...editing, is_active: e.target.checked })}
+                                />
+                                Активна
+                            </label>
+                        </div>
+                        <div className="flex gap-3 mt-5">
+                            <button onClick={() => setEditing(null)} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Отмена</button>
+                            <button onClick={handleSave} className="flex-1 px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg">Сохранить</button>
                         </div>
                     </div>
                 </div>
