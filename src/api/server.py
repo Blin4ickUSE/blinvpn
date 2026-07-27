@@ -952,7 +952,50 @@ def encrypt_link_for_incy():
         logger.error(f"Incy crypt1 encryption error: {e}")
         return jsonify({'error': str(e)}), 500
 
-# ========== Редирект для открытия Incy ==========
+# ========== Шифрование ссылки для Happ (crypt5) ==========
+
+def _encrypt_happ_crypt5(url: str) -> str:
+    """Шифрует URL через API crypto.happ.su и возвращает happ://crypt5/... deep link."""
+    response = requests.post(
+        'https://crypto.happ.su/api-v2.php',
+        json={'url': url},
+        timeout=10,
+    )
+    response.raise_for_status()
+    # API возвращает зашифрованную ссылку напрямую как текст или JSON
+    text = response.text.strip()
+    # Если уже содержит happ://, возвращаем как есть
+    if text.startswith('happ://'):
+        return text
+    # Иначе оборачиваем
+    import base64 as _b64
+    try:
+        data = response.json()
+        encrypted = data.get('encrypted_link') or data.get('link') or data.get('result') or text
+    except Exception:
+        encrypted = text
+    if encrypted.startswith('happ://'):
+        return encrypted
+    return f'happ://crypt5/{encrypted}'
+
+
+@app.route('/api/encrypt-link-happ', methods=['POST'])
+def encrypt_link_for_happ():
+    """Шифрует URL подписки в happ://crypt5/... через публичный API Happ."""
+    data = request.get_json()
+    url = data.get('url') if data else None
+
+    if not url:
+        return jsonify({'error': 'URL is required'}), 400
+
+    try:
+        encrypted_link = _encrypt_happ_crypt5(url)
+        return jsonify({'encrypted_link': encrypted_link})
+    except Exception as e:
+        logger.error(f"Happ crypt5 encryption error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 
 @app.route('/api/redirect')
 def redirect_to_incy():
