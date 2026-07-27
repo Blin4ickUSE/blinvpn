@@ -1396,9 +1396,10 @@ export default function App() {
 
   // Instructions State
   const [activePlatform, setActivePlatform] = useState<string>('android');
+  const [instructionApp, setInstructionApp] = useState<'incy' | 'happ'>('incy');
   const [instructionPlainLinkMode, setInstructionPlainLinkMode] = useState(false);
   const [instructionSourceDeviceId, setInstructionSourceDeviceId] = useState<number | null>(null);
-  const [instructionSetupStep, setInstructionSetupStep] = useState(1); // 1 install · 2 add · 3 done
+  const [instructionSetupStep, setInstructionSetupStep] = useState(1); // 1 platform · 2 app · 3 install · 4 add · 5 done
 
   // Detect Platform & load user on Mount
   useEffect(() => {
@@ -1965,7 +1966,37 @@ export default function App() {
     }
   };
 
-  const handleCopy = (text: string, deviceId?: number) => {
+  const openHappWithSubscription = async (deviceId?: number) => {
+    let subscriptionUrl: string | null = null;
+    if (deviceId && deviceKeys.has(deviceId)) {
+      subscriptionUrl = deviceKeys.get(deviceId) || null;
+    } else {
+      const activeDevice = devices.find(d => deviceKeys.has(d.id));
+      if (activeDevice) subscriptionUrl = deviceKeys.get(activeDevice.id) || null;
+    }
+    if (!subscriptionUrl) { alert('У вас нет активных подписок.'); return; }
+
+    try {
+      const res = await fetch('/api/encrypt-link-happ', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: subscriptionUrl, name: 'BlinVPN' })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.encrypted_link) {
+          const redirectUrl = `${window.location.origin}/api/redirect?url=${encodeURIComponent(data.encrypted_link)}`;
+          const win = window as any;
+          if (win.Telegram?.WebApp?.openLink) win.Telegram.WebApp.openLink(redirectUrl);
+          else window.open(redirectUrl, '_blank');
+          return;
+        }
+      }
+    } catch (e) { console.error('Happ encrypt error', e); }
+    alert('Не удалось зашифровать ссылку для Happ. Попробуйте позже.');
+  };
+
+
     try {
       // Если передан deviceId, пытаемся получить реальный ключ из deviceKeys
       let keyToCopy = text;
@@ -3618,264 +3649,269 @@ export default function App() {
 
   const InstructionView = () => {
     const pid = (PLATFORMS.some((p) => p.id === activePlatform) ? activePlatform : detectClientPlatform()) as PlatformId;
-    const steps = getInstructionSteps(pid, instructionPlainLinkMode);
-    const installStep = steps[0];
-    const middleSteps = steps.slice(1, -1);
-    const lastStep = steps[steps.length - 1];
-    const hasCopyPlain = steps.some((s) => s.actions?.some((a) => a.type === 'copy_plain_sub'));
-    const connectAction = lastStep?.actions?.find((a) => a.url?.startsWith('incy://connect'));
     const plainUrl = getPlainSubscriptionUrl();
-    const step = Math.min(3, Math.max(1, instructionSetupStep));
-    const progressPct = step === 1 ? 33 : step === 2 ? 66 : 100;
-    const platformIcon = PLATFORMS.find((p) => p.id === pid)?.icon ?? <Smartphone size={32} />;
-    const platformTitle = INSTRUCTIONS[pid]?.title || 'Устройство';
+    const app = instructionApp;
+    const step = Math.min(5, Math.max(1, instructionSetupStep));
 
-    const stepMeta = [
-      { title: 'Установить', icon: <Download size={28} />, headline: 'Установите Incy' },
-      { title: 'Подписка', icon: <Link2 size={28} />, headline: 'Добавьте подписку' },
-      { title: 'Готово', icon: <Sparkles size={28} />, headline: 'Всё готово!' },
-    ] as const;
+    // ---- install links per app+platform ----
+    const installLinks: Record<string, Record<string, { label: string; url: string }[]>> = {
+      incy: {
+        android: [
+          { label: 'Google Play', url: 'https://play.google.com/store/apps/details?id=llc.itdev.incy' },
+          { label: 'Скачать .APK', url: 'https://github.com/INCY-DEV/incy-platforms/releases/latest/download/Incy.apk' },
+        ],
+        ios:     [{ label: 'App Store', url: 'https://apps.apple.com/ru/app/incy/id6756943388' }],
+        windows: [{ label: 'Скачать .EXE', url: 'https://github.com/INCY-DEV/incy-platforms/releases/latest/download/incy-windows-setup.exe' }],
+        macos:   [{ label: 'App Store', url: 'https://apps.apple.com/ru/app/incy/id6756943388' }],
+        linux:   [{ label: 'GitHub Releases', url: 'https://github.com/INCY-DEV/incy-platforms/releases/' }],
+      },
+      happ: {
+        android: [{ label: 'Google Play', url: 'https://play.google.com/store/apps/details?id=su.happ.android' }],
+        ios:     [{ label: 'App Store', url: 'https://apps.apple.com/app/happ-proxy-utility/id6504287215' }],
+        windows: [{ label: 'Скачать .EXE', url: 'https://github.com/happdev-developer/happ-releases/releases/latest' }],
+        macos:   [{ label: 'Скачать для Mac', url: 'https://github.com/happdev-developer/happ-releases/releases/latest' }],
+        linux:   [{ label: 'GitHub Releases', url: 'https://github.com/happdev-developer/happ-releases/releases/latest' }],
+      },
+    };
+
+    // does this platform+app support one-tap add?
+    const supportsOneTap = app === 'incy' ? true : (pid === 'android' || pid === 'ios');
+    // desktop happ needs manual copy
+    const needsCopy = !supportsOneTap;
 
     const openUrl = (url: string) => {
       const w = window as any;
-      if (url.startsWith('incy://') && w.Telegram?.WebApp?.openLink) {
+      if ((url.startsWith('incy://') || url.startsWith('happ://')) && w.Telegram?.WebApp?.openLink) {
         w.Telegram.WebApp.openLink(url);
       } else {
         window.open(url, '_blank');
       }
     };
 
-    const runAction = async (action: NonNullable<InstructionStep['actions']>[number]) => {
-      if (action.type === 'trigger_add') {
+    const addSubscription = async () => {
+      if (app === 'incy') {
         await openIncyWithSubscription(instructionSourceDeviceId ?? undefined);
-      } else if (action.type === 'copy_plain_sub') {
-        const plain = getPlainSubscriptionUrl();
-        if (plain) handleCopy(plain);
-        else alert('Ссылка недоступна.');
-      } else if (action.url) {
-        openUrl(action.url);
+      } else {
+        await openHappWithSubscription(instructionSourceDeviceId ?? undefined);
       }
     };
 
     const goBack = () => {
-      if (step > 1) {
-        setInstructionSetupStep(step - 1);
-        return;
-      }
+      if (step > 1) { setInstructionSetupStep(step - 1); return; }
       setInstructionPlainLinkMode(false);
       setInstructionSetupStep(1);
       setView('devices');
     };
 
-    const finishSetup = () => {
-      setInstructionPlainLinkMode(false);
-      setInstructionSetupStep(1);
-      setView('devices');
-    };
+    const stepMeta = [
+      { title: 'Устройство' },
+      { title: 'Приложение' },
+      { title: 'Установка' },
+      { title: 'Подписка' },
+      { title: 'Готово' },
+    ];
 
-    const addSubscription = async () => {
-      await openIncyWithSubscription(instructionSourceDeviceId ?? undefined);
-    };
+    const progressPct = ((step - 1) / (stepMeta.length - 1)) * 100;
+
+    // icons for apps
+    const appDefs = [
+      {
+        id: 'incy' as const,
+        name: 'Incy',
+        desc: 'Простой и быстрый. Рекомендуем',
+        badge: 'Рекомендуем',
+        color: 'orange',
+      },
+      {
+        id: 'happ' as const,
+        name: 'Happ',
+        desc: 'Альтернативный клиент',
+        badge: null,
+        color: 'zinc',
+      },
+    ];
+
+    const currentLinks = installLinks[app]?.[pid] ?? [];
 
     return (
       <div className="min-h-full flex flex-col">
         <Header title="Подключение" onBack={goBack} />
 
-        <div className="mb-5">
-          <div className="flex items-center justify-between mb-2.5 px-0.5">
+        {/* Progress bar */}
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2 px-0.5">
             {stepMeta.map((m, i) => {
               const n = i + 1;
               const done = step > n;
               const active = step === n;
               return (
-                <div key={m.title} className="flex items-center gap-1.5 min-w-0">
-                  <div
-                    className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 transition-all ${
-                      done
-                        ? 'bg-orange-600 text-white'
-                        : active
-                          ? 'bg-orange-500/20 text-orange-300 ring-2 ring-orange-500/40'
-                          : 'bg-zinc-800 text-zinc-500'
-                    }`}
-                  >
-                    {done ? <CheckCircle size={12} /> : n}
+                <div key={m.title} className="flex items-center gap-1 min-w-0">
+                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 transition-all ${done ? 'bg-orange-600 text-white' : active ? 'bg-orange-500/20 text-orange-300 ring-2 ring-orange-500/40' : 'bg-zinc-800 text-zinc-500'}`}>
+                    {done ? <CheckCircle size={10} /> : n}
                   </div>
-                  <span className={`text-[11px] font-semibold truncate ${active ? 'text-orange-200' : done ? 'text-zinc-400' : 'text-zinc-600'}`}>
-                    {m.title}
-                  </span>
+                  <span className={`text-[10px] font-semibold truncate hidden sm:block ${active ? 'text-orange-200' : done ? 'text-zinc-400' : 'text-zinc-600'}`}>{m.title}</span>
                 </div>
               );
             })}
           </div>
-          <div className="h-1.5 rounded-full bg-zinc-800/90 overflow-hidden">
-            <div
-              key={step}
-              className="setup-progress-fill h-full rounded-full bg-gradient-to-r from-orange-700 via-orange-500 to-amber-400"
-              style={{ width: `${progressPct}%` }}
-            />
+          <div className="h-1 rounded-full bg-zinc-800/90 overflow-hidden">
+            <div key={step} className="setup-progress-fill h-full rounded-full bg-gradient-to-r from-orange-700 via-orange-500 to-amber-400" style={{ width: `${progressPct}%` }} />
           </div>
         </div>
 
-        <div key={`${step}-${pid}-${instructionPlainLinkMode}`} className="setup-step flex-1 flex flex-col pb-4">
-          <div className="text-center mb-5">
-            <div className="setup-icon-wrap">
-              <div className="setup-icon-glow" />
-              <div className="setup-icon-ring" />
-              <div className={`setup-icon-static ${step === 3 ? 'setup-done-burst' : ''}`}>
-                {step === 3 ? <CheckCircle size={34} className="text-orange-400" /> : stepMeta[step - 1].icon}
-              </div>
-            </div>
-            <h2 className="text-2xl font-black text-white tracking-tight">{stepMeta[step - 1].headline}</h2>
-          </div>
+        <div key={step} className="setup-step flex-1 flex flex-col pb-4">
 
+          {/* STEP 1: выбор платформы */}
           {step === 1 && (
-            <div className="space-y-4 flex-1">
-              <div>
-                <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-2 block">Платформа</label>
-                <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 custom-scrollbar">
-                  {PLATFORMS.map((p) => {
-                    const active = pid === p.id;
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => setActivePlatform(p.id)}
-                        className={`setup-chip shrink-0 flex flex-col items-center gap-1.5 w-[76px] py-2.5 px-2 rounded-2xl border ${
-                          active ? 'active text-orange-100' : 'border-zinc-800 bg-zinc-950/50 text-zinc-400'
-                        }`}
-                      >
-                        <span className={active ? 'text-orange-400' : 'text-zinc-500'} style={{ transform: 'scale(0.72)' }}>
-                          {p.icon}
-                        </span>
-                        <span className="text-[10px] font-semibold leading-tight text-center">
-                          {p.name.replace(' (iPhone)', '').replace(' PC', '')}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
+            <div className="flex-1 flex flex-col">
+              <div className="text-center mb-6">
+                <div className="setup-icon-wrap"><div className="setup-icon-glow" /><div className="setup-icon-ring" /><div className="setup-icon-static"><Smartphone size={34} className="text-orange-400" /></div></div>
+                <h2 className="text-2xl font-black text-white tracking-tight blin-mont">Ваше устройство</h2>
+                <p className="text-zinc-500 text-sm mt-1">Выберите платформу</p>
               </div>
-
-              <div className="rounded-2xl border border-zinc-800/90 bg-zinc-950/55 p-4">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-11 h-11 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-orange-400 shrink-0">
-                    <span style={{ transform: 'scale(0.7)' }}>{platformIcon}</span>
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-white font-bold text-sm leading-tight truncate">{platformTitle}</div>
-                    <div className="text-zinc-500 text-xs mt-0.5 leading-snug">{installStep?.desc}</div>
-                  </div>
-                </div>
-
-                {installStep?.actions && installStep.actions.length > 0 && (
-                  <div className="flex flex-col gap-2">
-                    {installStep.actions.map((action, aIdx) => (
-                      <button
-                        key={aIdx}
-                        type="button"
-                        onClick={() => runAction(action)}
-                        className={`ripple py-3 px-4 rounded-xl text-sm font-semibold text-center transition-all active:scale-[0.98] flex items-center justify-center gap-2 ${
-                          action.primary
-                            ? 'bg-orange-600 text-white hover:bg-orange-500 shadow-lg shadow-orange-950/40'
-                            : 'bg-zinc-900 text-zinc-200 hover:bg-zinc-800 border border-zinc-700/60'
-                        }`}
-                      >
-                        <Download size={15} />
-                        {action.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
+              <div className="grid grid-cols-2 gap-3 flex-1 content-start">
+                {PLATFORMS.map((p) => {
+                  const active = pid === p.id;
+                  return (
+                    <button key={p.id} type="button" onClick={() => setActivePlatform(p.id)}
+                      className={`setup-chip flex items-center gap-3 px-4 py-4 rounded-2xl border transition-all ${active ? 'active border-orange-500/50 bg-orange-500/10 text-orange-100' : 'border-zinc-800 bg-zinc-950/50 text-zinc-400'}`}>
+                      <span className={active ? 'text-orange-400' : 'text-zinc-500'} style={{ transform: 'scale(0.85)' }}>{p.icon}</span>
+                      <span className="text-sm font-semibold">{p.name.replace(' (iPhone)', '').replace(' PC', '')}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-auto pt-5">
+                <Button onClick={() => setInstructionSetupStep(2)}>Далее <ArrowRight size={18} /></Button>
               </div>
             </div>
           )}
 
+          {/* STEP 2: выбор приложения */}
           {step === 2 && (
-            <div className="flex-1 space-y-4">
-              {instructionPlainLinkMode || hasCopyPlain ? (
-                <>
+            <div className="flex-1 flex flex-col">
+              <div className="text-center mb-6">
+                <div className="setup-icon-wrap"><div className="setup-icon-glow" /><div className="setup-icon-ring" /><div className="setup-icon-static"><Download size={34} className="text-orange-400" /></div></div>
+                <h2 className="text-2xl font-black text-white tracking-tight blin-mont">VPN-приложение</h2>
+                <p className="text-zinc-500 text-sm mt-1">Выберите клиент для подключения</p>
+              </div>
+              <div className="space-y-3 flex-1 content-start">
+                {appDefs.map((a) => {
+                  const active = app === a.id;
+                  return (
+                    <button key={a.id} type="button" onClick={() => setInstructionApp(a.id)}
+                      className={`setup-chip w-full flex items-center gap-4 px-4 py-4 rounded-2xl border transition-all text-left ${active ? 'active border-orange-500/50 bg-orange-500/10' : 'border-zinc-800 bg-zinc-950/50'}`}>
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-bold text-sm ${active ? 'bg-orange-600 text-white' : 'bg-zinc-800 text-zinc-400'}`}>
+                        {a.name[0]}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`font-bold text-sm ${active ? 'text-white' : 'text-zinc-300'}`}>{a.name}</span>
+                          {a.badge && <span className="text-[10px] bg-orange-600/20 text-orange-400 border border-orange-500/30 px-1.5 py-0.5 rounded-full">{a.badge}</span>}
+                        </div>
+                        <div className="text-xs text-zinc-500 mt-0.5">{a.desc}</div>
+                      </div>
+                      <div className={`w-5 h-5 rounded-full border-2 shrink-0 flex items-center justify-center ${active ? 'border-orange-500 bg-orange-500' : 'border-zinc-600'}`}>
+                        {active && <div className="w-2 h-2 rounded-full bg-white" />}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-auto pt-5 space-y-2.5">
+                <Button onClick={() => setInstructionSetupStep(3)}>Далее <ArrowRight size={18} /></Button>
+                <button type="button" onClick={() => setInstructionSetupStep(1)} className="w-full py-2.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors">Назад</button>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 3: установка */}
+          {step === 3 && (
+            <div className="flex-1 flex flex-col">
+              <div className="text-center mb-6">
+                <div className="setup-icon-wrap"><div className="setup-icon-glow" /><div className="setup-icon-ring" /><div className="setup-icon-static"><Download size={34} className="text-orange-400" /></div></div>
+                <h2 className="text-2xl font-black text-white tracking-tight blin-mont">Установите {app === 'incy' ? 'Incy' : 'Happ'}</h2>
+                <p className="text-zinc-500 text-sm mt-1">Для {PLATFORMS.find(p => p.id === pid)?.name}</p>
+              </div>
+              <div className="flex-1 space-y-3">
+                {currentLinks.map((link, idx) => (
+                  <button key={idx} type="button" onClick={() => openUrl(link.url)}
+                    className={`ripple w-full py-3.5 px-4 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-all active:scale-[0.98] ${idx === 0 ? 'bg-orange-600 text-white hover:bg-orange-500 shadow-lg shadow-orange-950/40' : 'bg-zinc-900 text-zinc-200 hover:bg-zinc-800 border border-zinc-700/60'}`}>
+                    <Download size={15} /> {link.label}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-auto pt-5 space-y-2.5">
+                <Button onClick={() => setInstructionSetupStep(4)}>Установил, далее <ArrowRight size={18} /></Button>
+                <button type="button" onClick={() => setInstructionSetupStep(2)} className="w-full py-2.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors">Назад</button>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 4: добавление подписки */}
+          {step === 4 && (
+            <div className="flex-1 flex flex-col">
+              <div className="text-center mb-6">
+                <div className="setup-icon-wrap"><div className="setup-icon-glow" /><div className="setup-icon-ring" /><div className="setup-icon-static"><Link2 size={34} className="text-orange-400" /></div></div>
+                <h2 className="text-2xl font-black text-white tracking-tight blin-mont">Добавьте подписку</h2>
+                <p className="text-zinc-500 text-sm mt-1">{needsCopy ? 'Скопируйте ссылку и вставьте в приложение' : 'Нажмите кнопку — подписка добавится автоматически'}</p>
+              </div>
+              <div className="flex-1 space-y-4">
+                {needsCopy ? (
                   <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4">
                     <div className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold mb-2">Ссылка подписки</div>
                     {plainUrl ? (
-                      <div className="text-[11px] text-sky-300/95 break-all font-mono leading-relaxed select-all mb-3 max-h-28 overflow-y-auto custom-scrollbar">
-                        {plainUrl}
-                      </div>
+                      <div className="text-[11px] text-sky-300/95 break-all font-mono leading-relaxed select-all mb-3 max-h-28 overflow-y-auto custom-scrollbar">{plainUrl}</div>
                     ) : (
-                      <p className="text-xs text-amber-400/90 mb-3">
-                        Ссылка не найдена. Обновите список устройств или откройте инструкцию из карточки подписки.
-                      </p>
+                      <p className="text-xs text-amber-400/90 mb-3">Ссылка не найдена. Откройте инструкцию из карточки подписки.</p>
                     )}
                   </div>
-                  <p className="text-zinc-500 text-xs text-center leading-relaxed px-2">
-                    В Incy нажмите «+» и вставьте ссылку из буфера обмена.
-                  </p>
-                </>
-              ) : (
-                middleSteps.map((s, idx) => (
-                  s && !s.actions?.some((a) => a.type === 'copy_plain_sub' || a.type === 'trigger_add') ? (
-                    <div key={idx} className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 px-3.5 py-3">
-                      <div className="text-zinc-200 text-sm font-semibold mb-0.5">{s.title.replace(/^\d+\.\s*/, '')}</div>
-                      <p className="text-zinc-500 text-xs leading-relaxed">{s.desc}</p>
-                    </div>
-                  ) : null
-                ))
-              )}
-            </div>
-          )}
-
-          {step === 3 && (
-            <div className="flex-1">
-              {connectAction?.url && (
-                <Button onClick={() => openUrl(connectAction.url!)}>
-                  <Zap size={16} /> {connectAction.label || 'Подключиться!'}
-                </Button>
-              )}
-            </div>
-          )}
-
-          <div className="mt-auto pt-5 space-y-2.5">
-            {step === 1 && (
-              <Button onClick={() => setInstructionSetupStep(2)}>
-                Далее <ArrowRight size={18} />
-              </Button>
-            )}
-            {step === 2 && (
-              <>
-                {instructionPlainLinkMode || hasCopyPlain ? (
-                  <Button
-                    onClick={() => {
-                      if (plainUrl) handleCopy(plainUrl);
-                      else alert('Ссылка недоступна.');
-                    }}
-                    disabled={!plainUrl}
-                  >
+                ) : (
+                  <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 px-4 py-4 text-sm text-zinc-400 leading-relaxed">
+                    Откройте {app === 'incy' ? 'Incy' : 'Happ'}, нажмите «+» и подтвердите добавление подписки.
+                  </div>
+                )}
+              </div>
+              <div className="mt-auto pt-5 space-y-2.5">
+                {needsCopy ? (
+                  <Button onClick={() => { if (plainUrl) handleCopy(plainUrl); else alert('Ссылка недоступна.'); }} disabled={!plainUrl}>
                     <Copy size={16} /> Скопировать ссылку
                   </Button>
                 ) : (
                   <Button onClick={addSubscription}>
-                    <Plus size={16} /> Добавить подписку
+                    <Plus size={16} /> Добавить подписку в {app === 'incy' ? 'Incy' : 'Happ'}
                   </Button>
                 )}
-                <Button variant="secondary" onClick={() => setInstructionSetupStep(3)}>
-                  Далее <ArrowRight size={18} />
+                <Button variant="secondary" onClick={() => setInstructionSetupStep(5)}>
+                  Добавил, далее <ArrowRight size={18} />
                 </Button>
-              </>
-            )}
-            {step === 3 && (
-              <Button variant="secondary" onClick={() => { setInstructionPlainLinkMode(false); setInstructionSetupStep(1); setView('home'); }}>
-                На главную
-              </Button>
-            )}
-            {step > 1 && step < 3 && (
-              <button
-                type="button"
-                onClick={() => setInstructionSetupStep(step - 1)}
-                className="w-full py-2.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
-              >
-                Назад
-              </button>
-            )}
-          </div>
+                <button type="button" onClick={() => setInstructionSetupStep(3)} className="w-full py-2.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors">Назад</button>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 5: готово */}
+          {step === 5 && (
+            <div className="flex-1 flex flex-col">
+              <div className="text-center mb-6">
+                <div className="setup-icon-wrap"><div className="setup-icon-glow" /><div className="setup-icon-ring" /><div className="setup-done-burst setup-icon-static"><CheckCircle size={34} className="text-orange-400" /></div></div>
+                <h2 className="text-2xl font-black text-white tracking-tight blin-mont">Всё готово!</h2>
+                <p className="text-zinc-500 text-sm mt-1">Откройте {app === 'incy' ? 'Incy' : 'Happ'} и нажмите подключиться</p>
+              </div>
+              <div className="flex-1" />
+              <div className="space-y-2.5">
+                {app === 'ios' && (
+                  <Button onClick={() => openUrl('incy://connect')}>
+                    <Zap size={16} /> Подключиться в Incy
+                  </Button>
+                )}
+                <Button variant="secondary" onClick={() => { setInstructionPlainLinkMode(false); setInstructionSetupStep(1); setView('home'); }}>
+                  На главную
+                </Button>
+              </div>
+            </div>
+          )}
+
         </div>
       </div>
     );
@@ -4878,4 +4914,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-      }
+  }
