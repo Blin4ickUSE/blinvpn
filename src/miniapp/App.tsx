@@ -3956,7 +3956,7 @@ export default function App() {
            </div>
            <div className="bg-zinc-800 p-4 rounded-xl border border-zinc-700">
               <div className="text-xs text-zinc-400 mb-1">Вы получили</div>
-              <div className="text-xl font-bold text-green-500">+{formatRefAmount(selectedReferral.myProfit)} ₽</div>
+              <div className="text-xl font-bold text-orange-400">+{formatRefAmount(selectedReferral.myProfit)} ₽</div>
            </div>
         </div>
 
@@ -3970,7 +3970,7 @@ export default function App() {
                  </div>
                  <div className="text-right">
                     <div className="text-zinc-300">{formatRefAmount(h.amount)} ₽</div>
-                    <div className="text-xs text-green-500 font-bold">+{formatRefAmount(h.income)} ₽</div>
+                    <div className="text-xs text-orange-400 font-bold">+{formatRefAmount(h.income)} ₽</div>
                  </div>
               </div>
            )) : (
@@ -3985,14 +3985,14 @@ export default function App() {
     <div className="min-h-full flex flex-col">
       <Header title="Друзья" onBack={() => setView('home')} />
       
-      <div className="bg-gradient-to-br from-green-900/40 to-black border border-green-500/20 p-6 rounded-2xl mb-6 text-center">
+      <div className="bg-gradient-to-br from-orange-900/40 to-black border border-orange-500/20 p-6 rounded-2xl mb-6 text-center">
         <div className="text-zinc-400 text-sm mb-1">Доступно для вывода</div>
-        <div className="text-4xl font-bold text-green-500 mb-4 blin-mont">{formatRefAmount(referrals.partnerBalance)} ₽</div>
+        <div className="text-4xl font-bold text-orange-400 mb-4 blin-mont">{formatRefAmount(referrals.partnerBalance)} ₽</div>
         
         {referrals.partnerBalance > 0 ? (
           <button 
             onClick={openWithdrawModal}
-            className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-full font-bold text-sm shadow-lg shadow-green-900/40 mb-4 transition-transform active:scale-95"
+            className="bg-orange-600 hover:bg-orange-500 text-white px-6 py-2 rounded-full font-bold text-sm shadow-lg shadow-orange-900/40 mb-4 transition-transform active:scale-95"
           >
             Вывести средства
           </button>
@@ -4007,7 +4007,7 @@ export default function App() {
           </div>
         </div>
         <p className="mt-4 text-left text-xs text-zinc-400 leading-relaxed border-t border-white/5 pt-3">
-          Вы получаете <span className="text-emerald-400/95 font-semibold">20%</span> с оплат ваших рефералов и ещё <span className="text-emerald-400/95 font-semibold">5%</span>, если они приведут своих.
+          Вы получаете <span className="text-orange-400/95 font-semibold">20%</span> с оплат ваших рефералов и ещё <span className="text-orange-400/95 font-semibold">5%</span>, если они приведут своих.
         </p>
       </div>
 
@@ -4080,7 +4080,7 @@ export default function App() {
                 <div className="flex items-center gap-2">
                    <div className="text-right">
                      <div className="text-xs text-zinc-500">Доход</div>
-                     <div className="text-sm font-bold text-green-500">+{formatRefAmount(user.myProfit ?? 0)} ₽</div>
+                     <div className="text-sm font-bold text-orange-400">+{formatRefAmount(user.myProfit ?? 0)} ₽</div>
                    </div>
                    <ChevronRight size={16} className="text-zinc-600" />
                 </div>
@@ -4631,7 +4631,7 @@ export default function App() {
       >
         {withdrawState.step === 1 && (
           <div className="space-y-4">
-            <div className="text-sm text-zinc-400">Доступно: <span className="text-green-500 font-bold">{formatRefAmount(referrals.partnerBalance)} ₽</span></div>
+            <div className="text-sm text-zinc-400">Доступно: <span className="text-orange-400 font-bold">{formatRefAmount(referrals.partnerBalance)} ₽</span></div>
             <input
               type="number"
               placeholder="Сумма вывода"
@@ -4884,4 +4884,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-            }
+    }
