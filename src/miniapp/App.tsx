@@ -742,6 +742,8 @@ function getInstructionSteps(platformId: PlatformId, plainSecondDevice: boolean)
 const AnimatedBackground: React.FC<{ children: React.ReactNode; topPad?: number }> = ({ children, topPad = 0 }) => (
   <div className="max-w-md mx-auto min-h-screen w-full relative text-zinc-200 font-sans selection:bg-orange-500/30 tg-safe-padding overflow-x-clip" style={{ background: '#000', isolation: 'isolate', paddingTop: topPad > 0 ? `${topPad}px` : undefined }}>
     <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@700&display=swap');
+      .blin-header-title { font-family: 'Montserrat', sans-serif; font-weight: 700; }
       @keyframes drift1 {
         0%   { transform: translate(0px, 0px); }
         25%  { transform: translate(30px, 50px); }
@@ -762,23 +764,23 @@ const AnimatedBackground: React.FC<{ children: React.ReactNode; topPad?: number 
         z-index: 0;
       }
       .mb-orb-1 {
-        width: 380px; height: 380px;
-        top: -120px; left: -100px;
-        background: radial-gradient(circle at 50% 50%,
-          rgba(234,88,12,0.13) 0%,
-          rgba(194,65,12,0.06) 45%,
+        width: 340px; height: 300px;
+        top: -80px; left: -60px;
+        background: radial-gradient(ellipse at 50% 0%,
+          rgba(234,88,12,0.22) 0%,
+          rgba(194,65,12,0.10) 40%,
           transparent 70%);
-        filter: blur(40px);
+        filter: blur(38px);
         animation: drift1 35s ease-in-out infinite;
       }
       .mb-orb-2 {
-        width: 420px; height: 420px;
-        bottom: -80px; right: -140px;
-        background: radial-gradient(circle at 50% 50%,
-          rgba(249,115,22,0.10) 0%,
-          rgba(234,88,12,0.04) 45%,
+        width: 340px; height: 300px;
+        top: -80px; right: -60px;
+        background: radial-gradient(ellipse at 50% 0%,
+          rgba(249,115,22,0.18) 0%,
+          rgba(234,88,12,0.08) 40%,
           transparent 70%);
-        filter: blur(50px);
+        filter: blur(42px);
         animation: drift2 45s ease-in-out infinite;
       }
       .user-load-failed button,
@@ -1089,7 +1091,7 @@ const Header: React.FC<{ title: string, onBack?: () => void }> = ({ title, onBac
         <ChevronLeft size={22} className="blin-back-ico" />
       </button>
     )}
-    <h1 className="text-2xl font-bold text-white">{title}</h1>
+    <h1 className="text-2xl font-bold text-white blin-header-title">{title}</h1>
   </div>
 );
 
@@ -2374,7 +2376,7 @@ export default function App() {
         <div className="relative z-10">
           <div className="flex justify-between items-start mb-2">
             <span className="text-zinc-400 text-sm font-medium flex items-center gap-2">
-              <CreditCard size={14} /> Баланс счёта
+              <CreditCard size={14} /> Баланс
             </span>
           </div>
           <div className={`text-4xl font-black mb-6 tracking-tight ${balance < 0 ? 'text-red-500' : 'text-white'}`}>
@@ -3934,6 +3936,12 @@ export default function App() {
     </div>
     );
   };
+  const formatRefAmount = (val: number): string => {
+    if (Number.isInteger(val)) return String(val);
+    const s = val.toFixed(2);
+    return s.replace(/\.?0+$/, '');
+  };
+
   const ReferralDetailView = () => {
     if (!selectedReferral) return null;
     return (
@@ -3943,11 +3951,11 @@ export default function App() {
         <div className="grid grid-cols-2 gap-4 mb-6">
            <div className="bg-zinc-800 p-4 rounded-xl border border-zinc-700">
               <div className="text-xs text-zinc-400 mb-1">Потратил всего</div>
-              <div className="text-xl font-bold text-white">{selectedReferral.spent.toFixed(2)} ₽</div>
+              <div className="text-xl font-bold text-white">{formatRefAmount(selectedReferral.spent)} ₽</div>
            </div>
            <div className="bg-zinc-800 p-4 rounded-xl border border-zinc-700">
               <div className="text-xs text-zinc-400 mb-1">Вы получили</div>
-              <div className="text-xl font-bold text-green-500">+{selectedReferral.myProfit.toFixed(2)} ₽</div>
+              <div className="text-xl font-bold text-green-500">+{formatRefAmount(selectedReferral.myProfit)} ₽</div>
            </div>
         </div>
 
@@ -3960,8 +3968,8 @@ export default function App() {
                     <div className="text-xs text-zinc-500">{h.date}</div>
                  </div>
                  <div className="text-right">
-                    <div className="text-zinc-300">{h.amount.toFixed(2)} ₽</div>
-                    <div className="text-xs text-green-500 font-bold">+{h.income.toFixed(2)} ₽</div>
+                    <div className="text-zinc-300">{formatRefAmount(h.amount)} ₽</div>
+                    <div className="text-xs text-green-500 font-bold">+{formatRefAmount(h.income)} ₽</div>
                  </div>
               </div>
            )) : (
@@ -3978,7 +3986,7 @@ export default function App() {
       
       <div className="bg-gradient-to-br from-green-900/40 to-black border border-green-500/20 p-6 rounded-2xl mb-6 text-center">
         <div className="text-zinc-400 text-sm mb-1">Доступно для вывода</div>
-        <div className="text-4xl font-bold text-green-500 mb-4">{referrals.partnerBalance.toFixed(2)} ₽</div>
+        <div className="text-4xl font-bold text-green-500 mb-4">{formatRefAmount(referrals.partnerBalance)} ₽</div>
         
         {referrals.partnerBalance > 0 ? (
           <button 
@@ -4071,7 +4079,7 @@ export default function App() {
                 <div className="flex items-center gap-2">
                    <div className="text-right">
                      <div className="text-xs text-zinc-500">Доход</div>
-                     <div className="text-sm font-bold text-green-500">+{(user.myProfit ?? 0).toFixed(2)} ₽</div>
+                     <div className="text-sm font-bold text-green-500">+{formatRefAmount(user.myProfit ?? 0)} ₽</div>
                    </div>
                    <ChevronRight size={16} className="text-zinc-600" />
                 </div>
@@ -4622,7 +4630,7 @@ export default function App() {
       >
         {withdrawState.step === 1 && (
           <div className="space-y-4">
-            <div className="text-sm text-zinc-400">Доступно: <span className="text-green-500 font-bold">{referrals.partnerBalance.toFixed(2)} ₽</span></div>
+            <div className="text-sm text-zinc-400">Доступно: <span className="text-green-500 font-bold">{formatRefAmount(referrals.partnerBalance)} ₽</span></div>
             <input
               type="number"
               placeholder="Сумма вывода"
