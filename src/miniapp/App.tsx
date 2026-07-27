@@ -2867,7 +2867,7 @@ export default function App() {
               ) : (
                 <button 
                   onClick={() => { setInstructionPlainLinkMode(false); setInstructionSetupStep(1); setInstructionSourceDeviceId(device.id); setActivePlatform(detectClientPlatform()); setView('instruction_view'); }}
-                  className="w-full bg-zinc-700/50 hover:bg-zinc-700 py-2 rounded-lg text-sm text-orange-400 flex items-center justify-center gap-2 transition-colors border border-zinc-600/50"
+                  className="w-full bg-zinc-700/50 hover:bg-zinc-700 py-2 rounded-lg text-sm text-orange-400 flex items-center justify-center gap-2 transition-colors border border-zinc-600/50 font-bold"
                 >
                   <Zap size={16} /> Подключиться
                 </button>
@@ -4884,4 +4884,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-      }
+            }
