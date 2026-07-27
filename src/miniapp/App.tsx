@@ -1061,7 +1061,7 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const Button: React.FC<ButtonProps> = ({ children, onClick, variant = 'primary', className = '', disabled = false }) => {
-  const baseStyle = "w-full py-3.5 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 active:scale-[0.97] disabled:opacity-50 disabled:active:scale-100 disabled:cursor-not-allowed ripple";
+  const baseStyle = "w-full py-3.5 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 active:scale-[0.97] disabled:opacity-50 disabled:active:scale-100 disabled:cursor-not-allowed ripple blin-mont";
   const variants = {
     primary: "bg-orange-600 hover:bg-orange-500 text-white shadow-lg shadow-black/60",
     secondary: "bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800",
@@ -3982,7 +3982,7 @@ export default function App() {
   };
 
   const ReferralView = () => (
-    <div className={`min-h-full flex flex-col ${referralList.length > 0 ? 'overflow-y-auto' : ''}`}>
+    <div className="min-h-full flex flex-col">
       <Header title="Реф. программа" onBack={() => setView('home')} />
       
       <div className="bg-gradient-to-br from-green-900/40 to-black border border-green-500/20 p-6 rounded-2xl mb-6 text-center">
@@ -4325,10 +4325,10 @@ export default function App() {
               </div>
 
               <h1 className="text-2xl font-extrabold text-white mb-2 leading-tight">
-                Вход в БлинВПН
+                Вход в BlinVPN
               </h1>
               <p className="text-sm text-zinc-400 mb-6 leading-relaxed">
-                Войдите через Telegram, чтобы открыть личный кабинет. Мы получим только имя и username — доступа к переписке нет.
+                Войдите через Telegram, чтобы открыть личный кабинет.
               </p>
 
               <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-4 mb-5 flex justify-center">
@@ -4387,7 +4387,7 @@ export default function App() {
 
               <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-4 mb-5">
                 <div className="text-xs text-zinc-500 mb-1">Канал</div>
-                <div className="text-white font-semibold">БлинВПН</div>
+                <div className="text-white font-semibold">BlinVPN</div>
                 <div className="text-xs text-zinc-500 mt-1">`@blinvpn`</div>
               </div>
 
@@ -4503,7 +4503,7 @@ export default function App() {
 
   return (
     <AnimatedBackground topPad={entryMode === 'telegram' ? 56 : 0}>
-      <div className={`p-4 flex flex-col overflow-x-clip ${entryMode === 'telegram' ? 'h-screen overflow-hidden' : 'min-h-screen'} ${userLoadFailed ? 'pointer-events-none select-none user-load-failed opacity-60' : ''}`} style={entryMode === 'telegram' ? { height: '100dvh' } : undefined}>
+      <div className={`p-4 min-h-screen flex flex-col overflow-x-clip ${userLoadFailed ? 'pointer-events-none select-none user-load-failed opacity-60' : ''}`}>
         <div
           key={transitionKey}
           className={
@@ -4884,4 +4884,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-          }
+      }
