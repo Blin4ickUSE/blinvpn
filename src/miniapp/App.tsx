@@ -4000,12 +4000,6 @@ export default function App() {
           <div className="text-zinc-500 text-sm mb-4">Пригласите друзей, чтобы заработать</div>
         )}
 
-        <div className="flex justify-center border-t border-white/10 pt-4">
-          <div>
-            <div className="text-xl font-bold text-white text-center">{referrals.count}</div>
-            <div className="text-xs text-zinc-500 text-center">Приглашено</div>
-          </div>
-        </div>
         <p className="mt-4 text-left text-xs text-zinc-400 leading-relaxed border-t border-white/5 pt-3">
           Вы получаете <span className="text-orange-400/95 font-semibold">20%</span> с оплат ваших рефералов и ещё <span className="text-orange-400/95 font-semibold">5%</span>, если они приведут своих.
         </p>
