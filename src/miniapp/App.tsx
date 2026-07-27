@@ -1184,35 +1184,85 @@ function sniffPlatformFromUserAgent(ua: string): string | null {
   return null;
 }
 
-/** Человекочитаемое имя HWID-устройства из userAgent вида App/1.0/Android/... */
+/** Парсит UA и возвращает { model, os } — модель устройства и ОС с версией. */
+function parseDeviceInfo(ua: string): { model: string | null; os: string | null } {
+  if (!ua) return { model: null, os: null };
+  const l = ua.toLowerCase();
+
+  // Android UA: "Mozilla/5.0 (Linux; Android 14; SM-S911B Build/UP1A...)"
+  // или "Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro Build/...)"
+  const androidMatch = ua.match(/Android\s*([\d.]+);\s*([^)]+?)\s*(?:Build\/|[)])/i);
+  if (androidMatch) {
+    const osVer = androidMatch[1] ? `Android ${androidMatch[1]}` : 'Android';
+    let model = androidMatch[2]?.trim().replace(/Build\/.*$/, '').trim() || null;
+    // Убираем мусор типа "wv" или слишком короткие строки
+    if (model && (model.length < 2 || model.toLowerCase() === 'wv')) model = null;
+    return { model, os: osVer };
+  }
+
+  // iOS UA: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X)"
+  const iosMatch = ua.match(/CPU (?:iPhone )?OS ([\d_]+)/i);
+  if (iosMatch) {
+    const ver = iosMatch[1].replace(/_/g, '.');
+    const isIpad = l.includes('ipad');
+    return { model: isIpad ? 'iPad' : 'iPhone', os: `iOS ${ver}` };
+  }
+
+  // Windows: "Windows NT 10.0" → Windows 10
+  const winMatch = ua.match(/Windows NT ([\d.]+)/i);
+  if (winMatch) {
+    const ntMap: Record<string, string> = { '10.0': '10 / 11', '6.3': '8.1', '6.2': '8', '6.1': '7' };
+    const win = ntMap[winMatch[1]] || winMatch[1];
+    return { model: null, os: `Windows ${win}` };
+  }
+
+  // macOS: "Mac OS X 10_15_7" or "Mac OS X 14.0"
+  const macMatch = ua.match(/Mac OS X ([\d_.]+)/i);
+  if (macMatch) {
+    const ver = macMatch[1].replace(/_/g, '.');
+    return { model: 'Mac', os: `macOS ${ver}` };
+  }
+
+  // Linux desktop
+  if (l.includes('linux') && !l.includes('android')) {
+    return { model: null, os: 'Linux' };
+  }
+
+  // App/1.0/Android/HWID format (Incy/Happ custom UA)
+  const slashMatch = ua.match(/^[^/]+\/[^/]+\/([^/]+)\//i);
+  if (slashMatch) {
+    return { model: null, os: formatHwidPlatformName(slashMatch[1]) };
+  }
+
+  return { model: null, os: null };
+}
+
+/** Человекочитаемое имя HWID-устройства */
 function formatHwidDeviceLabel(device: any, index: number): { title: string } {
   const rawName = String(device?.name || device?.deviceName || device?.device_name || '').trim();
   const ua = String(
     device?.userAgent || device?.user_agent || device?.platform || device?.os || ''
   ).trim();
 
-  if (rawName && !rawName.includes('/') && rawName.length <= 48) {
+  // Если rawName — читаемое имя без слешей и не просто платформа
+  const genericNames = new Set(['android', 'ios', 'iphone', 'ipad', 'windows', 'macos', 'linux', 'mac']);
+  if (rawName && !rawName.includes('/') && rawName.length <= 48 && !genericNames.has(rawName.toLowerCase())) {
     return { title: rawName };
   }
 
-  // App/1.0/Android/HWID — берём только платформу
-  const slashUaMatch = ua.match(/^[^/]+\/[^/]+\/([^/]+)\//i);
-  if (slashUaMatch) {
-    return { title: formatHwidPlatformName(slashUaMatch[1]) };
-  }
+  const { model, os } = parseDeviceInfo(ua);
 
-  if (device?.platform) {
-    return { title: formatHwidPlatformName(String(device.platform)) };
-  }
+  if (model && os) return { title: `${model} (${os})` };
+  if (model) return { title: model };
+  if (os) return { title: os };
+
+  // Fallback: platform field
+  if (device?.platform) return { title: formatHwidPlatformName(String(device.platform)) };
 
   const sniffed = sniffPlatformFromUserAgent(ua);
-  if (sniffed) {
-    return { title: sniffed };
-  }
+  if (sniffed) return { title: sniffed };
 
-  if (ua && ua.length <= 36 && !ua.includes('/')) {
-    return { title: ua };
-  }
+  if (ua && ua.length <= 36 && !ua.includes('/')) return { title: ua };
 
   return { title: `Устройство ${index + 1}` };
 }
@@ -3867,11 +3917,7 @@ export default function App() {
                       <p className="text-xs text-amber-400/90 mb-3">Ссылка не найдена. Откройте инструкцию из карточки подписки.</p>
                     )}
                   </div>
-                ) : (
-                  <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 px-4 py-4 text-sm text-zinc-400 leading-relaxed">
-                    Откройте {app === 'incy' ? 'Incy' : 'Happ'}, нажмите «+» и подтвердите добавление подписки.
-                  </div>
-                )}
+                ) : null}
               </div>
               <div className="mt-auto pt-5 space-y-2.5">
                 {needsCopy ? (
@@ -4915,4 +4961,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-    }
+          }
