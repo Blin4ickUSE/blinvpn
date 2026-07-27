@@ -1997,6 +1997,7 @@ export default function App() {
   };
 
 
+  const handleCopy = (text: string, deviceId?: number) => {
     try {
       // Если передан deviceId, пытаемся получить реальный ключ из deviceKeys
       let keyToCopy = text;
@@ -4914,4 +4915,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-  }
+          }
