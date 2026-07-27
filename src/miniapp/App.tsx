@@ -744,6 +744,7 @@ const AnimatedBackground: React.FC<{ children: React.ReactNode; topPad?: number 
     <style>{`
       @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@700&display=swap');
       .blin-header-title { font-family: 'Montserrat', sans-serif; font-weight: 700; }
+      .blin-mont { font-family: 'Montserrat', sans-serif; }
       @keyframes drift1 {
         0%   { transform: translate(0px, 0px); }
         25%  { transform: translate(30px, 50px); }
@@ -764,23 +765,23 @@ const AnimatedBackground: React.FC<{ children: React.ReactNode; topPad?: number 
         z-index: 0;
       }
       .mb-orb-1 {
-        width: 340px; height: 300px;
-        top: -80px; left: -60px;
+        width: 360px; height: 320px;
+        top: -60px; left: -40px;
         background: radial-gradient(ellipse at 50% 0%,
-          rgba(234,88,12,0.22) 0%,
-          rgba(194,65,12,0.10) 40%,
-          transparent 70%);
-        filter: blur(38px);
+          rgba(234,88,12,0.38) 0%,
+          rgba(194,65,12,0.18) 38%,
+          transparent 68%);
+        filter: blur(36px);
         animation: drift1 35s ease-in-out infinite;
       }
       .mb-orb-2 {
-        width: 340px; height: 300px;
-        top: -80px; right: -60px;
+        width: 360px; height: 320px;
+        top: -60px; right: -40px;
         background: radial-gradient(ellipse at 50% 0%,
-          rgba(249,115,22,0.18) 0%,
-          rgba(234,88,12,0.08) 40%,
-          transparent 70%);
-        filter: blur(42px);
+          rgba(249,115,22,0.32) 0%,
+          rgba(234,88,12,0.14) 38%,
+          transparent 68%);
+        filter: blur(40px);
         animation: drift2 45s ease-in-out infinite;
       }
       .user-load-failed button,
@@ -2367,7 +2368,7 @@ export default function App() {
           )}
           <div>
             <div className="text-xs text-zinc-400 font-medium">Добро пожаловать</div>
-            <div className="font-bold text-zinc-100">{displayName}</div>
+            <div className="font-bold text-zinc-100 blin-mont">{displayName}</div>
           </div>
         </div>
       </div>
@@ -2379,7 +2380,7 @@ export default function App() {
               <CreditCard size={14} /> Баланс
             </span>
           </div>
-          <div className={`text-4xl font-black mb-6 tracking-tight ${balance < 0 ? 'text-red-500' : 'text-white'}`}>
+          <div className={`text-4xl font-black mb-6 tracking-tight blin-mont ${balance < 0 ? 'text-red-500' : 'text-white'}`}>
             {formatMoney(balance)}
           </div>
           <div className="flex gap-3 mb-4">
@@ -2409,28 +2410,28 @@ export default function App() {
           <div className="w-10 h-10 rounded-full bg-orange-600/10 text-orange-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
             <Monitor size={20} />
           </div>
-          <div className="font-bold text-zinc-200">Подписки</div>
+          <div className="font-bold text-zinc-200 blin-mont">Подписки</div>
           <div className="text-xs text-zinc-500 mt-1">{devices.length} активно</div>
         </Card>
         <Card onClick={() => setView('referral')} className="cursor-pointer hover:border-green-500/50 transition-colors group">
           <div className="w-10 h-10 rounded-full bg-green-500/10 text-green-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
             <UserPlus size={20} />
           </div>
-          <div className="font-bold text-zinc-200">Рефералы</div>
+          <div className="font-bold text-zinc-200 blin-mont">Рефералы</div>
           <div className="text-xs text-zinc-500 mt-1">Заработать ₽</div>
         </Card>
         <Card onClick={() => setView('promo')} className="cursor-pointer hover:border-purple-500/50 transition-colors group">
           <div className="w-10 h-10 rounded-full bg-purple-500/10 text-purple-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
             <Gift size={20} />
           </div>
-          <div className="font-bold text-zinc-200">Промокод</div>
+          <div className="font-bold text-zinc-200 blin-mont">Промокод</div>
           <div className="text-xs text-zinc-500 mt-1">Активировать</div>
         </Card>
         <Card onClick={() => window.open(SUPPORT_URL, '_blank')} className="cursor-pointer hover:border-orange-500/50 transition-colors group">
           <div className="w-10 h-10 rounded-full bg-orange-500/10 text-orange-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
             <Globe size={20} />
           </div>
-          <div className="font-bold text-zinc-200">Поддержка</div>
+          <div className="font-bold text-zinc-200 blin-mont">Поддержка</div>
           <div className="text-xs text-zinc-500 mt-1">Чат в Telegram</div>
         </Card>
       </div>
@@ -2574,10 +2575,10 @@ export default function App() {
                         <span className="text-lg font-semibold text-zinc-500 line-through decoration-zinc-500/60 decoration-2 tabular-nums">
                           {priceAfterReferralOnly(wizardPlan, wizardDeviceCount)} ₽
                         </span>
-                        <span className="text-2xl font-black text-white tracking-tight tabular-nums">{payableTotal} ₽</span>
+                        <span className="text-2xl font-black text-white tracking-tight tabular-nums blin-mont">{payableTotal} ₽</span>
                       </div>
                     ) : (
-                      <span className="text-xl font-bold text-white tabular-nums">{payableTotal} ₽</span>
+                      <span className="text-xl font-bold text-white tabular-nums blin-mont">{payableTotal} ₽</span>
                     )}
                 </div>
             </div>
@@ -2649,7 +2650,7 @@ export default function App() {
                 <div className="setup-done-burst w-20 h-20 bg-orange-500/10 rounded-full flex items-center justify-center text-orange-400 mx-auto mb-4 ring-2 ring-orange-500/25">
                     <CheckCircle size={36} />
                 </div>
-                <h2 className="text-2xl font-black text-white tracking-tight">Подписка активна!</h2>
+                <h2 className="text-2xl font-black text-white tracking-tight blin-mont">Подписка активна!</h2>
                 <p className="text-zinc-400 text-sm px-3 mt-2 leading-relaxed">
                   Осталось три коротких шага — установить Incy, добавить подписку и подключиться.
                 </p>
@@ -3981,12 +3982,12 @@ export default function App() {
   };
 
   const ReferralView = () => (
-    <div className="min-h-full flex flex-col">
-      <Header title="Реферальная программа" onBack={() => setView('home')} />
+    <div className={`min-h-full flex flex-col ${referralList.length > 0 ? 'overflow-y-auto' : ''}`}>
+      <Header title="Реф. программа" onBack={() => setView('home')} />
       
       <div className="bg-gradient-to-br from-green-900/40 to-black border border-green-500/20 p-6 rounded-2xl mb-6 text-center">
         <div className="text-zinc-400 text-sm mb-1">Доступно для вывода</div>
-        <div className="text-4xl font-bold text-green-500 mb-4">{formatRefAmount(referrals.partnerBalance)} ₽</div>
+        <div className="text-4xl font-bold text-green-500 mb-4 blin-mont">{formatRefAmount(referrals.partnerBalance)} ₽</div>
         
         {referrals.partnerBalance > 0 ? (
           <button 
@@ -4502,7 +4503,7 @@ export default function App() {
 
   return (
     <AnimatedBackground topPad={entryMode === 'telegram' ? 56 : 0}>
-      <div className={`p-4 min-h-screen flex flex-col overflow-x-clip ${userLoadFailed ? 'pointer-events-none select-none user-load-failed opacity-60' : ''}`}>
+      <div className={`p-4 flex flex-col overflow-x-clip ${entryMode === 'telegram' ? 'h-screen overflow-hidden' : 'min-h-screen'} ${userLoadFailed ? 'pointer-events-none select-none user-load-failed opacity-60' : ''}`} style={entryMode === 'telegram' ? { height: '100dvh' } : undefined}>
         <div
           key={transitionKey}
           className={
@@ -4883,4 +4884,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-    }
+          }
