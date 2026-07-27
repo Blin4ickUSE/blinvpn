@@ -2450,7 +2450,7 @@ export default function App() {
     <div className="min-h-full flex flex-col">
       <Header 
         title={
-            wizardStep === 1 ? 'Тариф и устройства' :
+            wizardStep === 1 ? 'Выбор тарифа' :
             wizardStep === 2 ? 'Подтверждение' :
             wizardStep === 3 ? 'Оплата' :
             'Успешно'
@@ -2736,7 +2736,14 @@ export default function App() {
     }
   };
 
-  const DevicesView = () => (
+  const DevicesView = () => {
+    useEffect(() => {
+      if (devices.length === 0) {
+        setWizardStep(1); setWizardPlan(null); setWizardDeviceCount(1); setView('wizard');
+      }
+    }, []);
+    if (devices.length === 0) return null;
+    return (
     <div className="min-h-full flex flex-col" onClick={() => deviceMenuOpenId !== null && setDeviceMenuOpenId(null)}>
       <Header title="Мои подписки" onBack={() => setView('home')} />
       <div className="flex-1 space-y-4">
@@ -2760,9 +2767,6 @@ export default function App() {
           <div key={device.id} className={`rounded-xl p-4 border card-hover ${isBlocked ? 'bg-red-950/40 border-red-600/40' : isExpired ? 'bg-red-900/20 border-red-500/50' : 'bg-zinc-800 border-zinc-700'}`}>
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-4">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isExpired ? 'bg-red-900/30 text-red-400' : 'bg-zinc-700 text-zinc-300'}`}>
-                  {device.type === 'ios' || device.type === 'android' ? <Smartphone size={20} /> : <Monitor size={20} />}
-                </div>
                 <div>
                   <div className="font-bold text-white">
                     {device.is_trial ? 'Пробная подписка' : 'Подписка'} | #{device.id}
@@ -2848,7 +2852,7 @@ export default function App() {
                     onClick={() => { setInstructionPlainLinkMode(false); setInstructionSetupStep(1); setInstructionSourceDeviceId(device.id); setActivePlatform(detectClientPlatform()); setView('instruction_view'); }}
                     className="bg-zinc-700/50 hover:bg-zinc-700 py-2.5 rounded-lg text-xs text-orange-400 flex items-center justify-center gap-1.5 transition-colors border border-zinc-600/50 font-medium"
                   >
-                    <BookOpen size={15} /> Инструкция
+                    <Zap size={15} /> Подключиться
                   </button>
                   <button 
                     onClick={() => { setExtendingDevice(device); setExtendPlan(null); setView('extend_subscription'); }}
@@ -2862,7 +2866,7 @@ export default function App() {
                   onClick={() => { setInstructionPlainLinkMode(false); setInstructionSetupStep(1); setInstructionSourceDeviceId(device.id); setActivePlatform(detectClientPlatform()); setView('instruction_view'); }}
                   className="w-full bg-zinc-700/50 hover:bg-zinc-700 py-2 rounded-lg text-sm text-orange-400 flex items-center justify-center gap-2 transition-colors border border-zinc-600/50"
                 >
-                  <BookOpen size={16} /> Инструкция по подключению
+                  <Zap size={16} /> Подключиться
                 </button>
               )
             )}
@@ -2874,11 +2878,12 @@ export default function App() {
       </div>
       <div className="mt-6 mb-4">
         <Button onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardDeviceCount(1); setView('wizard'); }}>
-          <Plus size={20} /> Добавить устройство
+          <Plus size={20} /> Купить подписку
         </Button>
       </div>
     </div>
-  );
+    );
+  };
 
   const HwidDevicesView = () => {
     const subscription = devices.find(d => d.id === hwidViewData.deviceId);
@@ -3854,8 +3859,8 @@ export default function App() {
               </>
             )}
             {step === 3 && (
-              <Button variant="secondary" onClick={finishSetup}>
-                Готово
+              <Button variant="secondary" onClick={() => { setInstructionPlainLinkMode(false); setInstructionSetupStep(1); setView('home'); }}>
+                На главную
               </Button>
             )}
             {step > 1 && step < 3 && (
@@ -4001,41 +4006,19 @@ export default function App() {
         <label className="text-xs text-zinc-500 mb-2 block uppercase font-bold tracking-wider">Ваша ссылка</label>
         {(() => {
           const botLink = `https://t.me/${BOT_USERNAME_MINI}?start=ref${telegramId}`;
-          const siteLink = `${SITE_URL_MINI}/?ref=${telegramId}`;
-          // Основная ссылка — по способу входа: через сайт → на сайт, через бота → на бота
-          const primaryLink = entryMode === 'web' ? siteLink : botLink;
-          const secondaryLink = entryMode === 'web' ? botLink : siteLink;
-          const secondaryLabel = entryMode === 'web' ? 'Ссылка для Telegram' : 'Ссылка на сайт';
           return (
             <>
               <div className="flex gap-2">
                 <div className="bg-zinc-900 flex-1 p-3 rounded-lg text-zinc-300 font-mono text-sm truncate">
-                  {telegramId ? primaryLink : 'Загрузка...'}
+                  {telegramId ? botLink : 'Загрузка...'}
                 </div>
                 <button
-                  onClick={() => { if (telegramId) handleCopy(primaryLink); }}
+                  onClick={() => { if (telegramId) handleCopy(botLink); }}
                   className="bg-orange-600 px-4 rounded-lg text-white hover:bg-orange-500"
                 >
                   <Copy size={18} />
                 </button>
               </div>
-              {telegramId && (
-                <div className="mt-3 flex items-center gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[11px] text-zinc-500 uppercase tracking-wider mb-0.5">{secondaryLabel}</div>
-                    <div className="text-zinc-400 font-mono text-xs truncate">{secondaryLink}</div>
-                  </div>
-                  <button
-                    onClick={() => handleCopy(secondaryLink)}
-                    className="bg-zinc-700 px-3 py-2 rounded-lg text-zinc-200 hover:bg-zinc-600 shrink-0"
-                  >
-                    <Copy size={15} />
-                  </button>
-                </div>
-              )}
-              <p className="mt-3 text-[11px] text-zinc-500 leading-relaxed">
-                Обе ссылки работают: приглашённый попадёт {entryMode === 'web' ? 'на сайт' : 'в Telegram-бота'} по основной или {entryMode === 'web' ? 'в бота' : 'на сайт'} по второй.
-              </p>
             </>
           );
         })()}
@@ -4892,4 +4875,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-}
+    }
