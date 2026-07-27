@@ -765,8 +765,8 @@ const AnimatedBackground: React.FC<{ children: React.ReactNode; topPad?: number 
         z-index: 0;
       }
       .mb-orb-1 {
-        width: 360px; height: 320px;
-        top: -60px; left: -40px;
+        width: 560px; height: 480px;
+        top: -120px; left: -120px;
         background: radial-gradient(ellipse at 50% 0%,
           rgba(234,88,12,0.38) 0%,
           rgba(194,65,12,0.18) 38%,
@@ -775,8 +775,8 @@ const AnimatedBackground: React.FC<{ children: React.ReactNode; topPad?: number 
         animation: drift1 35s ease-in-out infinite;
       }
       .mb-orb-2 {
-        width: 360px; height: 320px;
-        top: -60px; right: -40px;
+        width: 560px; height: 480px;
+        top: -120px; right: -120px;
         background: radial-gradient(ellipse at 50% 0%,
           rgba(249,115,22,0.32) 0%,
           rgba(234,88,12,0.14) 38%,
@@ -4878,4 +4878,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-    }
+      }
