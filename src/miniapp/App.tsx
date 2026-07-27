@@ -1061,7 +1061,7 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const Button: React.FC<ButtonProps> = ({ children, onClick, variant = 'primary', className = '', disabled = false }) => {
-  const baseStyle = "w-full py-3.5 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 active:scale-[0.97] disabled:opacity-50 disabled:active:scale-100 disabled:cursor-not-allowed ripple blin-mont";
+  const baseStyle = "w-full py-3.5 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 active:scale-[0.97] disabled:opacity-50 disabled:active:scale-100 disabled:cursor-not-allowed ripple";
   const variants = {
     primary: "bg-orange-600 hover:bg-orange-500 text-white shadow-lg shadow-black/60",
     secondary: "bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800",
@@ -2410,28 +2410,28 @@ export default function App() {
           <div className="w-10 h-10 rounded-full bg-orange-600/10 text-orange-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
             <Monitor size={20} />
           </div>
-          <div className="font-bold text-zinc-200 blin-mont">Подписки</div>
+          <div className="font-bold text-zinc-200">Подписки</div>
           <div className="text-xs text-zinc-500 mt-1">{devices.length} активно</div>
         </Card>
         <Card onClick={() => setView('referral')} className="cursor-pointer hover:border-green-500/50 transition-colors group">
           <div className="w-10 h-10 rounded-full bg-green-500/10 text-green-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
             <UserPlus size={20} />
           </div>
-          <div className="font-bold text-zinc-200 blin-mont">Рефералы</div>
+          <div className="font-bold text-zinc-200">Друзья</div>
           <div className="text-xs text-zinc-500 mt-1">Заработать ₽</div>
         </Card>
         <Card onClick={() => setView('promo')} className="cursor-pointer hover:border-purple-500/50 transition-colors group">
           <div className="w-10 h-10 rounded-full bg-purple-500/10 text-purple-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
             <Gift size={20} />
           </div>
-          <div className="font-bold text-zinc-200 blin-mont">Промокод</div>
+          <div className="font-bold text-zinc-200">Промокод</div>
           <div className="text-xs text-zinc-500 mt-1">Активировать</div>
         </Card>
         <Card onClick={() => window.open(SUPPORT_URL, '_blank')} className="cursor-pointer hover:border-orange-500/50 transition-colors group">
           <div className="w-10 h-10 rounded-full bg-orange-500/10 text-orange-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
             <Globe size={20} />
           </div>
-          <div className="font-bold text-zinc-200 blin-mont">Поддержка</div>
+          <div className="font-bold text-zinc-200">Поддержка</div>
           <div className="text-xs text-zinc-500 mt-1">Чат в Telegram</div>
         </Card>
       </div>
@@ -3983,7 +3983,7 @@ export default function App() {
 
   const ReferralView = () => (
     <div className="min-h-full flex flex-col">
-      <Header title="Реф. программа" onBack={() => setView('home')} />
+      <Header title="Друзья" onBack={() => setView('home')} />
       
       <div className="bg-gradient-to-br from-green-900/40 to-black border border-green-500/20 p-6 rounded-2xl mb-6 text-center">
         <div className="text-zinc-400 text-sm mb-1">Доступно для вывода</div>
