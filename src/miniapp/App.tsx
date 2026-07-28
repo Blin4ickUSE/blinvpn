@@ -532,7 +532,6 @@ const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
 const WITHDRAW_METHODS = [
   { id: 'balance', name: 'На баланс', icon: <Wallet size={20} />, min: 1 },
   { id: 'card', name: 'На карту РФ', icon: <CreditCard size={20} />, min: 1000 },
-  { id: 'crypto', name: 'Криптовалюта', icon: <img src="https://cryptologos.cc/logos/tether-usdt-logo.svg?v=026" className="w-5 h-5 invert" alt="USDT" />, min: 300 },
 ];
 
 const PLATFORMS: { id: PlatformId; name: string; icon: React.ReactNode }[] = [
@@ -2176,8 +2175,8 @@ export default function App() {
       setWithdrawState(prev => ({ ...prev, step: 2 }));
     } else if (step === 2) {
       if (!method) return alert("Выберите метод");
-      if (method === 'card' || method === 'crypto' || method === 'cryptobot') {
-        const minAmount = method === 'card' ? 1000 : (method === 'cryptobot' ? 10 : 300);
+      if (method === 'card' || method === 'cryptobot') {
+        const minAmount = method === 'card' ? 1000 : 10;
         if (numAmount < minAmount) return alert(`Минимальная сумма вывода: ${minAmount}₽`);
         
         // Проверка 30-дневного лимита для карты
@@ -2202,17 +2201,10 @@ export default function App() {
         };
         
         if (method === 'card') {
-          if (!withdrawState.cardNumber) return alert("Укажите номер карты");
+          if (!withdrawState.cardNumber || withdrawState.cardNumber.replace(/\s/g, '').length < 16) return alert("Укажите корректный номер карты (16 цифр)");
           requestData.card_number = withdrawState.cardNumber.replace(/\s+/g, '');
         } else if (method === 'cryptobot') {
           // Дополнительные данные не требуются
-        } else if (method === 'crypto') {
-          if (!withdrawState.cryptoNet || !withdrawState.cryptoAddr) return alert("Заполните все поля");
-          if (withdrawState.cryptoNet === 'TRC-20' && !/^T/i.test(withdrawState.cryptoAddr.trim())) {
-            return alert("Для сети TRC-20 адрес должен начинаться с буквы T");
-          }
-          requestData.crypto_net = withdrawState.cryptoNet;
-          requestData.crypto_addr = withdrawState.cryptoAddr;
         }
         
         const result = await miniApiFetch('/user/withdraw', {
@@ -2229,8 +2221,6 @@ export default function App() {
             addHistoryItem('ref_req', 'Заявка на вывод (Карта)', 0);
           } else if (method === 'cryptobot') {
             addHistoryItem('ref_req', 'Заявка на вывод (CryptoBot)', 0);
-          } else if (method === 'crypto') {
-            addHistoryItem('ref_req', 'Заявка на вывод (Crypto)', 0);
           }
           
           setReferrals(prev => ({ ...prev, partnerBalance: prev.partnerBalance - numAmount }));
@@ -2500,7 +2490,7 @@ export default function App() {
             <UserPlus size={20} />
           </div>
           <div className="font-bold text-zinc-200">Друзья</div>
-          <div className="text-xs text-zinc-500 mt-1">Заработать ₽</div>
+          <div className="text-xs text-zinc-500 mt-1">Пригласить друга</div>
         </Card>
         <Card onClick={() => setView('promo')} className="cursor-pointer hover:border-purple-500/50 transition-colors group">
           <div className="w-10 h-10 rounded-full bg-purple-500/10 text-purple-500 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
@@ -4788,28 +4778,6 @@ export default function App() {
               </p>
             )}
 
-            {withdrawState.method === 'crypto' && (
-              <>
-                <div className="text-sm text-zinc-400 mb-2">Реквизиты кошелька:</div>
-                <select
-                  value={withdrawState.cryptoNet}
-                  onChange={(e) => setWithdrawState({ ...withdrawState, cryptoNet: e.target.value })}
-                  className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white mb-2 focus:border-orange-500 outline-none"
-                >
-                  <option value="">Выберите сеть</option>
-                  <option value="TON">TON</option>
-                  <option value="TRC-20">TRC-20</option>
-                </select>
-                <input
-                  type="text"
-                  placeholder="Адрес кошелька"
-                  value={withdrawState.cryptoAddr}
-                  onChange={(e) => setWithdrawState({ ...withdrawState, cryptoAddr: e.target.value })}
-                  className="w-full bg-zinc-800 border border-zinc-600 rounded-xl p-3 text-white focus:border-orange-500 outline-none font-mono text-sm"
-                />
-              </>
-            )}
-
             <div className="pt-4 flex gap-3">
                <Button variant="secondary" onClick={() => setWithdrawState({ ...withdrawState, step: 2 })}>Назад</Button>
                <Button onClick={handleWithdrawNext}>Подтвердить</Button>
@@ -4961,4 +4929,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-          }
+  }
