@@ -863,6 +863,13 @@ class RemnawaveAPI:
 
         return run_async(with_remnawave_api(_get))
 
+    def get_user_by_uuid_sync(self, uuid: str):
+        """Получить пользователя по UUID (синхронная обёртка)"""
+        async def _get(api: RemnaWaveAPI):
+            return await api.get_user_by_uuid(uuid)
+
+        return run_async(with_remnawave_api(_get))
+
     def get_hwid_devices_sync(self, user_uuid: str):
         async def _get(api: RemnaWaveAPI):
             return await api.get_hwid_devices(user_uuid)
