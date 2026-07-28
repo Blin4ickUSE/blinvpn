@@ -2594,42 +2594,55 @@ export default function App() {
 
             <div className="space-y-3 flex-1">
                 {(vpnPlans || VPN_PLANS_DEFAULT).filter(plan => !plan.isTrial || !isTrialUsed).map((plan) => {
-                    const days = plan.days ?? (plan as any).duration_days;
-                    const months = days === 30 ? 1 : days === 90 ? 3 : days === 180 ? 6 : days === 365 ? 12 : null;
                     const shownPrice = priceFinal(plan, wizardDeviceCount);
-                    const perMonthText = (!plan.isTrial && months && months > 1)
-                      ? `${Math.round(shownPrice / months)} ₽/месяц`
+                    const months = days === 30 ? 1 : days === 90 ? 3 : days === 180 ? 6 : days === 365 ? 12 : null;
+
+                    // Зачёркнутая цена:
+                    // — если есть скидка → показываем полную цену без скидки (выгода от скидки)
+                    // — если скидки нет → показываем цену помесячно × кол-во (выгода от длинного тарифа)
+                    // — для 1 месяца и триала зачёркнутого нет
+                    const hasDiscount = hasAnyProductDiscount || referralInviteDiscountActive;
+                    const fullPrice = !plan.isTrial ? computePlanPrice(plan, wizardDeviceCount) : 0;
+                    const monthlyEquiv = (!plan.isTrial && months && months > 1)
+                      ? computePlanPrice({ ...plan, id: '1m', duration: '1 месяц', price: 99, days: 30 }, wizardDeviceCount) * months
                       : null;
-                    const shown = shownPrice;
-                    const prePromo = !plan.isTrial && hasAnyProductDiscount ? priceAfterReferralOnly(plan, wizardDeviceCount) : null;
+                    const strikePrice = plan.isTrial ? null
+                      : hasDiscount && fullPrice !== shownPrice ? fullPrice
+                      : (!hasDiscount && monthlyEquiv && monthlyEquiv > shownPrice) ? monthlyEquiv
+                      : null;
+
+                    const perMonthText = (!plan.isTrial && months && months > 1)
+                      ? `${Math.round(shownPrice / months)} ₽/мес`
+                      : null;
                     return (
-                    <div 
+                    <div
                         key={plan.id}
                         onClick={() => { setWizardPlan(plan); setWizardStep(2); }}
-                        className={`relative p-3 rounded-xl border transition-all cursor-pointer flex justify-between items-center card-hover ${
+                        className={`relative p-4 rounded-xl border transition-all cursor-pointer flex justify-between items-center card-hover ${
                             plan.isTrial ? 'border-orange-500/60 bg-orange-950/20' :
                             (plan.highlight ? 'border-amber-500/50 bg-zinc-950/70 hover:border-amber-500/70' : 'border-zinc-900 bg-zinc-950/70 hover:border-orange-600/35')
                         }`}
                     >
+                        {/* Левая часть: название + цена за месяц */}
                         <div>
-                            <div className={`font-bold text-lg ${plan.highlight ? 'text-amber-400 flex items-center gap-2' : 'text-white'}`}>
+                            <div className={`font-bold text-lg leading-tight ${plan.highlight ? 'text-amber-400 flex items-center gap-2' : 'text-white'}`}>
                                 {plan.duration}
                                 {plan.highlight && <Crown size={18} fill="currentColor" />}
                             </div>
-                            {perMonthText && <div className="text-xs font-medium text-zinc-500">{perMonthText}</div>}
+                            {perMonthText && <div className="text-xs font-medium text-zinc-500 mt-0.5">{perMonthText}</div>}
                         </div>
-                        <div className="text-right">
+                        {/* Правая часть: цена, по центру высоты */}
+                        <div className="flex flex-col items-end justify-center">
                             {plan.isTrial ? (
-                              <div className="font-bold text-xl text-white">0 ₽</div>
-                            ) : prePromo != null && prePromo !== shown ? (
-                              <div className="flex items-baseline gap-2">
-                                <span className="text-sm font-semibold text-zinc-500 line-through decoration-zinc-500/70 decoration-2 tabular-nums">{prePromo} ₽</span>
-                                <span className={`font-bold text-xl tabular-nums ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>{shown} ₽</span>
-                              </div>
+                              <span className="font-bold text-xl text-white">0 ₽</span>
                             ) : (
-                              <div className={`font-bold text-xl tabular-nums ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>{shown} ₽</div>
+                              <>
+                                {strikePrice != null && (
+                                  <span className="text-xs font-semibold text-zinc-500 line-through decoration-zinc-500/70 decoration-2 tabular-nums leading-none mb-0.5">{strikePrice} ₽</span>
+                                )}
+                                <span className={`font-bold text-xl tabular-nums leading-none ${plan.highlight ? 'text-amber-400' : 'text-white'}`}>{shownPrice} ₽</span>
+                              </>
                             )}
-                            <ChevronRight size={20} className="text-zinc-500 ml-auto mt-1" />
                         </div>
                     </div>
                 );})}
@@ -4912,4 +4925,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-}
+                              }
