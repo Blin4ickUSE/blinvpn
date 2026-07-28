@@ -1370,6 +1370,7 @@ export default function App() {
   const [isBanned, setIsBanned] = useState(false);
   const [banReason, setBanReason] = useState<string>('');
   const [userLoadFailed, setUserLoadFailed] = useState(false);
+  const [userLoadError, setUserLoadError] = useState<string>('');
   // Режим входа: 'telegram' (Mini App) или 'web' (через сайт)
   const [entryMode, setEntryMode] = useState<'telegram' | 'web'>(hasTelegramInitData() ? 'telegram' : 'web');
   // Нужен экран входа через Telegram Login Widget (сайт, нет валидной веб-сессии)
@@ -1548,7 +1549,11 @@ export default function App() {
         setNeedsWebLogin(true);
       } else {
         // AyuGram и другие сторонние клиенты могут не передавать initData корректно —
-        // показываем минимальный экран с кнопкой "Попробовать снова"
+        // показываем минимальный экран с деталями ошибки
+        const hasInitData = hasTelegramInitData();
+        setUserLoadError(
+          `entryMode=${entryMode} | hasInitData=${hasInitData} | tgId=null | platform=${typeof window !== 'undefined' ? (window as any).Telegram?.WebApp?.platform || 'unknown' : 'ssr'}`
+        );
         setUserLoadFailed(true);
       }
       return;
@@ -3844,8 +3849,8 @@ export default function App() {
                   return (
                     <button key={a.id} type="button" onClick={() => setInstructionApp(a.id)}
                       className={`setup-chip w-full flex items-center gap-4 px-4 py-4 rounded-2xl border transition-all text-left ${active ? 'active border-orange-500/50 bg-orange-500/10' : 'border-zinc-800 bg-zinc-950/50'}`}>
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-bold text-sm ${active ? 'bg-orange-600 text-white' : 'bg-zinc-800 text-zinc-400'}`}>
-                        {a.name[0]}
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 overflow-hidden ${active ? 'ring-2 ring-orange-500' : ''}`}>
+                        <img src={`/assets/${a.id}.png`} alt={a.name} className="w-full h-full object-cover" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
@@ -4389,8 +4394,8 @@ export default function App() {
             <div className="absolute -bottom-24 -left-24 w-72 h-72 bg-green-600/10 blur-3xl rounded-full" />
 
             <div className="relative">
-              <div className="w-16 h-16 rounded-2xl bg-orange-600/15 border border-orange-500/20 flex items-center justify-center mb-4">
-                <Shield size={28} className="text-orange-400" />
+              <div className="w-16 h-16 rounded-2xl overflow-hidden mb-4">
+                <img src="/assets/logo.png" alt="BlinVPN" className="w-full h-full object-cover" />
               </div>
 
               <h1 className="text-2xl font-extrabold text-white mb-2 leading-tight">
@@ -4600,33 +4605,19 @@ export default function App() {
         </div>
       </div>
       
-      {/* USER LOAD FAILED — тихий редирект на экран входа */}
+      {/* USER LOAD FAILED — минимальный экран на чёрном фоне */}
       {userLoadFailed && (
-        <div className="fixed inset-0 z-[200] pointer-events-auto flex items-center justify-center p-6">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-xl" />
-          <div className="relative bg-zinc-900/90 border border-zinc-700/60 rounded-3xl px-6 pt-8 pb-8 shadow-2xl w-full max-w-sm text-center">
-            <div className="w-16 h-16 rounded-2xl bg-orange-500/10 border border-orange-500/20 flex items-center justify-center mx-auto mb-5">
-              <AlertTriangle size={30} className="text-orange-400" />
-            </div>
-            <h2 className="text-white text-xl font-bold mb-3">Ошибка авторизации</h2>
-            <p className="text-zinc-400 text-sm leading-relaxed mb-8">
-              Не удалось получить данные сессии. Попробуйте закрыть и открыть приложение заново через Telegram.
+        <div className="fixed inset-0 z-[200] bg-black flex flex-col items-center justify-center px-6 text-center">
+          <p className="text-white text-base leading-relaxed mb-4">
+            Произошла неизвестная ошибка при попытке авторизации. Попробуйте позже.
+          </p>
+          <p className="text-zinc-400 text-sm leading-relaxed mb-6">
+            Если проблема сохраняется, обратитесь в поддержку, указав данные снизу:
+          </p>
+          <div className="w-full max-w-xs bg-zinc-900 rounded-xl px-4 py-3 text-left">
+            <p className="text-zinc-400 text-[11px] font-mono break-all leading-relaxed select-all">
+              {userLoadError || 'tgId=null | initData missing'}
             </p>
-            <button
-              onClick={() => { setUserLoadFailed(false); clearWebIdentity(); try { window.location.reload(); } catch {} }}
-              className="flex items-center justify-center gap-2 w-full py-4 mb-3 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded-2xl transition-all"
-            >
-              Попробовать снова
-            </button>
-            <a
-              href={SUPPORT_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center justify-center gap-2 w-full py-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold rounded-2xl transition-all"
-            >
-              <MessageCircle size={20} />
-              Поддержка
-            </a>
           </div>
         </div>
       )}
@@ -4921,4 +4912,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-  }
+}
