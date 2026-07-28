@@ -20,6 +20,40 @@ TELEGRAM_ADMIN_ID = os.getenv('TELEGRAM_ADMIN_ID', '')
 TELEGRAM_ADMIN_IDS = os.getenv('TELEGRAM_ADMIN_IDS', '')
 TELEGRAM_SUPPORT_GROUP_ID = os.getenv('TELEGRAM_SUPPORT_GROUP_ID', '')
 
+# Форум-группа для служебных уведомлений
+NOTIFY_GROUP_ID = os.getenv('NOTIFY_GROUP_ID', '')
+NOTIFY_THREAD_DEPOSITS  = os.getenv('NOTIFY_THREAD_DEPOSITS', '')   # Пополнения
+NOTIFY_THREAD_ERRORS    = os.getenv('NOTIFY_THREAD_ERRORS', '')     # Ошибки
+NOTIFY_THREAD_WITHDRAWALS = os.getenv('NOTIFY_THREAD_WITHDRAWALS', '')  # Заявки на вывод
+
+
+def send_to_forum_topic(message: str, thread_id_str: str, reply_markup: dict = None) -> bool:
+    """Отправить сообщение в топик форум-группы. Fallback → личка админов."""
+    if not TELEGRAM_BOT_TOKEN:
+        return False
+    group_id = NOTIFY_GROUP_ID.strip()
+    thread_id = thread_id_str.strip() if thread_id_str else ''
+    if group_id and thread_id:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            data: dict = {
+                'chat_id': int(group_id),
+                'message_thread_id': int(thread_id),
+                'text': message,
+                'parse_mode': 'HTML',
+            }
+            if reply_markup:
+                data['reply_markup'] = reply_markup
+            resp = requests.post(url, json=data, timeout=10)
+            if resp.status_code == 200 and resp.json().get('ok'):
+                return True
+            logger.warning("send_to_forum_topic failed: %s", resp.text[:200])
+        except Exception as e:
+            logger.error("send_to_forum_topic error: %s", e)
+    # Fallback — личка всех админов
+    return send_notification_to_admin(message, reply_markup)
+
+
 
 def get_admin_telegram_ids() -> List[int]:
     ids: List[int] = []
@@ -170,9 +204,8 @@ def send_notification_to_admin(message: str, reply_markup: dict = None) -> bool:
 def send_withdrawal_request_to_admin(transaction_id: int, user_id: int, telegram_id: int, 
                                      username: str, amount: float, method: str, 
                                      details: str) -> bool:
-    """Отправить запрос на вывод админу с кнопками Одобрить/Отказать"""
-    admin_ids = get_admin_telegram_ids()
-    if not admin_ids or not TELEGRAM_BOT_TOKEN:
+    """Отправить запрос на вывод в топик форума (или личку админов)."""
+    if not TELEGRAM_BOT_TOKEN:
         return False
     
     message = notify_msgs.build_withdrawal_admin_request_message(
@@ -188,10 +221,7 @@ def send_withdrawal_request_to_admin(transaction_id: int, user_id: int, telegram
         ]
     }
     
-    sent_any = False
-    for admin_id in admin_ids:
-        sent_any = send_notification_to_user(int(admin_id), message, reply_markup) or sent_any
-    return sent_any
+    return send_to_forum_topic(message, NOTIFY_THREAD_WITHDRAWALS, reply_markup)
 
 def send_formatted_notification(telegram_id: int, message: str, parse_mode: str = 'HTML', 
                                  reply_markup: dict = None) -> bool:
@@ -745,4 +775,3 @@ def sync_keys_with_remnawave() -> Dict:
         import traceback
         traceback.print_exc()
         return {'success': False, 'error': str(e)}
-
