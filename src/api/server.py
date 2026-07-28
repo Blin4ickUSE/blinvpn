@@ -2200,10 +2200,25 @@ def get_device_hwid_devices(device_id: int):
         hwid_devices = remnawave.remnawave_api.get_hwid_devices_sync(key_uuid)
         if not isinstance(hwid_devices, list):
             hwid_devices = []
-        formatted = [
-            remnawave.RemnaWaveAPI.format_hwid_device_for_client(d)
-            for d in hwid_devices if isinstance(d, dict)
-        ]
+
+        # Получаем sub_last_user_agent пользователя для enrichment устройств
+        sub_last_ua = None
+        try:
+            rw_user = remnawave.remnawave_api.get_user_by_uuid_sync(key_uuid)
+            if rw_user and hasattr(rw_user, 'sub_last_user_agent'):
+                sub_last_ua = rw_user.sub_last_user_agent
+        except Exception:
+            pass
+
+        formatted = []
+        for d in hwid_devices:
+            if not isinstance(d, dict):
+                continue
+            out = remnawave.RemnaWaveAPI.format_hwid_device_for_client(d)
+            # Если у устройства нет userAgent — используем sub_last_user_agent
+            if not out.get('userAgent') and not out.get('user_agent') and sub_last_ua:
+                out['userAgent'] = sub_last_ua
+            formatted.append(out)
         return jsonify({'hwid_devices': formatted})
     except Exception as e:
         logger.error(f"Error fetching HWID devices for device {device_id}: {e}")
@@ -2537,15 +2552,15 @@ def extend_subscription():
         
         new_expiry_str = new_expiry.isoformat()
         
-        # Если продлеваем после триала/лимитной подписки — снимаем лимит и сбрасываем локальный учёт
-        needs_unlimit = (plan_type == 'trial') or (current_traffic_limit > 0 and current_traffic_limit <= int(15 * (1024 ** 3)))
+        # Если продлеваем после триала/лимитной подписки — ставим 2 ТБ с помесячным сбросом
+        needs_reset = (plan_type == 'trial') or (current_traffic_limit > 0 and current_traffic_limit <= int(15 * (1024 ** 3)))
 
         new_traffic_limit = float(current_traffic_limit)
         new_traffic_used = float(current_traffic_used)
-        if needs_unlimit:
-            new_traffic_limit = 0.0
+        if needs_reset:
+            new_traffic_limit = float(remnawave.VPN_TRAFFIC_LIMIT_BYTES)
             new_traffic_used = 0.0
-        elif plan_type == 'vpn' and not needs_unlimit:
+        elif plan_type == 'vpn':
             new_traffic_limit = float(remnawave.VPN_TRAFFIC_LIMIT_BYTES)
 
         # Обновляем ключ в Remnawave
@@ -2556,14 +2571,16 @@ def extend_subscription():
                     "expire_at": new_expiry,
                     "status": remnawave.UserStatus.ACTIVE,
                     "hwid_device_limit": int(new_dev),
+                    "traffic_limit_bytes": remnawave.VPN_TRAFFIC_LIMIT_BYTES,
+                    "traffic_limit_strategy": remnawave.TrafficLimitStrategy.MONTH,
                 }
-                if needs_unlimit:
-                    update_kwargs["traffic_limit_bytes"] = 0
-                    update_kwargs["traffic_limit_strategy"] = remnawave.TrafficLimitStrategy.NO_RESET
-                elif plan_type == 'vpn':
-                    update_kwargs["traffic_limit_bytes"] = remnawave.VPN_TRAFFIC_LIMIT_BYTES
-                    update_kwargs["traffic_limit_strategy"] = remnawave.TrafficLimitStrategy.MONTH
                 remnawave.remnawave_api.update_user_sync(**update_kwargs)
+                # Сбрасываем использованный трафик в Remnawave при переходе с триала
+                if needs_reset:
+                    try:
+                        remnawave.remnawave_api.reset_user_traffic_sync(key_uuid)
+                    except Exception as e:
+                        logger.warning(f"Traffic reset failed for {key_uuid}: {e}")
                 if not remnawave.remnawave_api.ensure_hwid_device_limit_sync(key_uuid, int(new_dev)):
                     raise remnawave.RemnaWaveAPIError(
                         f"hwidDeviceLimit not applied in Remnawave (expected {new_dev})"
@@ -2576,7 +2593,7 @@ def extend_subscription():
                 return jsonify({'error': 'Failed to extend subscription in VPN system'}), 500
         
         # Обновляем ключ в БД
-        new_plan_type = 'vpn' if needs_unlimit else plan_type
+        new_plan_type = 'vpn' if needs_reset else plan_type
         cursor.execute("""
             UPDATE vpn_keys SET 
                 status = 'Active',
