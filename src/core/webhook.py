@@ -20,15 +20,16 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 def notify_admin_about_deposit(user: Dict, amount: float, method: str, provider: str):
-    """Уведомить администратора только о успешном пополнении баланса"""
-    core.send_notification_to_admin(
+    """Уведомить в топик форума о успешном пополнении баланса"""
+    core.send_to_forum_topic(
         notify_msgs.build_admin_deposit_notification(
             float(amount),
             user.get('username', 'N/A'),
             user.get('telegram_id', 'N/A'),
             method,
             provider,
-        )
+        ),
+        core.NOTIFY_THREAD_DEPOSITS
     )
 
 
