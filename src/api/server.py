@@ -22,7 +22,7 @@ from src.database import database
 from src.core import core
 from src.core import messages as notify_msgs
 from src.core.blacklist import start_blacklist_updater, update_blacklist
-from src.api import remnawave, heleket, platega, cryptopay
+from src.api import remnawave, heleket, platega
 from src.api.payment_poller import start_payment_poller
 from src.core import payment_wait
 
@@ -199,77 +199,6 @@ def notify_referral_income_credited(referral_result: dict | None, *, extended: b
         logger.error("Failed to notify referrers: %s", e)
 
 
-def reconcile_pending_cryptopay_for_user(user_id: int) -> None:
-    """
-    Fallback reconciliation for CryptoPay invoices in case webhook is delayed/lost.
-    Checks user's recent pending invoices and credits paid ones exactly once.
-    """
-    if not cryptopay.cryptopay_api.is_configured:
-        return
-    conn = None
-    try:
-        conn = database.get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT id, payment_id
-            FROM transactions
-            WHERE user_id = ?
-              AND payment_provider = 'CryptoPay'
-              AND status = 'Pending'
-            ORDER BY id DESC
-            LIMIT 5
-            """,
-            (int(user_id),),
-        )
-        pending_rows = cursor.fetchall() or []
-        conn.close()
-        conn = None
-        for row in pending_rows:
-            payment_id = str(row["payment_id"] or "")
-            if not payment_id.startswith("cryptopay:"):
-                continue
-            raw_invoice_id = payment_id.split(":", 1)[1]
-            if not raw_invoice_id.isdigit():
-                continue
-            invoice = cryptopay.cryptopay_api.get_invoice(int(raw_invoice_id))
-            if not isinstance(invoice, dict):
-                continue
-            status = str(invoice.get("status") or "").strip().lower()
-            if status != "paid":
-                continue
-            amount_raw = (
-                invoice.get("paid_fiat_amount")
-                or invoice.get("fiat_amount")
-                or invoice.get("amount")
-                or 0
-            )
-            try:
-                amount = float(str(amount_raw).replace(",", "."))
-            except Exception:
-                amount = 0.0
-            from src.core.webhook import credit_deposit_from_payment
-
-            credited = credit_deposit_from_payment(
-                user_id=int(user_id),
-                amount=amount,
-                payment_id=payment_id,
-                provider="CryptoPay",
-                method_name="CryptoPay",
-            )
-            if credited:
-                logger.info(
-                    "CryptoPay reconciled pending payment %s for user_id=%s",
-                    payment_id,
-                    user_id,
-                )
-    except Exception as e:
-        logger.warning("CryptoPay reconcile failed for user_id=%s: %s", user_id, e)
-        try:
-            if conn:
-                conn.close()
-        except Exception:
-            pass
 
 
 @app.route('/api/telegram/webhook', methods=['POST'])
@@ -306,16 +235,6 @@ def telegram_webhook():
     return jsonify({"ok": True}), 200
 
 
-@app.route('/cryptopay', methods=['POST'])
-@app.route('/api/cryptopay', methods=['POST'])
-def cryptopay_webhook_proxy():
-    """
-    Fallback CryptoPay webhook endpoint inside API service.
-    Uses the same processing logic as dedicated webhook service to avoid
-    payment loss when reverse-proxy/webhook target points to API container.
-    """
-    from src.core.webhook import handle_cryptopay_webhook
-    return handle_cryptopay_webhook()
 
 
 def parse_env_file() -> dict[str, str]:
@@ -1220,7 +1139,7 @@ def get_user_info():
             user = database.get_user_by_telegram_id(telegram_id)
 
     # Fallback auto-reconcile for CryptoPay before returning live balance.
-    reconcile_pending_cryptopay_for_user(int(user['id']))
+    # reconcile cryptopay removed
     user = database.get_user_by_telegram_id(telegram_id)
     
     # Проверка бана (включая черный список)
@@ -1499,44 +1418,6 @@ def create_payment():
                     'payment_id': payment.get('id'),
                     'payment_url': payment.get('redirect_url'),
                     'status': payment.get('status', 'pending'),
-                })
-
-        elif method == 'cryptopay' or method == 'cryptobot':
-            # CryptoPay (CryptoBot): invoice link
-            inv = cryptopay.cryptopay_api.create_invoice(
-                user_id=int(user_id),
-                amount_rub=net_amount,
-                description="Пополнение баланса (криптовалюта)",
-            )
-            if inv:
-                # Create pending tx for webhook/reconcile idempotency.
-                try:
-                    conn = database.get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """
-                        INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
-                        VALUES (?, 'deposit', ?, 'Pending', 'CryptoPay', 'CryptoPay', ?, ?)
-                        """,
-                        (
-                            int(user_id),
-                            net_amount,
-                            f"cryptopay:{inv.invoice_id}",
-                            "Ожидание оплаты CryptoPay",
-                        ),
-                    )
-                    conn.commit()
-                    conn.close()
-                except Exception:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
-                return jsonify({
-                    'payment_id': f"cryptopay:{inv.invoice_id}",
-                    'payment_url': inv.pay_url,
-                    'status': inv.status,
-                    'payload': inv.payload,
                 })
 
         elif method == 'tg_stars' or method == 'telegram_stars':
@@ -4688,8 +4569,6 @@ def request_withdrawal():
     min_limits = {
         'balance': 1,
         'card': 1000,
-        'cryptobot': 10,
-        'crypto': 300
     }
     if method not in min_limits:
         return jsonify({'error': f'Unknown withdrawal method: {method}'}), 400
@@ -4756,48 +4635,32 @@ def request_withdrawal():
                 'message': f'Переведено {amount}₽ на основной баланс'
             })
         
-        elif method in ('card', 'cryptobot', 'crypto'):
-            # Запрос на вывод - списываем с partner_balance и создаем заявку
+        elif method == 'card':
+            if not card_number:
+                return jsonify({'error': 'Номер карты обязателен'}), 400
+            description = f'Заявка на вывод {amount}₽ на карту РФ. Номер: {card_number}'
+            details = f"💳 Карта: {card_number}"
+
             cursor.execute("""
                 UPDATE users SET partner_balance = partner_balance - ? WHERE id = ?
             """, (amount, user['id']))
-            
-            # Создаем заявку на вывод
-            if method == 'card':
-                if not card_number:
-                    return jsonify({'error': 'Номер карты обязателен'}), 400
-                description = f'Заявка на вывод {amount}₽ на карту РФ. Номер: {card_number}'
-                details = f"💳 Карта: {card_number}"
-            elif method == 'cryptobot':
-                description = f'Заявка на вывод {amount}₽ в CryptoBot'
-                details = "🤖 CryptoBot"
-            else:
-                if crypto_net not in ('TON', 'TRC-20'):
-                    return jsonify({'error': 'Выберите сеть TON или TRC-20'}), 400
-                if crypto_net == 'TRC-20' and not str(crypto_addr).startswith('T'):
-                    return jsonify({'error': 'Адрес TRC-20 должен начинаться с T'}), 400
-                description = f'Заявка на вывод {amount}₽ в криптовалюте. Сеть: {crypto_net}, Адрес: {crypto_addr}'
-                details = f"🌐 Сеть: {crypto_net}\n📝 Адрес: {crypto_addr}"
-            
+
             cursor.execute("""
                 INSERT INTO transactions (user_id, type, amount, status, description, payment_method)
                 VALUES (?, 'withdrawal_request', ?, 'Pending', ?, ?)
-            """, (user['id'], -amount, description, 'Карта' if method == 'card' else ('CryptoBot' if method == 'cryptobot' else 'Crypto')))
-            
+            """, (user['id'], -amount, description, 'Карта'))
+
             transaction_id = cursor.lastrowid
             conn.commit()
-            
-            # Отправляем запрос ТОЛЬКО админу с кнопками Принять/Отказать
+
             username = user.get('username', 'N/A')
-            method_name = 'Банковская карта' if method == 'card' else ('CryptoBot' if method == 'cryptobot' else 'Криптовалюта')
-            
             core.send_withdrawal_request_to_admin(
                 transaction_id=transaction_id,
                 user_id=user['id'],
                 telegram_id=telegram_id,
                 username=username,
                 amount=amount,
-                method=method_name,
+                method='Банковская карта',
                 details=details
             )
 
@@ -5798,7 +5661,7 @@ def get_payment_settings():
             settings[provider][row['setting_key']] = row['setting_value']
         
         # Заполняем пустыми значениями если нет в БД
-        providers = ['heleket', 'platega', 'cryptobot']
+        providers = ['heleket', 'platega']
         for p in providers:
             if p not in settings:
                 settings[p] = {'enabled': '0'}
@@ -5824,24 +5687,6 @@ def update_payment_settings(provider: str):
             """, (provider, key, str(value)))
         conn.commit()
         
-        # Обновляем переменные окружения в памяти (опционально)
-        # Это позволит применить настройки без перезапуска
-        if provider == 'heleket':
-            if 'merchant' in data:
-                os.environ['HELEKET_MERCHANT'] = str(data['merchant'])
-            if 'api_key' in data:
-                os.environ['HELEKET_API_KEY'] = str(data['api_key'])
-        elif provider == 'platega':
-            if 'merchant_id' in data:
-                os.environ['PLATEGA_MERCHANT_ID'] = str(data['merchant_id'])
-            if 'secret_key' in data:
-                os.environ['PLATEGA_SECRET_KEY'] = str(data['secret_key'])
-        elif provider == 'cryptobot':
-            if 'api_token' in data:
-                token = str(data['api_token'])
-                os.environ['CRYPTOPAY_API_TOKEN'] = token
-                os.environ['CRYPTOBOT_API_TOKEN'] = token
-
         # Persist payment settings to .env automatically
         env_updates: dict[str, str] = {}
         if provider == 'heleket':
@@ -5854,10 +5699,6 @@ def update_payment_settings(provider: str):
                 env_updates['PLATEGA_MERCHANT_ID'] = str(data['merchant_id'])
             if 'secret_key' in data:
                 env_updates['PLATEGA_SECRET_KEY'] = str(data['secret_key'])
-        elif provider == 'cryptobot':
-            if 'api_token' in data:
-                env_updates['CRYPTOPAY_API_TOKEN'] = str(data['api_token'])
-                env_updates['CRYPTOBOT_API_TOKEN'] = str(data['api_token'])
 
         if env_updates:
             update_env_values(env_updates)
