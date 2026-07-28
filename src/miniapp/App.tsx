@@ -1547,6 +1547,8 @@ export default function App() {
         clearWebIdentity();
         setNeedsWebLogin(true);
       } else {
+        // AyuGram и другие сторонние клиенты могут не передавать initData корректно —
+        // показываем минимальный экран с кнопкой "Попробовать снова"
         setUserLoadFailed(true);
       }
       return;
@@ -4598,39 +4600,29 @@ export default function App() {
         </div>
       </div>
       
-      {/* USER LOAD FAILED BANNER */}
+      {/* USER LOAD FAILED — тихий редирект на экран входа */}
       {userLoadFailed && (
         <div className="fixed inset-0 z-[200] pointer-events-auto flex items-center justify-center p-6">
-          {/* Heavy backdrop blur */}
           <div className="absolute inset-0 bg-black/60 backdrop-blur-xl" />
-          <div className="relative bg-zinc-900/90 border border-zinc-700/60 rounded-3xl px-6 pt-8 pb-8 shadow-2xl w-full max-w-sm">
-            {/* Icon */}
-            <div className="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mx-auto mb-5">
-              <AlertTriangle size={30} className="text-red-400" />
+          <div className="relative bg-zinc-900/90 border border-zinc-700/60 rounded-3xl px-6 pt-8 pb-8 shadow-2xl w-full max-w-sm text-center">
+            <div className="w-16 h-16 rounded-2xl bg-orange-500/10 border border-orange-500/20 flex items-center justify-center mx-auto mb-5">
+              <AlertTriangle size={30} className="text-orange-400" />
             </div>
-            {/* Text */}
-            <h2 className="text-white text-xl font-bold text-center mb-3">
-              Не удалось определить пользователя
-            </h2>
-            <p className="text-zinc-400 text-sm text-center leading-relaxed mb-8">
-              {entryMode === 'web'
-                ? 'Не удалось загрузить профиль. Попробуйте войти через Telegram заново.'
-                : 'Возможно, вы открываете приложение через сторонний браузер или произошла ошибка. Пожалуйста, откройте его через Telegram.'}
+            <h2 className="text-white text-xl font-bold mb-3">Ошибка авторизации</h2>
+            <p className="text-zinc-400 text-sm leading-relaxed mb-8">
+              Не удалось получить данные сессии. Попробуйте закрыть и открыть приложение заново через Telegram.
             </p>
-            {entryMode === 'web' && (
-              <button
-                onClick={() => { clearWebIdentity(); try { window.location.reload(); } catch {} }}
-                className="flex items-center justify-center gap-2 w-full py-4 mb-3 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded-2xl transition-all"
-              >
-                Войти заново
-              </button>
-            )}
-            {/* Support button */}
+            <button
+              onClick={() => { setUserLoadFailed(false); clearWebIdentity(); try { window.location.reload(); } catch {} }}
+              className="flex items-center justify-center gap-2 w-full py-4 mb-3 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded-2xl transition-all"
+            >
+              Попробовать снова
+            </button>
             <a
               href={SUPPORT_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center justify-center gap-2 w-full py-4 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded-2xl transition-all"
+              className="flex items-center justify-center gap-2 w-full py-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold rounded-2xl transition-all"
             >
               <MessageCircle size={20} />
               Поддержка
