@@ -404,7 +404,7 @@ class AdminErrorReporterHandler(logging.Handler):
             }
             _reporting.active = True
             try:
-                core.send_notification_to_admin(text, reply_markup=reply_markup)
+                core.send_to_forum_topic(text, core.NOTIFY_THREAD_ERRORS, reply_markup=reply_markup)
             finally:
                 _reporting.active = False
         except Exception as e:
