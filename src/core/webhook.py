@@ -6,7 +6,7 @@ import logging
 import json
 from typing import Dict, Any, Optional
 from flask import Flask, request, jsonify
-from src.api import heleket, platega, cryptopay
+from src.api import heleket, platega
 from src.database import database
 from src.core import core
 from src.core import messages as notify_msgs
@@ -297,113 +297,6 @@ def platega_webhook():
 
 
 
-def handle_cryptopay_webhook():
-    """Shared webhook handler for Crypto Pay API (CryptoBot)."""
-    try:
-        raw_body = request.get_data(cache=True) or b""
-        signature = (
-            request.headers.get("crypto-pay-api-signature", "")
-            or request.headers.get("Crypto-Pay-API-Signature", "")
-            or ""
-        )
-        signature = str(signature).strip().lower()
-        if not cryptopay.cryptopay_api.verify_webhook_signature(raw_body, signature):
-            logger.error(
-                "CryptoPay webhook: invalid signature (token_configured=%s, sig_present=%s, body_len=%s)",
-                cryptopay.cryptopay_api.is_configured,
-                bool(signature),
-                len(raw_body),
-            )
-            return jsonify({"error": "Invalid signature"}), 401
-
-        data = request.json if request.is_json else None
-        if not isinstance(data, dict):
-            try:
-                data = json.loads(raw_body.decode("utf-8") or "{}")
-            except Exception:
-                data = {}
-
-        update_type = str(data.get("update_type") or "").strip().lower().replace("-", "_")
-
-        # CryptoPay may send invoice details in different wrappers.
-        invoice = {}
-        for key in ("payload", "invoice", "data", "result"):
-            value = data.get(key)
-            if isinstance(value, dict):
-                invoice = value
-                break
-            if isinstance(value, str):
-                try:
-                    parsed = json.loads(value)
-                    if isinstance(parsed, dict):
-                        invoice = parsed
-                        break
-                except Exception:
-                    pass
-        if not invoice:
-            # Fallback: some versions put invoice fields at root level.
-            invoice = data
-
-        payload_str = str(invoice.get("payload") or "")
-        invoice_id = invoice.get("invoice_id") or data.get("invoice_id")
-        try:
-            # For fiat invoices amount can be sent as `fiat_amount` or `paid_fiat_amount`.
-            # Keep broad fallbacks for backward compatibility.
-            fiat_amount = (
-                invoice.get("paid_fiat_amount")
-                or invoice.get("fiat_amount")
-                or invoice.get("amount")
-                or data.get("paid_fiat_amount")
-                or data.get("fiat_amount")
-                or data.get("amount")
-                or 0
-            )
-            amount = float(str(fiat_amount).replace(",", "."))
-        except Exception:
-            amount = 0.0
-
-        invoice_status = str(invoice.get("status") or data.get("status") or "").strip().lower()
-        logger.info(
-            "CryptoPay webhook: update_type=%s status=%s invoice_id=%s payload=%s amount=%s",
-            update_type,
-            invoice_status,
-            invoice_id,
-            payload_str[:100],
-            amount,
-        )
-
-        # Primary event is `invoice_paid`, but some integrations send only status=paid.
-        is_paid_event = update_type == "invoice_paid" or invoice_status == "paid"
-        if not is_paid_event:
-            return jsonify({"status": "ok"}), 200
-
-        user_id = cryptopay.cryptopay_api.extract_user_id_from_payload(payload_str)
-        if not user_id:
-            logger.error("CryptoPay webhook: cannot extract user_id from payload=%s", payload_str)
-            return jsonify({"status": "ok"}), 200
-
-        if not invoice_id:
-            invoice_id = payload_str  # fallback uniqueness
-        payment_id = f"cryptopay:{invoice_id}"
-
-        credit_deposit_from_payment(
-            user_id=int(user_id),
-            amount=amount,
-            payment_id=payment_id,
-            provider="CryptoPay",
-            method_name="CryptoPay",
-        )
-        return jsonify({"status": "ok"}), 200
-    except Exception as e:
-        logger.error("CryptoPay webhook error: %s", e)
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/cryptopay', methods=['POST'])
-def cryptopay_webhook():
-    """Webhook from Crypto Pay API (CryptoBot)."""
-    return handle_cryptopay_webhook()
-
 @app.route('/health', methods=['GET'])
 def health_check():
     """Проверка здоровья сервиса"""
@@ -411,7 +304,6 @@ def health_check():
         'status': 'ok',
         'heleket_configured': heleket.heleket_api.is_configured,
         'platega_configured': platega.platega_api.is_configured,
-        'cryptopay_configured': cryptopay.cryptopay_api.is_configured,
     })
 
 if __name__ == '__main__':
