@@ -6,7 +6,7 @@ import logging
 import json
 from typing import Dict, Any, Optional
 from flask import Flask, request, jsonify
-from src.api import heleket, platega, rollypay, cryptopay, paypear
+from src.api import heleket, platega, cryptopay
 from src.database import database
 from src.core import core
 from src.core import messages as notify_msgs
@@ -295,140 +295,6 @@ def platega_webhook():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/rollypay', methods=['POST'])
-def rollypay_webhook():
-    """Обработка webhook от RollyPay (СБП). Документация: https://docs.rollypay.io/api/callbacks/"""
-    try:
-        raw_body = request.get_data(cache=True) or b""
-        signature = request.headers.get("X-Signature", "") or request.headers.get("x-signature", "")
-        timestamp = request.headers.get("X-Timestamp", "") or request.headers.get("x-timestamp", "")
-
-        if rollypay.rollypay_api.can_verify_webhooks:
-            if not rollypay.rollypay_api.verify_webhook_signature(
-                raw_body, str(timestamp), str(signature)
-            ):
-                logger.error("RollyPay webhook: неверная подпись")
-                return jsonify({"error": "Invalid signature"}), 403
-
-        try:
-            data = json.loads(raw_body.decode("utf-8") or "{}")
-        except Exception:
-            data = request.json if request.is_json else {}
-
-        logger.info("RollyPay webhook: %s", data)
-
-        event_type = str(data.get("event_type") or "").strip().lower()
-        status = str(data.get("status") or "").strip().lower()
-        if event_type != "payment.paid" and status != "paid":
-            return jsonify({"status": "ok"}), 200
-
-        order_id = str(data.get("order_id") or "")
-        payment_id = str(data.get("payment_id") or order_id)
-        try:
-            amount = float(str(data.get("amount", "0")).replace(",", "."))
-        except (ValueError, TypeError):
-            amount = 0.0
-
-        user_id = None
-        parts = order_id.split("_")
-        if len(parts) >= 2 and parts[0] == "rollypay":
-            try:
-                user_id = int(parts[1])
-            except ValueError:
-                pass
-
-        if not user_id:
-            logger.error("RollyPay webhook: не удалось извлечь user_id из order_id %s", order_id)
-            return jsonify({"status": "ok"}), 200
-
-        if amount <= 0:
-            logger.error("RollyPay webhook: некорректная сумма %s", data.get("amount"))
-            return jsonify({"status": "ok"}), 200
-
-        credit_deposit_from_payment(
-            user_id=user_id,
-            amount=amount,
-            payment_id=payment_id,
-            provider="RollyPay",
-            method_name="СБП",
-        )
-        return jsonify({"status": "ok"}), 200
-    except Exception as e:
-        logger.error("RollyPay webhook error: %s", e)
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/paypear', methods=['POST'])
-def paypear_webhook():
-    """Обработка webhook от PayPear (российские карты). Документация: https://paypear.ru/docs/"""
-    try:
-        raw_body = request.get_data(cache=True) or b''
-
-        try:
-            data = json.loads(raw_body.decode('utf-8') or '{}')
-        except Exception:
-            data = request.json if request.is_json else {}
-
-        received_signature = str(data.get('signature') or '')
-
-        if paypear.paypear_api.can_verify_webhooks:
-            if not paypear.paypear_api.verify_webhook_signature(raw_body, received_signature):
-                logger.error('PayPear webhook: неверная подпись')
-                return jsonify({'status': False}), 403
-
-        logger.info('PayPear webhook: %s', data)
-
-        event = str(data.get('event') or '').strip().lower()
-        obj = data.get('object') if isinstance(data.get('object'), dict) else {}
-
-        paypear_status = str(obj.get('status') or '').upper()
-        is_paid = event == 'payment.confirmed' or paypear_status in paypear.PAYPEAR_SUCCESS_STATUSES
-        if not is_paid:
-            return jsonify({'status': True}), 200
-
-        order_id = str(obj.get('order_id') or '')
-        payment_id = str(obj.get('id') or order_id)
-
-        amount = 0.0
-        amount_info = obj.get('amount')
-        if isinstance(amount_info, dict):
-            try:
-                amount = float(str(amount_info.get('value') or '0').replace(',', '.'))
-            except (TypeError, ValueError):
-                amount = 0.0
-        elif amount_info is not None:
-            try:
-                amount = float(str(amount_info).replace(',', '.'))
-            except (TypeError, ValueError):
-                amount = 0.0
-
-        user_id = None
-        parts = order_id.split('_')
-        if len(parts) >= 2 and parts[0] == 'paypear':
-            try:
-                user_id = int(parts[1])
-            except ValueError:
-                pass
-
-        if not user_id:
-            logger.error('PayPear webhook: не удалось извлечь user_id из order_id %s', order_id)
-            return jsonify({'status': True}), 200
-
-        if amount <= 0:
-            logger.error('PayPear webhook: некорректная сумма %s', amount_info)
-            return jsonify({'status': True}), 200
-
-        credit_deposit_from_payment(
-            user_id=user_id,
-            amount=amount,
-            payment_id=payment_id,
-            provider='PayPear',
-            method_name='Карта',
-        )
-        return jsonify({'status': True}), 200
-    except Exception as e:
-        logger.error('PayPear webhook error: %s', e)
-        return jsonify({'status': True}), 200
 
 
 def handle_cryptopay_webhook():
@@ -545,8 +411,7 @@ def health_check():
         'status': 'ok',
         'heleket_configured': heleket.heleket_api.is_configured,
         'platega_configured': platega.platega_api.is_configured,
-        'rollypay_configured': rollypay.rollypay_api.is_configured,
-        'paypear_configured': paypear.paypear_api.is_configured,
+        'cryptopay_configured': cryptopay.cryptopay_api.is_configured,
     })
 
 if __name__ == '__main__':
