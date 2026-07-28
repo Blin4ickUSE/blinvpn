@@ -2595,6 +2595,7 @@ export default function App() {
             <div className="space-y-3 flex-1">
                 {(vpnPlans || VPN_PLANS_DEFAULT).filter(plan => !plan.isTrial || !isTrialUsed).map((plan) => {
                     const shownPrice = priceFinal(plan, wizardDeviceCount);
+                    const days = plan.days ?? (plan as any).duration_days;
                     const months = days === 30 ? 1 : days === 90 ? 3 : days === 180 ? 6 : days === 365 ? 12 : null;
 
                     // Зачёркнутая цена:
@@ -4925,4 +4926,4 @@ export default function App() {
       )}
     </AnimatedBackground>
   );
-                              }
+    }
