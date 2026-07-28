@@ -384,6 +384,22 @@ create_env_file() {
     prompt "  ${BOLD}Токен бота${NC}  (основной бот): " TELEGRAM_BOT_TOKEN
     prompt "  ${BOLD}ID админа${NC}   (ваш Telegram ID): " TELEGRAM_ADMIN_ID
 
+    # ── Форум-группа уведомлений ────────────────────────────
+    section "Форум-группа для служебных уведомлений"
+    echo -e "  Создайте группу-форум в Telegram, добавьте бота и получите ID группы."
+    echo -e "  Оставьте поле пустым — уведомления будут приходить в личку админа.\n"
+    prompt "  ${BOLD}ID форум-группы${NC}  (например -1001234567890, или Enter чтобы пропустить): " NOTIFY_GROUP_ID
+    if [[ -n "$NOTIFY_GROUP_ID" ]]; then
+        prompt "  ${BOLD}ID ветки «Пополнения»${NC}  (message_thread_id топика): " NOTIFY_THREAD_DEPOSITS
+        prompt "  ${BOLD}ID ветки «Ошибки»${NC}      (message_thread_id топика): " NOTIFY_THREAD_ERRORS
+        prompt "  ${BOLD}ID ветки «Выводы»${NC}       (message_thread_id топика): " NOTIFY_THREAD_WITHDRAWALS
+    else
+        NOTIFY_GROUP_ID=""
+        NOTIFY_THREAD_DEPOSITS=""
+        NOTIFY_THREAD_ERRORS=""
+        NOTIFY_THREAD_WITHDRAWALS=""
+    fi
+
     # ── Бот поддержки ───────────────────────────────────────
     section "Бот поддержки"
     prompt "  ${BOLD}Токен бота поддержки${NC}: " SUPPORT_BOT_TOKEN
@@ -411,6 +427,12 @@ TELEGRAM_ADMIN_ID=${TELEGRAM_ADMIN_ID}
 BOT_USERNAME=blinvpn_bot
 VITE_BOT_USERNAME=blinvpn_bot
 
+# форум-группа уведомлений
+NOTIFY_GROUP_ID=${NOTIFY_GROUP_ID}
+NOTIFY_THREAD_DEPOSITS=${NOTIFY_THREAD_DEPOSITS}
+NOTIFY_THREAD_ERRORS=${NOTIFY_THREAD_ERRORS}
+NOTIFY_THREAD_WITHDRAWALS=${NOTIFY_THREAD_WITHDRAWALS}
+
 # бот поддержки
 SUPPORT_BOT_TOKEN=${SUPPORT_BOT_TOKEN}
 SUPPORT_GROUP_ID=${SUPPORT_GROUP_ID}
@@ -433,22 +455,6 @@ PLATEGA_API_URL=https://app.platega.io
 PLATEGA_MERCHANT_ID=
 PLATEGA_SECRET_KEY=
 
-# RollyPay
-ROLLYPAY_API_URL=https://rollypay.io/api/v1
-ROLLYPAY_API_KEY=
-ROLLYPAY_SIGNING_SECRET=
-ROLLYPAY_TERMINAL_ID=
-
-# PayPear (российские карты, комиссия 6%)
-PAYPEAR_API_URL=https://api.paypear.ru/v1
-PAYPEAR_SHOP_ID=
-PAYPEAR_SECRET_KEY=
-# Метод оплаты для карт: type из Pear → Настройки → Способы оплаты (например bank_card)
-# PAYPEAR_PAYMENT_METHOD=bank_card
-
-# CryptoBot
-CRYPTOPAY_API_URL=https://pay.crypt.bot/api
-CRYPTOPAY_API_TOKEN=
 
 # ===== URLs =====
 MINIAPP_URL=https://${domain}${port_suffix}
