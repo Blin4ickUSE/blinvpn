@@ -22,7 +22,7 @@ from src.database import database
 from src.core import core
 from src.core import messages as notify_msgs
 from src.core.blacklist import start_blacklist_updater, update_blacklist
-from src.api import remnawave, heleket, platega, rollypay, cryptopay, paypear
+from src.api import remnawave, heleket, platega, cryptopay
 from src.api.payment_poller import start_payment_poller
 from src.core import payment_wait
 
@@ -1434,43 +1434,7 @@ def create_payment():
                 })
 
         elif method in ('paypear_card_ru', 'paypear_card', 'paypear'):
-            # Российские карты через PayPear (комиссия 6%)
-            if not paypear.paypear_api.is_configured:
-                return jsonify({
-                    'error': 'PayPear не настроен. Укажите PAYPEAR_SHOP_ID и PAYPEAR_SECRET_KEY в .env и перезапустите контейнер api.',
-                }), 503
-            payment = paypear.paypear_api.create_card_payment(
-                net_amount,
-                int(user_id),
-                description='Пополнение баланса (карта РФ, PayPear)',
-                return_url=return_url,
-            )
-            if payment:
-                try:
-                    conn = database.get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """
-                        INSERT INTO transactions (user_id, type, amount, status, payment_method, payment_provider, payment_id, description)
-                        VALUES (?, 'deposit', ?, 'Pending', 'Карта', 'PayPear', ?, ?)
-                        """,
-                        (int(user_id), net_amount, payment.get('id'), 'Ожидание оплаты PayPear (карта РФ)'),
-                    )
-                    conn.commit()
-                    conn.close()
-                except Exception as _e:
-                    logger.warning('PayPear: не удалось создать Pending-транзакцию: %s', _e)
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
-                return jsonify({
-                    'payment_id': payment.get('id'),
-                    'payment_url': payment.get('redirect_url'),
-                    'status': payment.get('status', 'pending'),
-                })
-            pear_error = paypear.paypear_api.last_error or 'Не удалось создать платёж PayPear'
-            return jsonify({'error': pear_error}), 502
+            return jsonify({'error': 'Метод оплаты PayPear недоступен'}), 503
         
         elif method in ('platega_card_intl', 'platega_intl'):
             # Иностранные карты: Platega method 12 (международный эквайринг)
