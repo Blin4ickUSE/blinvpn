@@ -376,32 +376,35 @@ async def cmd_start(message: types.Message):
 
     if tracking_code:
         try:
-            linked_promo = database.record_tracking_link_visit(
+            trk_result = database.record_tracking_link_visit(
                 tracking_code, user['id'], was_new_user
             )
-            if linked_promo and not promo_code:
-                promo_code = linked_promo
+            is_first_visit = trk_result.get('is_first_visit', False)
+
+            # Промокод применяем только при первом переходе по ссылке
+            if is_first_visit:
+                linked_promo = trk_result.get('promocode')
+                if linked_promo and not promo_code:
+                    promo_code = linked_promo
+
+                # Отправляем приветственное сообщение (поддерживает HTML и Markdown)
+                welcome_msg = trk_result.get('welcome_message')
+                if welcome_msg:
+                    try:
+                        await message.answer(welcome_msg, parse_mode=ParseMode.HTML)
+                    except Exception:
+                        # Если HTML не прошёл — пробуем без parse_mode
+                        try:
+                            await message.answer(welcome_msg)
+                        except Exception as e_wm:
+                            logger.warning(f"tracking link welcome_message send failed: {e_wm}")
         except Exception as e:
             logger.warning(f"tracking link update failed: {e}")
 
-    # Auto-activate promo from special start link
+    # Auto-activate promo from special start link (только тихо, без уведомления пользователю)
     if promo_code and user:
         try:
-            result = core.apply_promocode(user['id'], promo_code)
-            if result.get('success'):
-                await message.answer(
-                    notify_msgs.build_promo_activated_message(
-                        promo_code, result.get('message', '')
-                    ),
-                    parse_mode=ParseMode.HTML,
-                )
-            else:
-                await message.answer(
-                    notify_msgs.build_promo_failed_message(
-                        promo_code, result.get('error', 'не удалось применить')
-                    ),
-                    parse_mode=ParseMode.HTML,
-                )
+            core.apply_promocode(user['id'], promo_code)
         except Exception as e:
             logger.warning(f"Promo auto-apply failed: {e}")
 
