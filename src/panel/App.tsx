@@ -466,6 +466,7 @@ interface TrackingLink {
   code: string;
   name: string;
   promocode: string | null;
+  welcome_message: string | null;
   url: string;
   clicks: number;
   is_active: boolean;
@@ -3725,7 +3726,7 @@ const TrackingLinksPage: React.FC<{ onToast: (title: string, msg: string, type: 
     const [detailLink, setDetailLink] = useState<(TrackingLink & { users?: TrackingLinkUser[] }) | null>(null);
     const [detailLoading, setDetailLoading] = useState(false);
     const [editingLink, setEditingLink] = useState<TrackingLink | null>(null);
-    const [newLink, setNewLink] = useState({ name: '', code: '', promocode: '' });
+    const [newLink, setNewLink] = useState({ name: '', code: '', promocode: '', welcome_message: '' });
 
     const fmtMoney = (n: number) => `${Math.round(n).toLocaleString('ru-RU')} ₽`;
     const fmtPct = (n: number) => `${n.toFixed(1)}%`;
@@ -3760,6 +3761,7 @@ const TrackingLinksPage: React.FC<{ onToast: (title: string, msg: string, type: 
                     code: l.code,
                     name: l.name || '',
                     promocode: l.promocode || null,
+                    welcome_message: l.welcome_message || null,
                     url: l.url,
                     clicks: Number(l.clicks || 0),
                     is_active: Boolean(l.is_active),
@@ -3805,9 +3807,10 @@ const TrackingLinksPage: React.FC<{ onToast: (title: string, msg: string, type: 
             const body: Record<string, string> = { name: newLink.name.trim() };
             if (newLink.code.trim()) body.code = newLink.code.trim();
             if (newLink.promocode.trim()) body.promocode = newLink.promocode.trim().toUpperCase();
+            if (newLink.welcome_message.trim()) body.welcome_message = newLink.welcome_message.trim();
             const res = await apiFetch('/panel/tracking-links', { method: 'POST', body: JSON.stringify(body) });
             onToast('Успех', `Ссылка создана: ${res.url || ''}`, 'success');
-            setNewLink({ name: '', code: '', promocode: '' });
+            setNewLink({ name: '', code: '', promocode: '', welcome_message: '' });
             await loadLinks();
         } catch (e: any) {
             onToast('Ошибка', e?.message || 'Не удалось создать ссылку', 'error');
@@ -3835,6 +3838,7 @@ const TrackingLinksPage: React.FC<{ onToast: (title: string, msg: string, type: 
                     name: editingLink.name,
                     code: editingLink.code,
                     promocode: editingLink.promocode || '',
+                    welcome_message: editingLink.welcome_message || '',
                     is_active: editingLink.is_active,
                 }),
             });
@@ -3882,6 +3886,16 @@ const TrackingLinksPage: React.FC<{ onToast: (title: string, msg: string, type: 
                     <input type="text" value={newLink.code} onChange={e => setNewLink({ ...newLink, code: e.target.value.replace(/[^A-Za-z0-9_-]/g, '') })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono" placeholder="Код (ad, youtube1…)" />
                     <input type="text" value={newLink.promocode} onChange={e => setNewLink({ ...newLink, promocode: e.target.value.toUpperCase() })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono" placeholder="Промокод (необяз.)" />
                     <button onClick={handleCreate} className="px-6 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg font-medium">Создать ссылку</button>
+                </div>
+                <div className="mt-3">
+                    <textarea
+                        value={newLink.welcome_message}
+                        onChange={e => setNewLink({ ...newLink, welcome_message: e.target.value })}
+                        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y min-h-[72px]"
+                        placeholder={"Сообщение при первом переходе (необяз.) — поддерживает HTML и Markdown Telegram\nПример: <b>Привет!</b> Держи скидку 🎁\nИли: **Привет!** Держи скидку 🎁"}
+                        rows={3}
+                    />
+                    <p className="text-xs text-gray-600 mt-1">Отправляется пользователю в Telegram только при первом переходе. Поддерживается HTML (<code className="text-gray-500">&lt;b&gt;</code>, <code className="text-gray-500">&lt;i&gt;</code>, <code className="text-gray-500">&lt;a href&gt;</code>, <code className="text-gray-500">&lt;tg-emoji&gt;</code> и т.д.)</p>
                 </div>
             </div>
 
@@ -3962,6 +3976,16 @@ const TrackingLinksPage: React.FC<{ onToast: (title: string, msg: string, type: 
                             <input type="text" value={editingLink.name} onChange={e => setEditingLink({ ...editingLink, name: e.target.value })} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Название" />
                             <input type="text" value={editingLink.code} onChange={e => setEditingLink({ ...editingLink, code: e.target.value.replace(/[^A-Za-z0-9_-]/g, '') })} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono" placeholder="Код" />
                             <input type="text" value={editingLink.promocode || ''} onChange={e => setEditingLink({ ...editingLink, promocode: e.target.value.toUpperCase() })} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono" placeholder="Промокод" />
+                            <div>
+                                <textarea
+                                    value={editingLink.welcome_message || ''}
+                                    onChange={e => setEditingLink({ ...editingLink, welcome_message: e.target.value })}
+                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y min-h-[80px]"
+                                    placeholder={"Сообщение при первом переходе (HTML/Markdown Telegram)\n<b>Привет!</b> Держи промокод 🎁"}
+                                    rows={3}
+                                />
+                                <p className="text-xs text-gray-500 mt-1">Отправляется только при первом переходе. Поддерживается HTML Telegram.</p>
+                            </div>
                             <label className="flex items-center gap-2 text-gray-300 text-sm cursor-pointer">
                                 <input type="checkbox" checked={editingLink.is_active} onChange={e => setEditingLink({ ...editingLink, is_active: e.target.checked })} className="rounded" />
                                 Ссылка активна
