@@ -3165,8 +3165,9 @@ def panel_create_tracking_link():
     code = str(data.get('code') or secrets.token_hex(4)).strip()
     name = str(data.get('name') or '').strip()
     promocode = str(data.get('promocode') or '').strip().upper() or None
+    welcome_message = str(data.get('welcome_message') or '').strip() or None
     try:
-        result = database.create_tracking_link(code, name, promocode)
+        result = database.create_tracking_link(code, name, promocode, welcome_message)
         bot_username = os.getenv('BOT_USERNAME') or os.getenv('BOT_USERNAME_MINI') or 'blinvpn_bot'
         return jsonify({
             'success': True,
