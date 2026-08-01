@@ -169,6 +169,7 @@ def init_database():
                 code TEXT UNIQUE NOT NULL,
                 name TEXT,
                 promocode TEXT,
+                welcome_message TEXT,
                 clicks INTEGER DEFAULT 0,
                 is_active INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -177,6 +178,10 @@ def init_database():
 
         try:
             cursor.execute("ALTER TABLE tracking_links ADD COLUMN is_active INTEGER DEFAULT 1")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE tracking_links ADD COLUMN welcome_message TEXT")
         except Exception:
             pass
 
@@ -2363,27 +2368,42 @@ def is_valid_tracking_link_code(code: str) -> bool:
     return bool(_TRACKING_CODE_RE.match(normalize_tracking_link_code(code)))
 
 
-def record_tracking_link_visit(code: str, user_id: int, is_new_user: bool) -> str | None:
-    """Зафиксировать переход по ссылке. Возвращает привязанный промокод или None."""
+def record_tracking_link_visit(code: str, user_id: int, is_new_user: bool) -> dict:
+    """Зафиксировать переход по ссылке.
+    
+    Возвращает dict:
+        promocode (str|None) — привязанный промокод
+        welcome_message (str|None) — приветственное сообщение
+        is_first_visit (bool) — True если это первый переход пользователя по этой ссылке
+    """
     code = normalize_tracking_link_code(code)
     if not code or not user_id:
-        return None
+        return {'promocode': None, 'welcome_message': None, 'is_first_visit': False}
 
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute(
             """
-            SELECT id, promocode FROM tracking_links
+            SELECT id, promocode, welcome_message FROM tracking_links
             WHERE code = ? AND COALESCE(is_active, 1) = 1
             """,
             (code,),
         )
         row = cursor.fetchone()
         if not row:
-            return None
+            return {'promocode': None, 'welcome_message': None, 'is_first_visit': False}
 
         link_id = row['id']
+
+        # Проверяем, был ли уже визит этого пользователя
+        cursor.execute(
+            "SELECT id FROM tracking_link_visits WHERE tracking_link_id = ? AND user_id = ?",
+            (link_id, user_id),
+        )
+        already_visited = cursor.fetchone() is not None
+        is_first_visit = not already_visited
+
         cursor.execute(
             "UPDATE tracking_links SET clicks = clicks + 1 WHERE id = ?",
             (link_id,),
@@ -2396,10 +2416,14 @@ def record_tracking_link_visit(code: str, user_id: int, is_new_user: bool) -> st
             (link_id, user_id, 1 if is_new_user else 0),
         )
         conn.commit()
-        return row['promocode']
+        return {
+            'promocode': row['promocode'],
+            'welcome_message': row['welcome_message'],
+            'is_first_visit': is_first_visit,
+        }
     except Exception:
         conn.rollback()
-        return None
+        return {'promocode': None, 'welcome_message': None, 'is_first_visit': False}
     finally:
         conn.close()
 
@@ -2486,7 +2510,7 @@ def get_tracking_links_with_stats() -> list:
     try:
         cursor.execute(
             """
-            SELECT id, code, name, promocode, clicks, COALESCE(is_active, 1) AS is_active, created_at
+            SELECT id, code, name, promocode, welcome_message, clicks, COALESCE(is_active, 1) AS is_active, created_at
             FROM tracking_links
             ORDER BY id DESC
             """
@@ -2551,7 +2575,7 @@ def get_tracking_link_detail(link_id: int) -> dict | None:
     try:
         cursor.execute(
             """
-            SELECT id, code, name, promocode, clicks, COALESCE(is_active, 1) AS is_active, created_at
+            SELECT id, code, name, promocode, welcome_message, clicks, COALESCE(is_active, 1) AS is_active, created_at
             FROM tracking_links WHERE id = ?
             """,
             (link_id,),
@@ -2625,20 +2649,21 @@ def get_tracking_link_detail(link_id: int) -> dict | None:
         conn.close()
 
 
-def create_tracking_link(code: str, name: str, promocode: str | None = None) -> dict:
+def create_tracking_link(code: str, name: str, promocode: str | None = None, welcome_message: str | None = None) -> dict:
     code = normalize_tracking_link_code(code)
     if not is_valid_tracking_link_code(code):
         raise ValueError('Недопустимый код ссылки (1–32 символа: буквы, цифры, _, -)')
 
     name = str(name or '').strip()
     promocode = str(promocode or '').strip().upper() or None
+    welcome_message = str(welcome_message or '').strip() or None
 
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "INSERT INTO tracking_links (code, name, promocode) VALUES (?, ?, ?)",
-            (code, name, promocode),
+            "INSERT INTO tracking_links (code, name, promocode, welcome_message) VALUES (?, ?, ?, ?)",
+            (code, name, promocode, welcome_message),
         )
         conn.commit()
         return {'id': cursor.lastrowid, 'code': code}
@@ -2666,6 +2691,10 @@ def update_tracking_link(link_id: int, data: dict) -> bool:
         if 'is_active' in data:
             fields.append('is_active = ?')
             values.append(1 if data['is_active'] else 0)
+        if 'welcome_message' in data:
+            wm = str(data['welcome_message'] or '').strip() or None
+            fields.append('welcome_message = ?')
+            values.append(wm)
         if 'code' in data:
             code = normalize_tracking_link_code(data['code'])
             if not is_valid_tracking_link_code(code):
