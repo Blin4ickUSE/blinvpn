@@ -662,17 +662,10 @@ build_cors_origins_from_env() {
     printf '%s' "${origins[*]}"
 }
 
-# Права на data/ под non-root контейнеры (uid 10001 в Dockerfile.*).
+# Подготовка каталогов данных (контейнеры снова от root — chown на 10001 не нужен).
 fix_container_data_permissions() {
     mkdir -p data src/monitoring/logs
-    # Numeric uid/gid — пользователь на хосте может отсутствовать
-    if sudo chown -R 10001:10001 data src/monitoring/logs 2>/dev/null; then
-        sudo chmod -R u+rwX,g+rwX data src/monitoring/logs 2>/dev/null || true
-        log_success "✔ права data/ и logs/ выставлены для uid 10001 (non-root контейнеры)."
-    else
-        log_warn "Не удалось chown data/ на 10001 — контейнеры могут не писать в SQLite."
-        log_warn "  Выполните вручную: sudo chown -R 10001:10001 data src/monitoring/logs"
-    fi
+    chmod -R u+rwX,g+rwX data src/monitoring/logs 2>/dev/null || true
 }
 
 # Миграция .env / прав после security-апдейта (безопасно для уже установленного сервера).

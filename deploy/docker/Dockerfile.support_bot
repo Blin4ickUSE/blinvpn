@@ -2,20 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
-COPY deploy/docker/entrypoint.sh /entrypoint.sh
-RUN sed -i 's/\r$//' /entrypoint.sh \
-    && chmod +x /entrypoint.sh \
-    && mkdir -p /app/data \
-    && chown -R appuser:appuser /app
+
+RUN mkdir -p /app/data
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "-m", "src.support_bot.bot"]
