@@ -60,25 +60,25 @@ def _get_user_key_uuids(cursor, user_id: int) -> set[str]:
 
 def _disable_remnawave_for_telegram(telegram_id: int, initial_uuids: set[str] | None = None) -> int:
     disabled_count = 0
-    remnawave_uuids = set(initial_uuids or set())
+    remnawave_refs = set(initial_uuids or set())
     try:
         rw_users = remnawave.remnawave_api.get_user_by_telegram_id(int(telegram_id)) or []
         for rw_user in rw_users:
-            rw_uuid = rw_user.uuid if hasattr(rw_user, 'uuid') else (rw_user.get('uuid') if isinstance(rw_user, dict) else None)
-            if rw_uuid:
-                remnawave_uuids.add(str(rw_uuid))
+            rw_ref = remnawave.remnawave_user_ref(rw_user)
+            if rw_ref:
+                remnawave_refs.add(str(rw_ref))
     except Exception as e:
         logger.warning(f"Failed to fetch Remnawave users for {telegram_id}: {e}")
 
-    for rw_uuid in remnawave_uuids:
+    for rw_ref in remnawave_refs:
         try:
             remnawave.remnawave_api.update_user_sync(
-                uuid=rw_uuid,
+                uuid=rw_ref,
                 status=remnawave.UserStatus.DISABLED
             )
             disabled_count += 1
         except Exception as e:
-            logger.warning(f"Failed to disable Remnawave key {rw_uuid} for {telegram_id}: {e}")
+            logger.warning(f"Failed to disable Remnawave key {rw_ref} for {telegram_id}: {e}")
     return disabled_count
 
 

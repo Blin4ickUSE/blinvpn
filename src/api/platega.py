@@ -199,22 +199,31 @@ class PlategaAPI:
 
     def verify_webhook(self, headers: Dict, payload: Dict) -> bool:
         """
-        Проверить webhook от Platega
-        
-        По документации: Platega отправляет X-MerchantId и X-Secret в заголовках
+        Проверить webhook от Platega (X-MerchantId / X-Secret).
+        Fail-closed: если провайдер не настроен — False.
         """
+        import hmac
+
         if not self.is_configured:
-            return True
-        
-        received_merchant = headers.get('X-MerchantId', '')
-        received_secret = headers.get('X-Secret', '')
-        
-        return (received_merchant == self.merchant_id and 
-                received_secret == self.secret_key)
-    
+            logger.error("Platega не настроен — отклоняем webhook")
+            return False
+
+        received_merchant = str(headers.get('X-MerchantId', '') or '')
+        received_secret = str(headers.get('X-Secret', '') or '')
+        expected_merchant = str(self.merchant_id or '')
+        expected_secret = str(self.secret_key or '')
+
+        if not expected_merchant or not expected_secret:
+            return False
+
+        return (
+            hmac.compare_digest(received_merchant, expected_merchant)
+            and hmac.compare_digest(received_secret, expected_secret)
+        )
+
     def verify_webhook_signature(self, payload: Dict, signature: str = None) -> bool:
-        """Обратная совместимость - проверка webhook"""
-        return True  # Platega использует X-MerchantId/X-Secret, не подпись
+        """Обратная совместимость — всегда False; используйте verify_webhook(headers, payload)."""
+        return False
 
 
 platega_api = PlategaAPI()

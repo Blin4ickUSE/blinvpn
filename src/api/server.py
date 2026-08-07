@@ -6,8 +6,8 @@ import logging
 import hmac
 import hashlib
 import json
+import math
 import secrets
-import random
 import requests
 import re
 from datetime import datetime, timedelta, timezone
@@ -29,19 +29,54 @@ from src.core import payment_wait
 app = Flask(__name__)
 
 # CORS для miniapp и панели.
-# По умолчанию '*' (совместимо с текущим поведением). Для усиления безопасности можно
-# задать CORS_ORIGINS=https://blinvpn.cc,https://web.telegram.org — тогда доступ только с них.
+# В production (ENV=production / FLASK_ENV=production) обязателен явный CORS_ORIGINS.
+# Иначе по умолчанию '*' (совместимость). Задайте CORS_ORIGINS=https://...,https://web.telegram.org
 _cors_env = (os.getenv('CORS_ORIGINS', '') or '').strip()
-_cors_origins = [o.strip() for o in _cors_env.split(',') if o.strip()] if _cors_env else '*'
+_is_production = (os.getenv('ENV', '') or os.getenv('FLASK_ENV', '') or '').strip().lower() in (
+    'production', 'prod'
+)
+
+
+def _cors_origins_from_urls() -> list[str]:
+    """Fallback CORS из MINIAPP_URL/PANEL_URL/SITE_URL (для уже установленных серверов)."""
+    origins: list[str] = []
+    for key in ('MINIAPP_URL', 'PANEL_URL', 'SITE_URL'):
+        raw = (os.getenv(key) or '').strip().rstrip('/')
+        if raw and raw not in origins:
+            origins.append(raw)
+    tg = 'https://web.telegram.org'
+    if tg not in origins:
+        origins.append(tg)
+    return origins
+
+
+if _cors_env:
+    _cors_origins = [o.strip() for o in _cors_env.split(',') if o.strip()]
+elif _is_production:
+    _cors_origins = _cors_origins_from_urls()
+    if not _cors_origins:
+        raise RuntimeError(
+            'CORS_ORIGINS must be set in production (comma-separated origins). '
+            'Refusing to start with wildcard CORS.'
+        )
+else:
+    _cors_origins = '*'
 CORS(
     app,
     resources={r"/api/*": {"origins": _cors_origins}},
 )
 
+if (os.getenv('MINIAPP_ALLOW_UNAUTH', '') or '').lower() in ('1', 'true', 'yes'):
+    if _is_production:
+        raise RuntimeError('MINIAPP_ALLOW_UNAUTH must not be enabled in production')
+
 from src.core.admin_error_reporter import setup_service_logging
 
 setup_service_logging('api')
 logger = logging.getLogger(__name__)
+
+if (os.getenv('MINIAPP_ALLOW_UNAUTH', '') or '').lower() in ('1', 'true', 'yes'):
+    logger.warning('MINIAPP_ALLOW_UNAUTH enabled — miniapp identity checks bypassed (dev only)')
 
 
 # МСК = UTC+3 (единый источник для отображения времени окончания)
@@ -136,12 +171,15 @@ def get_admin_ids() -> list[int]:
 
 
 def get_client_ip() -> str:
-    forwarded = request.headers.get('X-Forwarded-For', '')
-    if forwarded:
-        return forwarded.split(',')[0].strip()
+    """
+    IP клиента за reverse-proxy.
+    Доверяем только X-Real-IP (ставит nginx), не первый hop X-Forwarded-For
+    (его может подделать клиент).
+    """
     real_ip = request.headers.get('X-Real-IP')
     if real_ip:
         return real_ip.strip()
+    # Fallback: remote_addr (при bind 127.0.0.1 это адрес nginx)
     return request.remote_addr or 'unknown'
 
 
@@ -206,14 +244,18 @@ def telegram_webhook():
     """
     Резервный webhook для Telegram Stars (если TELEGRAM_STARS_DELIVERY=webhook).
     В Docker по умолчанию Stars обрабатывает бот через polling (см. bot.py).
+    Fail-closed: без TELEGRAM_WEBHOOK_SECRET запросы отклоняются.
     """
     from src.api import telegram_stars as stars
 
-    secret_expected = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
-    if secret_expected:
-        got = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-        if not hmac.compare_digest(str(got), str(secret_expected)):
-            return jsonify({"ok": True}), 200
+    secret_expected = (os.getenv("TELEGRAM_WEBHOOK_SECRET", "") or "").strip()
+    if not secret_expected:
+        logger.error("Telegram webhook: TELEGRAM_WEBHOOK_SECRET не задан — отказ")
+        return jsonify({"ok": False, "error": "webhook secret not configured"}), 503
+
+    got = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not hmac.compare_digest(str(got), str(secret_expected)):
+        return jsonify({"ok": False}), 401
 
     update = request.json if request.is_json else {}
     if not isinstance(update, dict):
@@ -423,12 +465,10 @@ def telegram_delete_message(chat_id: int, message_id: int) -> bool:
         return False
     return bool(res.status_code == 200 and data.get('ok'))
 
-# Максимальный возраст подписи Telegram (сек). 0 = не проверять срок.
-# initData обновляется при каждом запуске miniapp, поэтому по умолчанию не ограничиваем,
-# чтобы не рвать долгие сессии. Login Widget проверяем строже (см. ниже).
-INITDATA_MAX_AGE = int(os.getenv('TELEGRAM_INITDATA_MAX_AGE', '0') or '0')
-# Данные Telegram Login Widget (вход через сайт) считаем валидными ограниченное время,
-# чтобы перехваченный payload нельзя было переиспользовать позже.
+# Максимальный возраст подписи Telegram WebApp (сек). 0 = не проверять срок.
+# По умолчанию 24ч: initData обновляется при открытии miniapp; stolen initData не живёт вечно.
+INITDATA_MAX_AGE = int(os.getenv('TELEGRAM_INITDATA_MAX_AGE', '86400') or '86400')
+# Данные Telegram Login Widget (вход через сайт) считаем валидными ограниченное время.
 LOGIN_WIDGET_MAX_AGE = int(os.getenv('TELEGRAM_LOGIN_MAX_AGE', '86400') or '86400')
 
 
@@ -916,19 +956,43 @@ def encrypt_link_for_happ():
 
 
 
+def _is_safe_redirect_url(url: str) -> bool:
+    """Allowlist deep-link / https схем для /api/redirect (защита от XSS/open redirect)."""
+    if not url or len(url) > 4096:
+        return False
+    # Запрет javascript:, data:, vbscript: и инъекций в JS-литерал
+    lowered = url.strip().lower()
+    if lowered.startswith(('javascript:', 'data:', 'vbscript:', 'blob:')):
+        return False
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    scheme = (parsed.scheme or '').lower()
+    if scheme in ('incy', 'happ', 'streisand', 'v2box', 'shadowrocket', 'surge', 'quantumult-x'):
+        return True
+    if scheme == 'https':
+        return True
+    return False
+
+
 @app.route('/api/redirect')
 def redirect_to_incy():
-    """Страница редиректа для открытия приложения Incy"""
+    """Страница редиректа для открытия VPN-клиента (Incy/Happ и т.п.)."""
+    import json as _json
     from flask import Response
-    
-    url = request.args.get('url', '')
-    
+
+    raw_url = request.args.get('url', '') or ''
+    safe = _is_safe_redirect_url(raw_url)
+    url_json = _json.dumps(raw_url if safe else '')
+
     html = f'''<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Открываем Incy...</title>
+    <title>Открываем приложение...</title>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
@@ -1003,22 +1067,19 @@ def redirect_to_incy():
 
     <script>
         (function() {{
-            var url = "{url}";
-            
+            var url = {url_json};
+
             if (!url) {{
-                document.getElementById('title').textContent = 'URL не указан';
+                document.getElementById('title').textContent = 'Недопустимый или отсутствующий URL';
                 document.getElementById('subtitle').textContent = '';
                 document.getElementById('spinner').style.display = 'none';
                 return;
             }}
-            
+
             var manualBtn = document.getElementById('manualBtn');
-            manualBtn.href = url;
-            
-            // Открываем URL напрямую
+            manualBtn.setAttribute('href', url);
             window.location.href = url;
-            
-            // Показываем кнопку через 2 секунды если редирект не сработал
+
             setTimeout(function() {{
                 document.getElementById('errorBlock').classList.add('show');
             }}, 2000);
@@ -1026,7 +1087,7 @@ def redirect_to_incy():
     </script>
 </body>
 </html>'''
-    
+
     return Response(html, mimetype='text/html')
 
 # ========== API для мини-приложения ==========
@@ -1591,14 +1652,16 @@ def get_user_devices():
         return jsonify({'error': 'User not found'}), 404
     
     # Синхронизируем traffic_used и expiry_date из Remnawave (источник истины для даты окончания)
-    remnawave_expiry = {}  # key_uuid -> expire_at (datetime)
+    remnawave_expiry = {}  # key_uuid (Remnawave user id) -> expire_at (datetime)
     try:
         rw_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
         if rw_users:
             conn_sync = database.get_db_connection()
             cursor_sync = conn_sync.cursor()
             for rw_user in rw_users:
-                rw_uuid = rw_user.uuid if hasattr(rw_user, 'uuid') else rw_user.get('uuid')
+                rw_uuid = remnawave.migrate_vpn_key_uuid_for_rw_user(cursor_sync, rw_user)
+                if not rw_uuid:
+                    rw_uuid = remnawave.remnawave_user_ref(rw_user)
                 # Трафик
                 traffic_used = 0
                 if hasattr(rw_user, 'user_traffic') and rw_user.user_traffic:
@@ -1937,9 +2000,15 @@ def delete_user_device(device_id: int):
         
         key_uuid = device['key_uuid']
         
-        # Удаляем из Remnawave если есть UUID
+        # Удаляем из Remnawave если есть UUID/id
         if key_uuid:
             try:
+                key_uuid = remnawave.refresh_vpn_key_remnawave_ref(
+                    cursor,
+                    key_uuid=key_uuid,
+                    vpn_key_id=device_id,
+                    telegram_id=telegram_id,
+                ) or key_uuid
                 remnawave.remnawave_api.delete_user_sync(key_uuid)
                 logger.info(f"Deleted key {key_uuid} from Remnawave")
             except Exception as e:
@@ -1985,6 +2054,14 @@ def _delete_subscription_hwid_device(telegram_id: int, device_id: int, hwid_ref:
         key_uuid = device['key_uuid']
         if not key_uuid:
             return {'error': 'No key UUID for this device'}, 400
+
+        key_uuid = remnawave.refresh_vpn_key_remnawave_ref(
+            cursor,
+            key_uuid=key_uuid,
+            vpn_key_id=device_id,
+            telegram_id=telegram_id,
+        )
+        conn.commit()
 
         current_devices = remnawave.remnawave_api.get_hwid_devices_sync(key_uuid)
         if not isinstance(current_devices, list):
@@ -2041,6 +2118,14 @@ def get_device_hwid_devices(device_id: int):
         key_uuid = device['key_uuid']
         if not key_uuid:
             return jsonify({'hwid_devices': []})
+
+        key_uuid = remnawave.refresh_vpn_key_remnawave_ref(
+            cursor,
+            key_uuid=key_uuid,
+            vpn_key_id=device_id,
+            telegram_id=telegram_id,
+        )
+        conn.commit()
 
         hwid_devices = remnawave.remnawave_api.get_hwid_devices_sync(key_uuid)
         if not isinstance(hwid_devices, list):
@@ -2134,6 +2219,14 @@ def reset_device_traffic(device_id: int):
         if not key_uuid:
             return jsonify({'error': 'No key UUID for this device'}), 400
 
+        key_uuid = remnawave.refresh_vpn_key_remnawave_ref(
+            cursor,
+            key_uuid=key_uuid,
+            vpn_key_id=device_id,
+            telegram_id=telegram_id,
+        ) or key_uuid
+        conn.commit()
+
         deducted = database.update_user_balance(user['id'], -price, ensure_non_negative=True)
         if not deducted:
             return jsonify({'error': f'Недостаточно средств. Стоимость сброса: {price} ₽'}), 400
@@ -2194,6 +2287,14 @@ def reset_device_key(device_id: int):
         key_uuid = device['key_uuid']
         if not key_uuid:
             return jsonify({'error': 'No key UUID for this device'}), 400
+
+        key_uuid = remnawave.refresh_vpn_key_remnawave_ref(
+            cursor,
+            key_uuid=key_uuid,
+            vpn_key_id=device_id,
+            telegram_id=telegram_id,
+        )
+        conn.commit()
 
         remnawave.remnawave_api.delete_all_hwid_devices_sync(key_uuid)
         logger.info(f"Reset key (deleted all HWID) for device {device_id}, key_uuid={key_uuid}")
@@ -2300,7 +2401,7 @@ def extend_subscription():
         plan_type = key_row['plan_type'] or 'vpn'
         current_traffic_limit = float(key_row['traffic_limit'] or 0)
         current_traffic_used = float(key_row['traffic_used'] or 0)
-        cur_dev = int(key_row['devices_limit'] or 1)
+        cur_dev = max(1, int(key_row['devices_limit'] or 1))
 
         devices_in = data.get('devices')
         if devices_in is not None:
@@ -2309,10 +2410,17 @@ def extend_subscription():
             except (TypeError, ValueError):
                 return jsonify({'error': 'Некорректное число устройств'}), 400
             req = max(1, min(20, req))
-            new_dev = req
-        else:
-            new_dev = cur_dev
-        
+            # Нельзя продлить на меньшее число устройств, чем сейчас в подписке
+            if req < cur_dev:
+                return jsonify({
+                    'error': (
+                        f'Продление возможно только на {cur_dev} устр. (текущий лимит). '
+                        'Чтобы добавить слоты — используйте докупку устройств.'
+                    ),
+                }), 400
+
+        # Продление всегда на текущий лимит; увеличение — только через /add-devices
+        new_dev = cur_dev
         # Apply one-time discount from promocode + global promotion discount
         discount = database.get_effective_discount_percent(user)
         global_pct, global_promo = database.get_active_global_discount()
@@ -2481,6 +2589,195 @@ def extend_subscription():
         
     except Exception as e:
         logger.error(f"Error extending subscription: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/subscription/add-devices', methods=['POST'])
+def add_subscription_devices():
+    """Докупить слоты устройств к существующей активной подписке (без продления срока)."""
+    data = request.json or {}
+    user_id = data.get('user_id')
+    key_id = data.get('key_id')
+
+    if not user_id or not key_id:
+        return jsonify({'error': 'Missing required fields'}), 400
+
+    user = database.get_user_by_id(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    auth_err = enforce_user_id_auth(user_id, user)
+    if auth_err:
+        return auth_err
+
+    ban_status = get_user_ban_status(user)
+    if ban_status.get('banned'):
+        return jsonify({
+            'error': ban_status.get('reason', 'Ваш аккаунт заблокирован'),
+            'banned': True
+        }), 403
+
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, key_uuid, expiry_date, plan_type, status, devices_limit
+            FROM vpn_keys WHERE id = ? AND user_id = ?
+        """, (key_id, user_id))
+        key_row = cursor.fetchone()
+        if not key_row:
+            return jsonify({'error': 'Key not found'}), 404
+
+        if str(key_row['status'] or '').lower() in ('blocked', 'banned', 'deleted'):
+            return jsonify({'error': 'Подписка недоступна для изменения'}), 403
+
+        plan_type = key_row['plan_type'] or 'vpn'
+        if plan_type == 'trial':
+            return jsonify({
+                'error': 'На пробном периоде нельзя докупить устройства. Сначала оформите платную подписку.',
+            }), 400
+
+        cur_dev = max(1, int(key_row['devices_limit'] or 1))
+        try:
+            new_dev = int(data.get('devices'))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Некорректное число устройств'}), 400
+        new_dev = max(1, min(20, new_dev))
+        if new_dev <= cur_dev:
+            return jsonify({
+                'error': f'Укажите число устройств больше текущего ({cur_dev})',
+            }), 400
+
+        from datetime import datetime, timedelta
+        current_expiry = key_row['expiry_date']
+        if not current_expiry:
+            return jsonify({'error': 'У подписки нет срока действия'}), 400
+        try:
+            expiry_dt = datetime.fromisoformat(
+                str(current_expiry).replace('Z', '+00:00').replace('+00:00', '')
+            )
+        except Exception:
+            return jsonify({'error': 'Некорректная дата окончания подписки'}), 400
+        if getattr(expiry_dt, 'tzinfo', None):
+            expiry_dt = expiry_dt.replace(tzinfo=None) - timedelta(
+                seconds=expiry_dt.utcoffset().total_seconds() if expiry_dt.utcoffset() else 0
+            )
+        now = datetime.utcnow().replace(tzinfo=None)
+        if expiry_dt <= now:
+            return jsonify({
+                'error': 'Подписка истекла. Сначала продлите её, затем докупите устройства.',
+            }), 400
+
+        remaining_days = max(1, int(math.ceil((expiry_dt - now).total_seconds() / 86400.0)))
+        add_count = new_dev - cur_dev
+        price = float(database.compute_extra_devices_upgrade_price(remaining_days, add_count))
+
+        discount = database.get_effective_discount_percent(user)
+        global_pct, global_promo = database.get_active_global_discount()
+        if discount > 0 and price > 0:
+            try:
+                price = round(price * (100 - discount) / 100, 2)
+            except Exception:
+                pass
+        if global_pct > 0 and price > 0:
+            try:
+                price = round(price * (100 - int(global_pct)) / 100, 2)
+            except Exception:
+                pass
+        price = max(1.0, float(price)) if add_count > 0 else 0.0
+
+        client_price = data.get('price')
+        if client_price is not None:
+            try:
+                if abs(float(client_price) - price) > 0.02:
+                    logger.warning(
+                        'subscription/add-devices price mismatch: user=%s key=%s %s->%s rem_days=%s client=%s server=%s',
+                        user_id, key_id, cur_dev, new_dev, remaining_days, client_price, price,
+                    )
+                    return jsonify({
+                        'error': 'Цена не совпадает. Обновите страницу и попробуйте снова.',
+                        'server_price': price,
+                    }), 400
+            except (TypeError, ValueError):
+                pass
+
+        if price > 0:
+            deducted = database.update_user_balance(user_id, -price, ensure_non_negative=True)
+            if not deducted:
+                return jsonify({'error': 'Insufficient balance', 'price': price}), 400
+            if discount > 0:
+                try:
+                    conn_d = database.get_db_connection()
+                    cur_d = conn_d.cursor()
+                    cur_d.execute("UPDATE users SET next_discount_percent = 0 WHERE id = ?", (user_id,))
+                    conn_d.commit()
+                    conn_d.close()
+                except Exception:
+                    try:
+                        conn_d.close()
+                    except Exception:
+                        pass
+            if global_promo and global_pct > 0:
+                try:
+                    database.consume_promotion_use(int(global_promo['id']))
+                except Exception:
+                    pass
+
+        key_uuid = key_row['key_uuid']
+        if key_uuid:
+            try:
+                key_uuid = remnawave.refresh_vpn_key_remnawave_ref(
+                    cursor,
+                    key_uuid=key_uuid,
+                    vpn_key_id=int(key_id),
+                    telegram_id=user.get('telegram_id'),
+                ) or key_uuid
+                remnawave.remnawave_api.update_user_sync(
+                    uuid=key_uuid,
+                    hwid_device_limit=int(new_dev),
+                )
+                if not remnawave.remnawave_api.ensure_hwid_device_limit_sync(key_uuid, int(new_dev)):
+                    raise remnawave.RemnaWaveAPIError(
+                        f"hwidDeviceLimit not applied (expected {new_dev})"
+                    )
+            except Exception as e:
+                logger.error(f"Failed to add devices in Remnawave for key {key_id}: {e}")
+                if price > 0:
+                    database.update_user_balance(user_id, price)
+                return jsonify({'error': 'Не удалось обновить лимит устройств в VPN-системе'}), 500
+
+        cursor.execute(
+            "UPDATE vpn_keys SET devices_limit = ? WHERE id = ?",
+            (int(new_dev), key_id),
+        )
+        description = f"Докупка устройств: {cur_dev} → {new_dev} (+{add_count}), осталось ~{remaining_days} дн."
+        cursor.execute("""
+            INSERT INTO transactions (user_id, type, amount, status, description, payment_method)
+            VALUES (?, 'device_purchase', ?, 'Success', ?, 'Balance')
+        """, (user_id, -price, description))
+        conn.commit()
+
+        if price > 0:
+            referral_result = database.credit_referral_income(
+                user_id, price, f"Докупка устройств ({description})"
+            )
+            if referral_result:
+                notify_referral_income_credited(referral_result, extended=False)
+
+        return jsonify({
+            'success': True,
+            'key_id': key_id,
+            'devices_limit': int(new_dev),
+            'added': int(add_count),
+            'price': price,
+            'remaining_days': remaining_days,
+        })
+    except Exception as e:
+        logger.error(f"Error adding devices to subscription: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -3651,7 +3948,9 @@ def get_user_subscriptions(user_id: int):
             try:
                 rw_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
                 for rw_user in rw_users or []:
-                    rw_uuid = rw_user.uuid if hasattr(rw_user, 'uuid') else rw_user.get('uuid')
+                    rw_uuid = remnawave.migrate_vpn_key_uuid_for_rw_user(cursor, rw_user)
+                    if not rw_uuid:
+                        rw_uuid = remnawave.remnawave_user_ref(rw_user)
                     if not rw_uuid:
                         continue
                     traffic_used = 0
@@ -3866,7 +4165,9 @@ def get_keys():
             for telegram_id in telegram_ids:
                 rw_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
                 for rw_user in rw_users or []:
-                    rw_uuid = rw_user.uuid if hasattr(rw_user, 'uuid') else rw_user.get('uuid')
+                    rw_uuid = remnawave.migrate_vpn_key_uuid_for_rw_user(cursor, rw_user)
+                    if not rw_uuid:
+                        rw_uuid = remnawave.remnawave_user_ref(rw_user)
                     if not rw_uuid:
                         continue
                     traffic_used = 0
@@ -4049,7 +4350,7 @@ def create_key():
             conn.close()
             return jsonify({'error': 'Не удалось создать пользователя в Remnawave'}), 500
 
-        key_uuid = remnawave_user.uuid if hasattr(remnawave_user, 'uuid') else remnawave_user.get('uuid')
+        key_uuid = remnawave.remnawave_user_ref(remnawave_user)
         subscription_url = remnawave_user.subscription_url if hasattr(remnawave_user, 'subscription_url') else remnawave_user.get('subscription_url', '')
 
         cursor.execute("""
@@ -4617,34 +4918,45 @@ def request_withdrawal():
     
     try:
         if method == 'balance':
-            # Перевод на основной баланс
+            # Атомарный перевод: не уходим в минус при гонках
+            cursor.execute("BEGIN IMMEDIATE")
             cursor.execute("""
-                UPDATE users 
+                UPDATE users
                 SET balance = balance + ?, partner_balance = partner_balance - ?
-                WHERE id = ?
-            """, (amount, amount, user['id']))
-            
+                WHERE id = ? AND partner_balance >= ?
+            """, (amount, amount, user['id'], amount))
+            if cursor.rowcount != 1:
+                conn.rollback()
+                conn.close()
+                return jsonify({'error': 'Insufficient partner balance'}), 400
+
             cursor.execute("""
                 INSERT INTO transactions (user_id, type, amount, status, description)
                 VALUES (?, 'transfer', ?, 'Success', 'Перевод с реферального баланса на основной')
             """, (user['id'], amount))
-            
+
             conn.commit()
-            
+            conn.close()
+
             return jsonify({
                 'success': True,
                 'message': f'Переведено {amount}₽ на основной баланс'
             })
-        
+
         elif method == 'card':
             if not card_number:
                 return jsonify({'error': 'Номер карты обязателен'}), 400
             description = f'Заявка на вывод {amount}₽ на карту РФ. Номер: {card_number}'
             details = f"💳 Карта: {card_number}"
 
+            cursor.execute("BEGIN IMMEDIATE")
             cursor.execute("""
-                UPDATE users SET partner_balance = partner_balance - ? WHERE id = ?
-            """, (amount, user['id']))
+                UPDATE users SET partner_balance = partner_balance - ? WHERE id = ? AND partner_balance >= ?
+            """, (amount, user['id'], amount))
+            if cursor.rowcount != 1:
+                conn.rollback()
+                conn.close()
+                return jsonify({'error': 'Insufficient partner balance'}), 400
 
             cursor.execute("""
                 INSERT INTO transactions (user_id, type, amount, status, description, payment_method)
@@ -5475,45 +5787,82 @@ def get_public_page(page_type: str):
     finally:
         conn.close()
 
+_SECRET_ENV_KEYS = {
+    'TELEGRAM_BOT_TOKEN',
+    'REMWAVE_API_KEY',
+    'PLATEGA_SECRET_KEY',
+    'ROLLYPAY_API_KEY',
+    'ROLLYPAY_SIGNING_SECRET',
+    'PAYPEAR_SECRET_KEY',
+    'HELEKET_API_KEY',
+    'CRYPTOPAY_API_TOKEN',
+    'CRYPTOBOT_API_TOKEN',
+    'TELEGRAM_WEBHOOK_SECRET',
+}
+
+
+def _mask_secret(value: str) -> dict:
+    """Не отдавать секреты в API: только is_set + маска."""
+    v = (value or '').strip()
+    if not v:
+        return {'value': '', 'is_set': False, 'masked': True}
+    return {'value': '********', 'is_set': True, 'masked': True}
+
+
 @app.route('/api/panel/settings', methods=['GET'])
 @require_auth
 def get_settings():
-    """Получить настройки системы"""
+    """Получить настройки системы (секреты замаскированы)."""
     conn = database.get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
-        # Настройки из БД (кроме env-ключей)
         cursor.execute("SELECT setting_key, setting_value FROM system_settings")
         db_settings = {
             row['setting_key']: row['setting_value']
             for row in cursor.fetchall()
             if row['setting_key'] not in ENV_SETTINGS_KEYS
         }
-        
-        # Настройки из .env (без маскирования)
+
         env_raw = parse_env_file()
-        env_settings = {
-            # Читаем сначала из .env (включая legacy алиасы), затем из process env
-            'TELEGRAM_BOT_TOKEN': env_raw.get('TELEGRAM_BOT_TOKEN', env_raw.get('BOT_TOKEN', os.getenv('TELEGRAM_BOT_TOKEN', os.getenv('BOT_TOKEN', '')))),
-            'TELEGRAM_ADMIN_IDS': env_raw.get('TELEGRAM_ADMIN_IDS', env_raw.get('TELEGRAM_ADMIN_ID', os.getenv('TELEGRAM_ADMIN_IDS', os.getenv('TELEGRAM_ADMIN_ID', '')))),
-            'REMWAVE_PANEL_URL': env_raw.get('REMWAVE_PANEL_URL', env_raw.get('REMNAWAVE_URL', os.getenv('REMWAVE_PANEL_URL', os.getenv('REMNAWAVE_URL', '')))),
-            'REMWAVE_API_KEY': env_raw.get('REMWAVE_API_KEY', env_raw.get('REMNAWAVE_API_KEY', os.getenv('REMWAVE_API_KEY', os.getenv('REMNAWAVE_API_KEY', '')))),
-            'PLATEGA_MERCHANT_ID': env_raw.get('PLATEGA_MERCHANT_ID', os.getenv('PLATEGA_MERCHANT_ID', '')),
-            'PLATEGA_SECRET_KEY': env_raw.get('PLATEGA_SECRET_KEY', os.getenv('PLATEGA_SECRET_KEY', '')),
-            'ROLLYPAY_API_KEY': env_raw.get('ROLLYPAY_API_KEY', os.getenv('ROLLYPAY_API_KEY', '')),
-            'ROLLYPAY_SIGNING_SECRET': env_raw.get('ROLLYPAY_SIGNING_SECRET', os.getenv('ROLLYPAY_SIGNING_SECRET', '')),
-            'PAYPEAR_SHOP_ID': env_raw.get('PAYPEAR_SHOP_ID', os.getenv('PAYPEAR_SHOP_ID', '')),
-            'PAYPEAR_SECRET_KEY': env_raw.get('PAYPEAR_SECRET_KEY', os.getenv('PAYPEAR_SECRET_KEY', '')),
-            'HELEKET_MERCHANT': env_raw.get('HELEKET_MERCHANT', os.getenv('HELEKET_MERCHANT', '')),
-            'HELEKET_API_KEY': env_raw.get('HELEKET_API_KEY', os.getenv('HELEKET_API_KEY', '')),
-            'CRYPTOPAY_API_TOKEN': env_raw.get('CRYPTOPAY_API_TOKEN', os.getenv('CRYPTOPAY_API_TOKEN', '')),
-            'CRYPTOBOT_API_TOKEN': env_raw.get('CRYPTOBOT_API_TOKEN', os.getenv('CRYPTOBOT_API_TOKEN', env_raw.get('CRYPTOPAY_API_TOKEN', os.getenv('CRYPTOPAY_API_TOKEN', '')))),
-            'TELEGRAM_WEBHOOK_SECRET': env_raw.get('TELEGRAM_WEBHOOK_SECRET', os.getenv('TELEGRAM_WEBHOOK_SECRET', '')),
-            'BOT_USERNAME': env_raw.get('BOT_USERNAME', os.getenv('BOT_USERNAME', '')),
-            'PANEL_PASSWORD_HINT': 'Смена пароля доступна отдельным действием',
+
+        def _env(key: str, *aliases: str) -> str:
+            for k in (key, *aliases):
+                if env_raw.get(k):
+                    return env_raw.get(k, '')
+                if os.getenv(k):
+                    return os.getenv(k, '')
+            return ''
+
+        raw_env = {
+            'TELEGRAM_BOT_TOKEN': _env('TELEGRAM_BOT_TOKEN', 'BOT_TOKEN'),
+            'TELEGRAM_ADMIN_IDS': _env('TELEGRAM_ADMIN_IDS', 'TELEGRAM_ADMIN_ID'),
+            'REMWAVE_PANEL_URL': _env('REMWAVE_PANEL_URL', 'REMNAWAVE_URL'),
+            'REMWAVE_API_KEY': _env('REMWAVE_API_KEY', 'REMNAWAVE_API_KEY'),
+            'PLATEGA_MERCHANT_ID': _env('PLATEGA_MERCHANT_ID'),
+            'PLATEGA_SECRET_KEY': _env('PLATEGA_SECRET_KEY'),
+            'ROLLYPAY_API_KEY': _env('ROLLYPAY_API_KEY'),
+            'ROLLYPAY_SIGNING_SECRET': _env('ROLLYPAY_SIGNING_SECRET'),
+            'PAYPEAR_SHOP_ID': _env('PAYPEAR_SHOP_ID'),
+            'PAYPEAR_SECRET_KEY': _env('PAYPEAR_SECRET_KEY'),
+            'HELEKET_MERCHANT': _env('HELEKET_MERCHANT'),
+            'HELEKET_API_KEY': _env('HELEKET_API_KEY'),
+            'CRYPTOPAY_API_TOKEN': _env('CRYPTOPAY_API_TOKEN'),
+            'CRYPTOBOT_API_TOKEN': _env('CRYPTOBOT_API_TOKEN', 'CRYPTOPAY_API_TOKEN'),
+            'TELEGRAM_WEBHOOK_SECRET': _env('TELEGRAM_WEBHOOK_SECRET'),
+            'BOT_USERNAME': _env('BOT_USERNAME'),
         }
-        
+
+        env_settings = {}
+        for key, val in raw_env.items():
+            if key in _SECRET_ENV_KEYS:
+                masked = _mask_secret(val)
+                env_settings[key] = masked['value']
+                env_settings[f'{key}_IS_SET'] = masked['is_set']
+            else:
+                env_settings[key] = val
+        env_settings['PANEL_PASSWORD_HINT'] = 'Смена пароля доступна отдельным действием'
+
         return jsonify({**db_settings, **env_settings})
     finally:
         conn.close()
@@ -5521,51 +5870,88 @@ def get_settings():
 @app.route('/api/panel/settings', methods=['PUT'])
 @require_auth
 def update_settings():
-    """Обновить настройки системы"""
-    data = request.json
+    """Обновить настройки системы. Секреты: пустая/masked строка = не менять; без echo .env."""
+    data = request.json or {}
     conn = database.get_db_connection()
     cursor = conn.cursor()
-    
+
+    # Разрешённые ключи system_settings (не env)
+    allowed_db_keys = {
+        'support_url', 'support_bot_username', 'miniapp_title', 'trial_days',
+        'default_devices', 'referral_bonus', 'maintenance_mode', 'announce_text',
+    }
+
     try:
-        # Обновляем настройки в БД только для не-env ключей
         for key, value in data.items():
-            if key in ENV_SETTINGS_KEYS:
+            if key in ENV_SETTINGS_KEYS or key.endswith('_IS_SET'):
                 continue
+            if key not in allowed_db_keys:
+                # Обратная совместимость: известные не-секретные ключи из БД уже могли быть
+                # — пишем только безопасные имена (буквы/цифры/_)
+                if not re.fullmatch(r'[A-Za-z0-9_]{1,64}', str(key)):
+                    continue
+                if str(key).upper() in ENV_SETTINGS_KEYS or str(key) in _SECRET_ENV_KEYS:
+                    continue
             cursor.execute("""
                 INSERT OR REPLACE INTO system_settings (setting_key, setting_value, updated_at)
                 VALUES (?, ?, CURRENT_TIMESTAMP)
             """, (key, str(value)))
-            
+
         env_raw = parse_env_file()
+
+        def _pick_env(key: str, *aliases: str) -> str:
+            incoming = data.get(key)
+            if incoming is None:
+                for a in aliases:
+                    if a in data:
+                        incoming = data.get(a)
+                        break
+            # Не затирать секрет маской/пустым из UI
+            if key in _SECRET_ENV_KEYS or any(a in _SECRET_ENV_KEYS for a in aliases):
+                s = '' if incoming is None else str(incoming).strip()
+                if not s or s == '********' or s.startswith('****'):
+                    for k in (key, *aliases):
+                        if env_raw.get(k):
+                            return env_raw[k]
+                        if os.getenv(k):
+                            return os.getenv(k, '')
+                    return ''
+                return s
+            if incoming is not None:
+                return str(incoming)
+            for k in (key, *aliases):
+                if env_raw.get(k) is not None:
+                    return str(env_raw.get(k, ''))
+            return str(os.getenv(key, ''))
+
         env_map = {
-            'TELEGRAM_BOT_TOKEN': str(data.get('TELEGRAM_BOT_TOKEN', env_raw.get('TELEGRAM_BOT_TOKEN', env_raw.get('BOT_TOKEN', '')))),
-            'TELEGRAM_ADMIN_IDS': str(data.get('TELEGRAM_ADMIN_IDS', env_raw.get('TELEGRAM_ADMIN_IDS', env_raw.get('TELEGRAM_ADMIN_ID', '')))),
-            'REMWAVE_PANEL_URL': str(data.get('REMWAVE_PANEL_URL', env_raw.get('REMWAVE_PANEL_URL', env_raw.get('REMNAWAVE_URL', '')))),
-            'REMWAVE_API_KEY': str(data.get('REMWAVE_API_KEY', env_raw.get('REMWAVE_API_KEY', env_raw.get('REMNAWAVE_API_KEY', '')))),
-            'PLATEGA_MERCHANT_ID': str(data.get('PLATEGA_MERCHANT_ID', env_raw.get('PLATEGA_MERCHANT_ID', ''))),
-            'PLATEGA_SECRET_KEY': str(data.get('PLATEGA_SECRET_KEY', env_raw.get('PLATEGA_SECRET_KEY', ''))),
-            'ROLLYPAY_API_KEY': str(data.get('ROLLYPAY_API_KEY', env_raw.get('ROLLYPAY_API_KEY', ''))),
-            'ROLLYPAY_SIGNING_SECRET': str(data.get('ROLLYPAY_SIGNING_SECRET', env_raw.get('ROLLYPAY_SIGNING_SECRET', ''))),
-            'PAYPEAR_SHOP_ID': str(data.get('PAYPEAR_SHOP_ID', env_raw.get('PAYPEAR_SHOP_ID', ''))),
-            'PAYPEAR_SECRET_KEY': str(data.get('PAYPEAR_SECRET_KEY', env_raw.get('PAYPEAR_SECRET_KEY', ''))),
-            'HELEKET_MERCHANT': str(data.get('HELEKET_MERCHANT', env_raw.get('HELEKET_MERCHANT', ''))),
-            'HELEKET_API_KEY': str(data.get('HELEKET_API_KEY', env_raw.get('HELEKET_API_KEY', ''))),
-            'CRYPTOPAY_API_TOKEN': str(data.get('CRYPTOPAY_API_TOKEN', env_raw.get('CRYPTOPAY_API_TOKEN', env_raw.get('CRYPTOBOT_API_TOKEN', '')))),
-            'CRYPTOBOT_API_TOKEN': str(data.get('CRYPTOBOT_API_TOKEN', env_raw.get('CRYPTOBOT_API_TOKEN', data.get('CRYPTOPAY_API_TOKEN', env_raw.get('CRYPTOPAY_API_TOKEN', ''))))),
-            'TELEGRAM_WEBHOOK_SECRET': str(data.get('TELEGRAM_WEBHOOK_SECRET', env_raw.get('TELEGRAM_WEBHOOK_SECRET', ''))),
-            'BOT_USERNAME': str(data.get('BOT_USERNAME', env_raw.get('BOT_USERNAME', ''))),
+            'TELEGRAM_BOT_TOKEN': _pick_env('TELEGRAM_BOT_TOKEN', 'BOT_TOKEN'),
+            'TELEGRAM_ADMIN_IDS': _pick_env('TELEGRAM_ADMIN_IDS', 'TELEGRAM_ADMIN_ID'),
+            'REMWAVE_PANEL_URL': _pick_env('REMWAVE_PANEL_URL', 'REMNAWAVE_URL'),
+            'REMWAVE_API_KEY': _pick_env('REMWAVE_API_KEY', 'REMNAWAVE_API_KEY'),
+            'PLATEGA_MERCHANT_ID': _pick_env('PLATEGA_MERCHANT_ID'),
+            'PLATEGA_SECRET_KEY': _pick_env('PLATEGA_SECRET_KEY'),
+            'ROLLYPAY_API_KEY': _pick_env('ROLLYPAY_API_KEY'),
+            'ROLLYPAY_SIGNING_SECRET': _pick_env('ROLLYPAY_SIGNING_SECRET'),
+            'PAYPEAR_SHOP_ID': _pick_env('PAYPEAR_SHOP_ID'),
+            'PAYPEAR_SECRET_KEY': _pick_env('PAYPEAR_SECRET_KEY'),
+            'HELEKET_MERCHANT': _pick_env('HELEKET_MERCHANT'),
+            'HELEKET_API_KEY': _pick_env('HELEKET_API_KEY'),
+            'CRYPTOPAY_API_TOKEN': _pick_env('CRYPTOPAY_API_TOKEN'),
+            'CRYPTOBOT_API_TOKEN': _pick_env('CRYPTOBOT_API_TOKEN', 'CRYPTOPAY_API_TOKEN'),
+            'TELEGRAM_WEBHOOK_SECRET': _pick_env('TELEGRAM_WEBHOOK_SECRET'),
+            'BOT_USERNAME': _pick_env('BOT_USERNAME'),
         }
-        # Совместимость legacy переменных
         env_map['BOT_TOKEN'] = env_map['TELEGRAM_BOT_TOKEN']
         env_map['REMNAWAVE_URL'] = env_map['REMWAVE_PANEL_URL']
         env_map['REMNAWAVE_API_KEY'] = env_map['REMWAVE_API_KEY']
         admin_ids_str = env_map['TELEGRAM_ADMIN_IDS'].strip()
         env_map['TELEGRAM_ADMIN_ID'] = admin_ids_str.split(',')[0].strip() if admin_ids_str else ''
         update_env_values(env_map)
-        
+
         conn.commit()
-        env_after = parse_env_file()
-        return jsonify({'success': True, 'env': env_after})
+        # Не возвращаем полные секреты
+        return jsonify({'success': True})
     except Exception as e:
         logger.error(f"Error updating settings: {e}")
         return jsonify({'error': str(e)}), 500
@@ -6209,7 +6595,7 @@ def panel_login():
     # success -> reset failures
     database.panel_reset_login_failures(ip_address)
     
-    code = f"{random.randint(100000, 999999)}"
+    code = f"{secrets.randbelow(900000) + 100000}"
     temp_token = secrets.token_urlsafe(24)
     user_agent = request.headers.get('User-Agent', '')[:255]
     expires_at = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
@@ -6322,11 +6708,36 @@ def panel_auth_check():
 @app.route('/api/panel/auth/init', methods=['GET'])
 def panel_auth_init():
     """
-    Получить информацию об инициализации авторизации.
-    При первом запуске создаёт дефолтного админа и возвращает пароль.
+    Статус инициализации панели.
+    Пароль показывается только при валидном PANEL_SETUP_TOKEN
+    (заголовок X-Panel-Setup-Token или query setup_token).
+    Без токена на localhost допускается одноразовый bootstrap, если PANEL_SETUP_TOKEN не задан.
     """
-    result = database.get_or_create_default_admin()
-    
+    setup_env = (os.getenv('PANEL_SETUP_TOKEN', '') or '').strip()
+    provided = (
+        (request.headers.get('X-Panel-Setup-Token') or '')
+        or (request.args.get('setup_token') or '')
+    ).strip()
+
+    ip = get_client_ip()
+    is_local = ip in ('127.0.0.1', '::1', 'localhost', 'unknown')
+
+    token_ok = False
+    if setup_env:
+        token_ok = bool(provided) and hmac.compare_digest(provided, setup_env)
+    elif is_local:
+        # Первый деплой без PANEL_SETUP_TOKEN: только с loopback
+        token_ok = True
+
+    allow_reveal = token_ok
+    # Регенерация — только явный ?regenerate=1 + валидный setup token (не localhost-fallback без env)
+    allow_regenerate = bool(setup_env) and token_ok and str(request.args.get('regenerate', '')).lower() in ('1', 'true', 'yes')
+
+    result = database.get_or_create_default_admin(
+        allow_reveal=allow_reveal,
+        allow_regenerate=allow_regenerate,
+    )
+
     if result.get('password'):
         is_new = not result.get('exists')
         msg = 'Сохраните эти данные! Пароль показывается до первой успешной авторизации.'
@@ -6350,10 +6761,22 @@ def panel_auth_init():
             'initialized': True,
             'show_credentials': False,
             'new_admin': False,
-            'username': result['username']
+            'username': result['username'],
+            'needs_setup_token': bool(result.get('needs_setup_token')),
+            'pending_login': bool(result.get('pending')),
+            'message': (
+                'Для просмотра/сброса начального пароля передайте PANEL_SETUP_TOKEN '
+                '(заголовок X-Panel-Setup-Token или ?setup_token=).'
+                if result.get('needs_setup_token') else None
+            ),
         })
     else:
-        return jsonify({'initialized': False, 'error': 'Failed to initialize admin'}), 500
+        return jsonify({
+            'initialized': False,
+            'show_credentials': False,
+            'needs_setup_token': True,
+            'error': 'Set PANEL_SETUP_TOKEN and call with X-Panel-Setup-Token to create admin',
+        }), 403
 
 
 @app.route('/api/panel/auth/change-password', methods=['POST'])
@@ -6787,7 +7210,7 @@ def cleanup_expired_keys():
         deleted = 0
         for key_uuid in keys_to_delete:
             try:
-                remnawave.delete_user(key_uuid)
+                remnawave.remnawave_api.delete_user_sync(key_uuid)
                 deleted += 1
             except:
                 pass
@@ -6802,130 +7225,6 @@ def cleanup_expired_keys():
         return jsonify({'success': True, 'deleted': deleted})
     finally:
         conn.close()
-
-# ========== Мониторинг нод ==========
-
-def _sanitize_monitoring_node(node: dict) -> dict:
-    """Не отдаём SSH-пароль в API."""
-    safe = dict(node)
-    safe.pop('ssh_password', None)
-    safe['has_password'] = bool(node.get('ssh_password'))
-    return safe
-
-
-@app.route('/api/panel/monitoring/nodes', methods=['GET'])
-@require_auth
-def list_monitoring_nodes():
-    nodes = database.get_monitoring_nodes()
-    return jsonify({'nodes': [_sanitize_monitoring_node(n) for n in nodes]})
-
-
-@app.route('/api/panel/monitoring/nodes', methods=['POST'])
-@require_auth
-def create_monitoring_node():
-    data = request.get_json() or {}
-    try:
-        node = database.create_monitoring_node(data)
-        from src.monitoring.monitoring import monitoring_service
-        monitoring_service.reload_node(node['id'])
-        return jsonify({'success': True, 'node': _sanitize_monitoring_node(node)})
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
-    except Exception as e:
-        logger.error(f'Create monitoring node error: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/panel/monitoring/nodes/<int:node_id>', methods=['PUT'])
-@require_auth
-def update_monitoring_node(node_id):
-    data = request.get_json() or {}
-    if not data.get('ssh_password'):
-        data.pop('ssh_password', None)
-    try:
-        node = database.update_monitoring_node(node_id, data)
-        if not node:
-            return jsonify({'error': 'Node not found'}), 404
-        from src.monitoring.monitoring import monitoring_service
-        monitoring_service.reload_node(node_id)
-        return jsonify({'success': True, 'node': _sanitize_monitoring_node(node)})
-    except Exception as e:
-        logger.error(f'Update monitoring node error: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/panel/monitoring/nodes/<int:node_id>', methods=['DELETE'])
-@require_auth
-def delete_monitoring_node(node_id):
-    from src.monitoring.monitoring import monitoring_service
-    monitoring_service.stop_worker(node_id)
-    if database.delete_monitoring_node(node_id):
-        return jsonify({'success': True})
-    return jsonify({'error': 'Node not found'}), 404
-
-
-@app.route('/api/panel/monitoring/status', methods=['GET'])
-@require_auth
-def monitoring_status():
-    from src.monitoring.monitoring import monitoring_service
-    return jsonify(monitoring_service.get_status())
-
-
-@app.route('/api/panel/monitoring/nodes/<int:node_id>/history', methods=['GET'])
-@require_auth
-def monitoring_node_history(node_id):
-    metric_type = request.args.get('type')
-    limit = min(int(request.args.get('limit', 200)), 1000)
-    from src.monitoring.monitoring import monitoring_service
-    history = monitoring_service.get_history(node_id, metric_type, limit)
-    return jsonify({'history': history})
-
-
-@app.route('/api/panel/monitoring/events', methods=['GET'])
-@require_auth
-def monitoring_events():
-    node_id = request.args.get('node_id', type=int)
-    limit = min(int(request.args.get('limit', 100)), 500)
-    events = database.get_monitoring_events(node_id=node_id, limit=limit)
-    return jsonify({'events': events})
-
-
-@app.route('/api/panel/monitoring/nodes/<int:node_id>/test-ssh', methods=['POST'])
-@require_auth
-def monitoring_test_ssh(node_id):
-    node = database.get_monitoring_node(node_id)
-    if not node:
-        return jsonify({'error': 'Node not found'}), 404
-    try:
-        from src.monitoring.monitoring import SSHClient
-        ssh = SSHClient(
-            host=node['host'],
-            port=int(node.get('ssh_port') or 22),
-            username=node['ssh_user'],
-            password=node['ssh_password'],
-        )
-        metrics = ssh.collect_metrics()
-        tool = ssh.ensure_speedtest()
-        speedtest = ssh.run_speedtest(tool)
-        return jsonify({
-            'success': True,
-            'metrics': metrics,
-            'speedtest_tool': tool,
-            'speedtest': speedtest,
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
-
-
-def start_monitoring_service():
-    """Запустить фоновый мониторинг нод."""
-    try:
-        from src.monitoring.monitoring import monitoring_service
-        monitoring_service.start()
-        logger.info('Monitoring service initialized')
-    except Exception as e:
-        logger.error(f'Failed to start monitoring service: {e}')
-
 
 # Запуск планировщика для автоматических бэкапов
 def start_backup_scheduler():
@@ -6962,9 +7261,6 @@ if __name__ == '__main__':
 
     # Запускаем поллер платежей (перестрахование от потерянных вебхуков)
     start_payment_poller()
-
-    # Мониторинг VPN-нод
-    start_monitoring_service()
 
     # Чистим протухшие веб-сессии на старте
     try:

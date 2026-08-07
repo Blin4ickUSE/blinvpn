@@ -1,13 +1,20 @@
 """
-API модуль для работы с Remnawave
-Полная интеграция со всеми функциями Remnawave API
-Основано на example/remnawave_api.py
+API модуль для работы с Remnawave Panel API 3.x (проверено на 3.2.1).
+
+Breaking changes с 2.8.x → 3.0+:
+- пользователь идентифицируется числовым id (поле uuid удалено);
+- GET /api/users/by-telegram-id удалён → GET /api/users/stream?telegramId=;
+- PATCH /api/users принимает id вместо uuid;
+- HWID: userId вместо userUuid;
+- DELETE/bulk часто отдают 204/202 без тела.
+Документация: https://docs.rw/api/ , changelog: https://f.docs.rw/t/topic/354
 """
 import os
 import asyncio
 import json
 import ssl
 import base64
+import re
 import threading
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime, timedelta
@@ -16,9 +23,14 @@ import aiohttp
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+# vpn_keys.key_uuid раньше хранил Remnawave user UUID; в 3.x — строковый numeric id.
+_LEGACY_UUID_RE = re.compile(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+)
 
 T = TypeVar('T')
 
@@ -92,7 +104,7 @@ class UserTraffic:
 
 @dataclass
 class RemnaWaveUser:
-    uuid: str
+    id: int
     short_uuid: str
     username: str
     status: UserStatus
@@ -120,7 +132,12 @@ class RemnaWaveUser:
     happ_link: Optional[str] = None
     happ_crypto_link: Optional[str] = None
     external_squad_uuid: Optional[str] = None
-    id: Optional[int] = None
+    # Обратная совместимость: раньше здесь был UUID; в 3.x = str(id) для vpn_keys.key_uuid
+    uuid: str = ''
+
+    def __post_init__(self):
+        if not self.uuid:
+            self.uuid = str(self.id)
 
     @property
     def used_traffic_bytes(self) -> int:
@@ -135,6 +152,81 @@ class RemnaWaveUser:
         if self.user_traffic:
             return self.user_traffic.lifetime_used_traffic_bytes
         return 0
+
+
+def remnawave_user_ref(user: Union['RemnaWaveUser', Dict[str, Any], int, str]) -> str:
+    """Каноническое значение для vpn_keys.key_uuid (строковый numeric Remnawave user id)."""
+    if isinstance(user, RemnaWaveUser):
+        return str(user.id)
+    if isinstance(user, dict):
+        if user.get('id') is not None:
+            return str(user['id'])
+        if user.get('uuid') is not None:
+            return str(user['uuid'])
+    return str(user)
+
+
+def is_legacy_uuid_ref(ref: Any) -> bool:
+    """True если значение похоже на старый Remnawave user UUID (до 3.x)."""
+    s = str(ref or '').strip()
+    return bool(_LEGACY_UUID_RE.match(s))
+
+
+def parse_user_id(ref: Any) -> Optional[int]:
+    """Извлечь numeric userId из ref (int / digit-string). Legacy UUID → None."""
+    if ref is None:
+        return None
+    if isinstance(ref, bool):
+        return None
+    if isinstance(ref, int):
+        return ref if ref > 0 else None
+    s = str(ref).strip()
+    if s.isdigit():
+        return int(s)
+    return None
+
+
+def parse_subscription_key_id(username: str, telegram_id: Optional[int] = None) -> Optional[int]:
+    """Имя подписки TELEGRAMID_KEYID → vpn_keys.id."""
+    username = str(username or '').strip()
+    if not username or '_' not in username:
+        return None
+    prefix, _, suffix = username.rpartition('_')
+    if not suffix.isdigit():
+        return None
+    if telegram_id is not None and prefix != str(telegram_id):
+        return None
+    return int(suffix)
+
+
+def migrate_vpn_key_uuid_for_rw_user(cursor, rw_user: RemnaWaveUser) -> Optional[str]:
+    """
+    Привязать vpn_keys.key_uuid к numeric Remnawave id.
+    Сначала по уже сохранённому id, иначе по username TELEGRAMID_KEYID.
+    Возвращает актуальный key_uuid (str id) или None.
+    """
+    ref = remnawave_user_ref(rw_user)
+    cursor.execute("SELECT id FROM vpn_keys WHERE key_uuid = ?", (ref,))
+    if cursor.fetchone():
+        return ref
+
+    key_id = parse_subscription_key_id(rw_user.username, rw_user.telegram_id)
+    if not key_id:
+        return None
+
+    cursor.execute("SELECT id, key_uuid FROM vpn_keys WHERE id = ?", (key_id,))
+    row = cursor.fetchone()
+    if not row:
+        return None
+
+    old_ref = row['key_uuid']
+    if str(old_ref or '') != ref:
+        cursor.execute("UPDATE vpn_keys SET key_uuid = ? WHERE id = ?", (ref, key_id))
+        logger.info(
+            "Migrated vpn_keys.id=%s key_uuid %s -> %s (Remnawave 3.x)",
+            key_id, old_ref, ref,
+        )
+    return ref
 
 
 @dataclass
@@ -307,7 +399,7 @@ class RemnaWaveAPI:
                 'params': params
             }
             
-            if data:
+            if data is not None:
                 kwargs['json'] = data
                 
             async with self.session.request(method, **kwargs) as response:
@@ -318,6 +410,10 @@ class RemnaWaveAPI:
                 except json.JSONDecodeError:
                     response_data = {'raw_response': response_text}
                 
+                # 202/204 — успешные ответы без тела (Remnawave 3.x)
+                if response.status in (202, 204):
+                    return response_data if isinstance(response_data, dict) else {}
+
                 if response.status >= 400:
                     error_message = response_data.get('message', f'HTTP {response.status}')
                     logger.error(f"API Error {response.status}: {error_message}")
@@ -333,21 +429,50 @@ class RemnaWaveAPI:
         except aiohttp.ClientError as e:
             logger.error(f"Request failed: {e}")
             raise RemnaWaveAPIError(f"Request failed: {str(e)}")
+
+    async def coerce_user_id(
+        self,
+        user_ref: Union[int, str, None],
+        *,
+        username: Optional[str] = None,
+        telegram_id: Optional[int] = None,
+        vpn_key_id: Optional[int] = None,
+    ) -> Optional[int]:
+        """Привести vpn_keys.key_uuid / legacy UUID к numeric Remnawave userId."""
+        uid = parse_user_id(user_ref)
+        if uid is not None:
+            return uid
+
+        resolve_username = username
+        if not resolve_username and telegram_id is not None and vpn_key_id is not None:
+            resolve_username = f"{int(telegram_id)}_{int(vpn_key_id)}"
+
+        if resolve_username:
+            user = await self.get_user_by_username(resolve_username)
+            if user:
+                return user.id
+
+        if is_legacy_uuid_ref(user_ref):
+            logger.warning(
+                "Legacy Remnawave UUID %s cannot be resolved without username/key context",
+                str(user_ref)[:36],
+            )
+        return None
     
     async def get_internal_squads(self) -> List[RemnaWaveInternalSquad]:
         response = await self._make_request('GET', '/api/internal-squads')
         squads_data = response.get('response', {}).get('internalSquads', [])
         return [self._parse_internal_squad(squad) for squad in squads_data]
     
-    async def get_user_by_uuid(self, uuid: str) -> Optional[RemnaWaveUser]:
-        """Получить пользователя Remnawave по UUID."""
-        uuid = str(uuid or '').strip()
-        if not uuid:
+    async def get_user_by_id(self, user_id: Union[int, str]) -> Optional[RemnaWaveUser]:
+        """Получить пользователя Remnawave по numeric id."""
+        uid = parse_user_id(user_id)
+        if uid is None:
             return None
         try:
-            response = await self._make_request('GET', f'/api/users/{uuid}')
+            response = await self._make_request('GET', f'/api/users/{uid}')
             user_data = response.get('response', response)
-            if isinstance(user_data, dict) and user_data.get('uuid'):
+            if isinstance(user_data, dict) and user_data.get('id') is not None:
                 return self._parse_user(user_data)
         except RemnaWaveAPIError as e:
             if getattr(e, 'status_code', None) == 404:
@@ -355,32 +480,54 @@ class RemnaWaveAPI:
             raise
         return None
 
-    async def ensure_hwid_device_limit(self, user_uuid: str, limit: int) -> bool:
+    async def get_user_by_uuid(self, uuid: str) -> Optional[RemnaWaveUser]:
+        """
+        Обратная совместимость: uuid теперь = str(numeric id).
+        Legacy UUID без контекста username не резолвится (поле uuid удалено в 3.x).
+        """
+        return await self.get_user_by_id(uuid)
+
+    async def get_user_by_username(self, username: str) -> Optional[RemnaWaveUser]:
+        username = str(username or '').strip()
+        if not username:
+            return None
+        try:
+            response = await self._make_request('GET', f'/api/users/by-username/{username}')
+            user_data = response.get('response', response)
+            if isinstance(user_data, dict) and user_data.get('id') is not None:
+                return self._parse_user(user_data)
+        except RemnaWaveAPIError as e:
+            if getattr(e, 'status_code', None) == 404:
+                return None
+            raise
+        return None
+
+    async def ensure_hwid_device_limit(self, user_ref: Union[int, str], limit: int) -> bool:
         """Установить hwidDeviceLimit и проверить, что значение применилось."""
-        user_uuid = str(user_uuid or '').strip()
+        uid = await self.coerce_user_id(user_ref)
         limit = int(limit)
-        if not user_uuid or limit < 1:
+        if uid is None or limit < 1:
             return False
 
         for attempt in range(2):
-            user = await self.update_user(user_uuid, hwid_device_limit=limit)
+            user = await self.update_user(uid, hwid_device_limit=limit)
             actual = user.hwid_device_limit if user else None
             if actual == limit:
-                logger.info("hwidDeviceLimit synced for %s -> %s", user_uuid, limit)
+                logger.info("hwidDeviceLimit synced for userId=%s -> %s", uid, limit)
                 return True
             logger.warning(
-                "hwidDeviceLimit mismatch for %s (attempt %s): want=%s got=%s",
-                user_uuid, attempt + 1, limit, actual,
+                "hwidDeviceLimit mismatch for userId=%s (attempt %s): want=%s got=%s",
+                uid, attempt + 1, limit, actual,
             )
         return False
 
-    async def subscription_ever_connected(self, user_uuid: str) -> bool:
+    async def subscription_ever_connected(self, user_ref: Union[int, str]) -> bool:
         """Была ли подписка когда-либо подключена (трафик, HWID или firstConnectedAt)."""
-        user_uuid = str(user_uuid or '').strip()
-        if not user_uuid:
+        uid = await self.coerce_user_id(user_ref)
+        if uid is None:
             return True
         try:
-            user = await self.get_user_by_uuid(user_uuid)
+            user = await self.get_user_by_id(uid)
             if user and user.user_traffic:
                 if user.user_traffic.first_connected_at:
                     return True
@@ -388,19 +535,37 @@ class RemnaWaveAPI:
                     return True
                 if user.user_traffic.lifetime_used_traffic_bytes > 0:
                     return True
-            devices = await self.get_hwid_devices(user_uuid)
+            devices = await self.get_hwid_devices(uid)
             return len(devices) > 0
         except Exception as e:
-            logger.warning("subscription_ever_connected check failed for %s: %s", user_uuid, e)
+            logger.warning("subscription_ever_connected check failed for %s: %s", uid, e)
             return True
 
     async def get_user_by_telegram_id(self, telegram_id: int) -> List[RemnaWaveUser]:
+        """Поиск пользователей по Telegram ID через /api/users/stream (3.x)."""
+        users: List[RemnaWaveUser] = []
+        cursor = None
         try:
-            response = await self._make_request('GET', f'/api/users/by-telegram-id/{telegram_id}')
-            users_data = response.get('response', [])
-            if not users_data:
-                return []
-            users = [self._parse_user(user) for user in users_data]
+            while True:
+                params: Dict[str, Any] = {
+                    'telegramId': str(telegram_id),
+                    'size': 250,
+                }
+                if cursor is not None:
+                    params['cursor'] = cursor
+                response = await self._make_request('GET', '/api/users/stream', params=params)
+                payload = response.get('response', response)
+                if not isinstance(payload, dict):
+                    break
+                batch = payload.get('users') or []
+                for item in batch:
+                    if isinstance(item, dict):
+                        users.append(self._parse_user(item))
+                if not payload.get('hasMore'):
+                    break
+                cursor = payload.get('nextCursor')
+                if cursor is None:
+                    break
             return users
         except RemnaWaveAPIError as e:
             if e.status_code == 404:
@@ -449,7 +614,7 @@ class RemnaWaveAPI:
     
     async def update_user(
         self,
-        uuid: str,
+        uuid: Union[int, str],
         status: Optional[UserStatus] = None,
         traffic_limit_bytes: Optional[int] = None,
         traffic_limit_strategy: Optional[TrafficLimitStrategy] = None,
@@ -459,9 +624,24 @@ class RemnaWaveAPI:
         hwid_device_limit: Optional[int] = None,
         description: Optional[str] = None,
         tag: Optional[str] = None,
-        active_internal_squads: Optional[List[str]] = None
+        active_internal_squads: Optional[List[str]] = None,
+        *,
+        user_id: Union[int, str, None] = None,
+        username: Optional[str] = None,
+        telegram_id_for_resolve: Optional[int] = None,
+        vpn_key_id: Optional[int] = None,
     ) -> RemnaWaveUser:
-        data = {'uuid': uuid}
+        ref = user_id if user_id is not None else uuid
+        uid = await self.coerce_user_id(
+            ref,
+            username=username,
+            telegram_id=telegram_id_for_resolve,
+            vpn_key_id=vpn_key_id,
+        )
+        if uid is None:
+            raise RemnaWaveAPIError(f"Invalid Remnawave user id: {ref}")
+
+        data: Dict[str, Any] = {'id': uid}
         
         if status:
             data['status'] = status.value
@@ -488,18 +668,26 @@ class RemnaWaveAPI:
         user = self._parse_user(response['response'])
         return user
     
-    async def delete_user(self, uuid: str) -> bool:
-        """Удалить пользователя из Remnawave"""
-        response = await self._make_request('DELETE', f'/api/users/{uuid}')
-        if isinstance(response, dict):
-            resp = response.get('response', response)
-            if isinstance(resp, dict):
-                return bool(resp.get('isDeleted', True))
-        return True
+    async def delete_user(self, uuid: Union[int, str]) -> bool:
+        """Удалить пользователя из Remnawave (204 No Content в 3.x)."""
+        uid = await self.coerce_user_id(uuid)
+        if uid is None:
+            logger.warning("delete_user: cannot resolve user id from %r", uuid)
+            return False
+        try:
+            await self._make_request('DELETE', f'/api/users/{uid}')
+            return True
+        except RemnaWaveAPIError as e:
+            if e.status_code == 404:
+                return True
+            raise
 
-    async def reset_user_traffic(self, uuid: str) -> bool:
+    async def reset_user_traffic(self, uuid: Union[int, str]) -> bool:
         """Досрочный сброс счётчика трафика пользователя"""
-        response = await self._make_request('POST', f'/api/users/{uuid}/actions/reset-traffic')
+        uid = await self.coerce_user_id(uuid)
+        if uid is None:
+            return False
+        response = await self._make_request('POST', f'/api/users/{uid}/actions/reset-traffic')
         return bool(response.get('success', True)) if isinstance(response, dict) else True
     
     async def get_all_users(self, start: int = 0, size: int = 100) -> Dict[str, Any]:
@@ -513,9 +701,12 @@ class RemnaWaveAPI:
             'total': response['response']['total']
         }
 
-    # Remnawave 2.7.4 HWID management
-    async def get_hwid_devices(self, user_uuid: str) -> List[Dict[str, Any]]:
-        response = await self._make_request('GET', f'/api/hwid/devices/{user_uuid}')
+    # Remnawave 3.x HWID management (userId вместо userUuid)
+    async def get_hwid_devices(self, user_ref: Union[int, str]) -> List[Dict[str, Any]]:
+        uid = await self.coerce_user_id(user_ref)
+        if uid is None:
+            return []
+        response = await self._make_request('GET', f'/api/hwid/devices/{uid}')
         return self._normalize_hwid_devices_response(response)
 
     @staticmethod
@@ -571,49 +762,49 @@ class RemnaWaveAPI:
             out['hwid'] = hwid
         return out
 
-    async def delete_hwid_device(self, user_uuid: str, hwid: str) -> bool:
+    async def delete_hwid_device(self, user_ref: Union[int, str], hwid: str) -> bool:
         hwid = str(hwid or '').strip()
-        user_uuid = str(user_uuid or '').strip()
-        if not hwid or not user_uuid:
+        uid = await self.coerce_user_id(user_ref)
+        if not hwid or uid is None:
             return False
 
-        before_list = await self.get_hwid_devices(user_uuid)
+        before_list = await self.get_hwid_devices(uid)
         before_hwids = {self._hwid_from_device(d) for d in before_list if self._hwid_from_device(d)}
         if hwid not in before_hwids:
             logger.warning(
-                "HWID %r not found for user %s (have: %s)",
-                hwid[:48], user_uuid, list(before_hwids),
+                "HWID %r not found for userId=%s (have: %s)",
+                hwid[:48], uid, list(before_hwids),
             )
             return False
 
-        data = {'userUuid': user_uuid, 'hwid': hwid}
-        logger.info("Remnawave HWID delete request: userUuid=%s hwid_len=%d", user_uuid, len(hwid))
+        data = {'userId': uid, 'hwid': hwid}
+        logger.info("Remnawave HWID delete request: userId=%s hwid_len=%d", uid, len(hwid))
         response = await self._make_request('POST', '/api/hwid/devices/delete', data)
 
         remaining = self._normalize_hwid_devices_response(response)
         remaining_hwids = {self._hwid_from_device(d) for d in remaining if self._hwid_from_device(d)}
         if hwid in remaining_hwids:
-            after_list = await self.get_hwid_devices(user_uuid)
+            after_list = await self.get_hwid_devices(uid)
             after_hwids = {self._hwid_from_device(d) for d in after_list if self._hwid_from_device(d)}
             if hwid in after_hwids:
-                logger.error("HWID %r still present after delete for user %s", hwid[:48], user_uuid)
+                logger.error("HWID %r still present after delete for userId=%s", hwid[:48], uid)
                 return False
         logger.info(
-            "Remnawave HWID deleted: user=%s remaining=%d",
-            user_uuid,
+            "Remnawave HWID deleted: userId=%s remaining=%d",
+            uid,
             len(remaining_hwids) if remaining_hwids else len(remaining),
         )
         return True
 
-    async def delete_all_hwid_devices(self, user_uuid: str) -> bool:
-        user_uuid = str(user_uuid or '').strip()
-        if not user_uuid:
+    async def delete_all_hwid_devices(self, user_ref: Union[int, str]) -> bool:
+        uid = await self.coerce_user_id(user_ref)
+        if uid is None:
             return False
-        data = {'userUuid': user_uuid}
+        data = {'userId': uid}
         await self._make_request('POST', '/api/hwid/devices/delete-all', data)
-        after_list = await self.get_hwid_devices(user_uuid)
+        after_list = await self.get_hwid_devices(uid)
         if after_list:
-            logger.error("HWID devices still present after delete-all for user %s: %d", user_uuid, len(after_list))
+            logger.error("HWID devices still present after delete-all for userId=%s: %d", uid, len(after_list))
             return False
         return True
     
@@ -632,8 +823,21 @@ class RemnaWaveAPI:
             logger.warning(f"Неизвестная стратегия трафика: {strategy_str}, используем NO_RESET")
             traffic_strategy = TrafficLimitStrategy.NO_RESET
 
+        raw_id = user_data.get('id')
+        if raw_id is None:
+            # На случай смешанного ответа/кэша — не роняем весь sync
+            legacy = user_data.get('uuid')
+            if legacy is not None and str(legacy).isdigit():
+                raw_id = int(legacy)
+            else:
+                raise RemnaWaveAPIError(
+                    f"Remnawave user object missing numeric id: keys={list(user_data.keys())}"
+                )
+        user_id = int(raw_id)
+
         return RemnaWaveUser(
-            uuid=user_data['uuid'],
+            id=user_id,
+            uuid=str(user_id),
             short_uuid=user_data['shortUuid'],
             username=user_data['username'],
             status=status,
@@ -864,11 +1068,59 @@ class RemnawaveAPI:
         return run_async(with_remnawave_api(_get))
 
     def get_user_by_uuid_sync(self, uuid: str):
-        """Получить пользователя по UUID (синхронная обёртка)"""
+        """Получить пользователя по id (параметр uuid — обратная совместимость)."""
         async def _get(api: RemnaWaveAPI):
-            return await api.get_user_by_uuid(uuid)
+            return await api.get_user_by_id(uuid)
 
         return run_async(with_remnawave_api(_get))
+
+    def resolve_user_id_sync(
+        self,
+        user_ref: Union[int, str],
+        *,
+        username: Optional[str] = None,
+        telegram_id: Optional[int] = None,
+        vpn_key_id: Optional[int] = None,
+    ) -> Optional[int]:
+        async def _resolve(api: RemnaWaveAPI):
+            return await api.coerce_user_id(
+                user_ref,
+                username=username,
+                telegram_id=telegram_id,
+                vpn_key_id=vpn_key_id,
+            )
+
+        return run_async(with_remnawave_api(_resolve))
+
+    def ensure_key_ref_sync(
+        self,
+        key_ref: Union[int, str],
+        *,
+        telegram_id: Optional[int] = None,
+        vpn_key_id: Optional[int] = None,
+    ) -> Optional[str]:
+        """
+        Вернуть актуальный Remnawave user id (строкой) для vpn_keys.key_uuid.
+        При legacy UUID резолвит через username TELEGRAMID_KEYID.
+        """
+        parsed = parse_user_id(key_ref)
+        if parsed is not None:
+            return str(parsed)
+
+        username = None
+        if telegram_id is not None and vpn_key_id is not None:
+            username = format_subscription_username(telegram_id, vpn_key_id)
+
+        async def _ensure(api: RemnaWaveAPI):
+            uid = await api.coerce_user_id(
+                key_ref,
+                username=username,
+                telegram_id=telegram_id,
+                vpn_key_id=vpn_key_id,
+            )
+            return str(uid) if uid is not None else None
+
+        return run_async(with_remnawave_api(_ensure))
 
     def get_hwid_devices_sync(self, user_uuid: str):
         async def _get(api: RemnaWaveAPI):
@@ -891,3 +1143,35 @@ class RemnawaveAPI:
 
 # Глобальный экземпляр для обратной совместимости
 remnawave_api = RemnawaveAPI()
+
+
+def refresh_vpn_key_remnawave_ref(
+    cursor,
+    *,
+    key_uuid: Optional[str],
+    vpn_key_id: int,
+    telegram_id: Optional[int],
+) -> Optional[str]:
+    """Если в БД ещё старый UUID — резолвит numeric id и обновляет vpn_keys.key_uuid."""
+    if not key_uuid:
+        return None
+    if not is_legacy_uuid_ref(key_uuid):
+        return str(key_uuid)
+    if telegram_id is None:
+        return str(key_uuid)
+    new_ref = remnawave_api.ensure_key_ref_sync(
+        key_uuid,
+        telegram_id=int(telegram_id),
+        vpn_key_id=int(vpn_key_id),
+    )
+    if new_ref and new_ref != str(key_uuid):
+        cursor.execute(
+            "UPDATE vpn_keys SET key_uuid = ? WHERE id = ?",
+            (new_ref, vpn_key_id),
+        )
+        logger.info(
+            "Refreshed vpn_keys.id=%s key_uuid %s -> %s",
+            vpn_key_id, key_uuid, new_ref,
+        )
+        return new_ref
+    return str(key_uuid)

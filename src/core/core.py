@@ -388,7 +388,7 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
             logger.error(f"Failed to create user in Remnawave: {telegram_id}")
             return None
 
-        user_uuid = remnawave_user.uuid if hasattr(remnawave_user, 'uuid') else remnawave_user.get('uuid')
+        user_uuid = remnawave.remnawave_user_ref(remnawave_user)
         subscription_url = remnawave_user.subscription_url if hasattr(remnawave_user, 'subscription_url') else remnawave_user.get('subscription_url', '')
 
         subscription = remnawave_user
@@ -400,7 +400,8 @@ def create_user_and_subscription(telegram_id: int, username: str, days: int,
         if subscription:
             if hasattr(subscription, '__dict__'):
                 subscription_data = {
-                    'uuid': subscription.uuid if hasattr(subscription, 'uuid') else None,
+                    'id': getattr(subscription, 'id', None),
+                    'uuid': remnawave.remnawave_user_ref(subscription),
                     'username': subscription.username if hasattr(subscription, 'username') else None,
                     'status': subscription.status.value if hasattr(subscription, 'status') and hasattr(subscription.status, 'value') else str(subscription.status) if hasattr(subscription, 'status') else None,
                     'subscription_url': subscription.subscription_url if hasattr(subscription, 'subscription_url') else None,
@@ -545,6 +546,7 @@ def sync_expiry_from_remnawave() -> None:
     """
     Синхронизировать expiry_date из Remnawave для всех активных ключей.
     Единый источник истины для даты окончания подписки (уведомления, панель, miniapp).
+    Заодно мигрирует vpn_keys.key_uuid со старого UUID на numeric id (Remnawave 3.x).
     """
     conn = database.get_db_connection()
     cursor = conn.cursor()
@@ -559,9 +561,11 @@ def sync_expiry_from_remnawave() -> None:
             try:
                 rw_users = remnawave.remnawave_api.get_user_by_telegram_id(telegram_id)
                 for rw_user in rw_users or []:
-                    rw_uuid = rw_user.uuid if hasattr(rw_user, 'uuid') else rw_user.get('uuid')
+                    rw_ref = remnawave.migrate_vpn_key_uuid_for_rw_user(cursor, rw_user)
+                    if not rw_ref:
+                        rw_ref = remnawave.remnawave_user_ref(rw_user)
                     expire_at = getattr(rw_user, 'expire_at', None) or (rw_user.get('expireAt') if isinstance(rw_user, dict) else None)
-                    if not rw_uuid or not expire_at:
+                    if not rw_ref or not expire_at:
                         continue
                     if isinstance(expire_at, str):
                         expire_at = datetime.fromisoformat(expire_at.replace('Z', '+00:00').replace('+00:00', ''))
@@ -569,7 +573,7 @@ def sync_expiry_from_remnawave() -> None:
                         expire_at = expire_at.replace(tzinfo=None) - timedelta(seconds=expire_at.utcoffset().total_seconds() if expire_at.utcoffset() else 0)
                     cursor.execute("""
                         UPDATE vpn_keys SET expiry_date = ? WHERE key_uuid = ?
-                    """, (expire_at.isoformat(), rw_uuid))
+                    """, (expire_at.isoformat(), rw_ref))
             except Exception as e:
                 logger.warning(f"sync_expiry_from_remnawave for telegram_id {telegram_id}: {e}")
         conn.commit()
@@ -578,73 +582,78 @@ def sync_expiry_from_remnawave() -> None:
 
 
 def apply_promocode(user_id: int, code: str) -> Dict[str, Any]:
-    """Применить промокод"""
+    """Применить промокод (атомарный захват uses_limit)."""
     conn = database.get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
-        # Проверяем промокод
+        cursor.execute("BEGIN IMMEDIATE")
         cursor.execute("""
             SELECT * FROM promocodes
             WHERE code = ? AND is_active = 1
             AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         """, (code.upper(),))
-        
+
         promo = cursor.fetchone()
         if not promo:
+            conn.rollback()
             return {'success': False, 'error': 'Промокод не найден или истек'}
-        
+
         promo_dict = dict(promo)
-        
-        # Проверяем лимит использований
-        if promo_dict['uses_limit'] and promo_dict['uses_count'] >= promo_dict['uses_limit']:
-            return {'success': False, 'error': 'Промокод исчерпан'}
-        
-        # Проверяем, использовал ли пользователь уже этот промокод
+
         cursor.execute("""
             SELECT id FROM promocode_uses
             WHERE promocode_id = ? AND user_id = ?
         """, (promo_dict['id'], user_id))
-        
+
         if cursor.fetchone():
+            conn.rollback()
             return {'success': False, 'error': 'Вы уже использовали этот промокод'}
-        
-        # Применяем промокод
+
+        # Атомарно резервируем слот использования
+        cursor.execute("""
+            UPDATE promocodes
+            SET uses_count = uses_count + 1
+            WHERE id = ?
+              AND (uses_limit IS NULL OR uses_count < uses_limit)
+        """, (promo_dict['id'],))
+        if cursor.rowcount != 1:
+            conn.rollback()
+            return {'success': False, 'error': 'Промокод исчерпан'}
+
         promo_type = promo_dict['type']
         promo_value = promo_dict['value']
-        
+
         if promo_type == 'balance':
-            # Пополнение баланса
             amount = float(promo_value)
-            database.update_user_balance(user_id, amount)
+            cursor.execute(
+                "UPDATE users SET balance = balance + ? WHERE id = ?",
+                (amount, user_id),
+            )
             result_message = notify_msgs.build_promo_balance_message(amount)
         elif promo_type == 'discount':
-            # Скидка на следующую покупку подписки
             try:
                 percent = int(float(promo_value))
             except Exception:
                 percent = 0
             if percent <= 0 or percent > 90:
+                conn.rollback()
                 return {'success': False, 'error': 'Некорректный процент скидки'}
             cursor.execute("UPDATE users SET next_discount_percent = ? WHERE id = ?", (percent, user_id))
             result_message = notify_msgs.build_promo_discount_message(percent)
         elif promo_type == 'subscription':
-            # +N дней ко всем подпискам пользователя; если подписок нет — предложить создать
             days = int(float(promo_value))
             if days <= 0 or days > 3650:
+                conn.rollback()
                 return {'success': False, 'error': 'Некорректное количество дней'}
             cursor.execute("SELECT COUNT(*) AS cnt FROM vpn_keys WHERE user_id = ? AND status != 'Deleted'", (user_id,))
             cnt = cursor.fetchone()['cnt'] or 0
             if cnt <= 0:
                 result_message = notify_msgs.build_promo_subscription_days_message(days)
-                # Mark use but let client initiate create flow
                 cursor.execute("""
                     INSERT INTO promocode_uses (promocode_id, user_id)
                     VALUES (?, ?)
                 """, (promo_dict['id'], user_id))
-                cursor.execute("""
-                    UPDATE promocodes SET uses_count = uses_count + 1 WHERE id = ?
-                """, (promo_dict['id'],))
                 conn.commit()
                 return {'success': True, 'message': result_message, 'subscription_days': days, 'needs_subscription_create': True}
 
@@ -658,24 +667,23 @@ def apply_promocode(user_id: int, code: str) -> Dict[str, Any]:
             """, (days, user_id))
             result_message = notify_msgs.build_promo_subscription_extended_message(days)
         else:
+            conn.rollback()
             return {'success': False, 'error': 'Неизвестный тип промокода'}
-        
-        # Записываем использование
+
         cursor.execute("""
             INSERT INTO promocode_uses (promocode_id, user_id)
             VALUES (?, ?)
         """, (promo_dict['id'], user_id))
-        
-        # Увеличиваем счетчик использований
-        cursor.execute("""
-            UPDATE promocodes
-            SET uses_count = uses_count + 1
-            WHERE id = ?
-        """, (promo_dict['id'],))
-        
+
         conn.commit()
-        
+
         return {'success': True, 'message': result_message}
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         conn.close()
 
@@ -720,7 +728,7 @@ def sync_keys_with_remnawave() -> Dict:
     """
     try:
         # Получаем все ключи из Remnawave (постранично)
-        remnawave_uuids = set()
+        remnawave_ids = set()
         start = 0
         size = 100
         
@@ -730,44 +738,66 @@ def sync_keys_with_remnawave() -> Dict:
             total = result.get('total', 0)
             
             for user in users:
-                if hasattr(user, 'uuid'):
-                    remnawave_uuids.add(user.uuid)
-                elif isinstance(user, dict):
-                    remnawave_uuids.add(user.get('uuid'))
+                remnawave_ids.add(remnawave.remnawave_user_ref(user))
             
             start += size
             if start >= total:
                 break
         
-        logger.info(f"Found {len(remnawave_uuids)} users in Remnawave")
+        logger.info(f"Found {len(remnawave_ids)} users in Remnawave")
         
         # Получаем все ключи из БД
         conn = database.get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT id, key_uuid, user_id FROM vpn_keys WHERE key_uuid IS NOT NULL")
+        cursor.execute("""
+            SELECT vk.id, vk.key_uuid, vk.user_id, u.telegram_id
+            FROM vpn_keys vk
+            LEFT JOIN users u ON u.id = vk.user_id
+            WHERE vk.key_uuid IS NOT NULL
+        """)
         db_keys = cursor.fetchall()
         
         deleted_count = 0
+        migrated_count = 0
         for key in db_keys:
             key_id = key['id']
             key_uuid = key['key_uuid']
-            user_id = key['user_id']
+            telegram_id = key['telegram_id']
             
-            if key_uuid and key_uuid not in remnawave_uuids:
-                # Ключ не найден в Remnawave - удаляем из БД
+            if not key_uuid:
+                continue
+
+            # Миграция legacy UUID → numeric id через username TELEGRAMID_KEYID
+            if remnawave.is_legacy_uuid_ref(key_uuid) and telegram_id:
+                new_ref = remnawave.remnawave_api.ensure_key_ref_sync(
+                    key_uuid,
+                    telegram_id=int(telegram_id),
+                    vpn_key_id=int(key_id),
+                )
+                if new_ref:
+                    cursor.execute(
+                        "UPDATE vpn_keys SET key_uuid = ? WHERE id = ?",
+                        (new_ref, key_id),
+                    )
+                    key_uuid = new_ref
+                    migrated_count += 1
+
+            if key_uuid not in remnawave_ids:
                 logger.info(f"Key {key_uuid} not found in Remnawave, deleting from DB")
-                
-                # Удаляем ключ/устройство (теперь одна запись)
                 cursor.execute("DELETE FROM vpn_keys WHERE id = ?", (key_id,))
                 deleted_count += 1
         
         conn.commit()
         conn.close()
         
-        logger.info(f"Sync completed: deleted {deleted_count} keys from DB")
+        logger.info(
+            "Sync completed: migrated=%s deleted=%s keys from DB",
+            migrated_count, deleted_count,
+        )
         return {
             'success': True,
-            'remnawave_users': len(remnawave_uuids),
+            'remnawave_users': len(remnawave_ids),
+            'migrated_keys': migrated_count,
             'deleted_keys': deleted_count
         }
     except Exception as e:

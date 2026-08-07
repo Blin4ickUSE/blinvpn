@@ -152,7 +152,11 @@ def _credit_if_paid(
 
 def _check_cryptopay(tx: Dict[str, Any]) -> None:
     """Проверить и при необходимости зачислить CryptoPay-платёж."""
-    from src.api import cryptopay
+    try:
+        from src.api import cryptopay
+    except ImportError:
+        logger.warning("payment_poller: модуль cryptopay отсутствует — пропускаем")
+        return
 
     payment_id = str(tx.get("payment_id") or "")
     if not payment_id.startswith("cryptopay:"):
@@ -222,7 +226,11 @@ def _check_platega(tx: Dict[str, Any]) -> None:
 
 def _check_rollypay(tx: Dict[str, Any]) -> None:
     """Проверить и при необходимости зачислить RollyPay-платёж (legacy)."""
-    from src.api import rollypay
+    try:
+        from src.api import rollypay
+    except ImportError:
+        logger.warning("payment_poller: модуль rollypay отсутствует — пропускаем")
+        return
 
     payment_id = str(tx.get("payment_id") or "")
     if not payment_id:
@@ -238,7 +246,11 @@ def _check_rollypay(tx: Dict[str, Any]) -> None:
 
 def _check_paypear(tx: Dict[str, Any]) -> None:
     """Проверить и при необходимости зачислить PayPear-платёж."""
-    from src.api import paypear
+    try:
+        from src.api import paypear
+    except ImportError:
+        logger.warning("payment_poller: модуль paypear отсутствует — пропускаем")
+        return
 
     payment_id = str(tx.get("payment_id") or "")
     if not payment_id:

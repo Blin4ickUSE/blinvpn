@@ -165,6 +165,12 @@ async def _delete_subscription_fully(
     """Удалить подписку из Remnawave и БД, уведомить пользователя. Возвращает True при успехе."""
     if key_uuid:
         try:
+            key_uuid = remnawave.refresh_vpn_key_remnawave_ref(
+                cursor,
+                key_uuid=key_uuid,
+                vpn_key_id=key_id,
+                telegram_id=telegram_id,
+            ) or key_uuid
             deleted = await remnawave.remnawave_api.delete_user_async(key_uuid)
             if not deleted:
                 logger.error(f"Remnawave did not confirm deletion of key {key_uuid}")
@@ -564,10 +570,23 @@ async def cmd_error_excludes(message: Message):
 # Состояния для ожидания причины отказа
 withdrawal_reject_states = {}
 
+
+async def _require_withdraw_admin(callback: CallbackQuery) -> bool:
+    """Только TELEGRAM_ADMIN_IDS могут обрабатывать заявки на вывод."""
+    admin_ids = core.get_admin_telegram_ids()
+    uid = callback.from_user.id if callback.from_user else None
+    if not uid or uid not in admin_ids:
+        await callback.answer('Недостаточно прав', show_alert=True)
+        return False
+    return True
+
+
 @dp.callback_query(F.data.startswith('withdraw_approve_'))
 async def handle_withdraw_approve(callback: CallbackQuery):
     """Одобрить заявку — уведомить пользователя, показать админу кнопку «Я выполнил»."""
     try:
+        if not await _require_withdraw_admin(callback):
+            return
         transaction_id = int(callback.data.split('_')[-1])
 
         conn = database.get_db_connection()
@@ -623,8 +642,10 @@ async def handle_withdraw_approve(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith('withdraw_complete_'))
 async def handle_withdraw_complete(callback: CallbackQuery):
-    """Подтвердить выполнение перевода — финальное уведомление пользователю."""
+    """Подтвердить факт перевода — финальное уведомление пользователю."""
     try:
+        if not await _require_withdraw_admin(callback):
+            return
         transaction_id = int(callback.data.split('_')[-1])
 
         conn = database.get_db_connection()
@@ -668,53 +689,33 @@ async def handle_withdraw_complete(callback: CallbackQuery):
         await callback.answer('Ошибка обработки', show_alert=True)
 
 
-@dp.callback_query(F.data.startswith('withdraw_reject_'))
-async def handle_withdraw_reject(callback: CallbackQuery):
-    """Обработка отказа в выводе"""
-    try:
-        transaction_id = int(callback.data.split('_')[-1])
-        
-        # Запрашиваем причину отказа
-        reason_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text='Без причины', callback_data=f'withdraw_reject_confirm_{transaction_id}_none')],
-            [InlineKeyboardButton(text='Подозрительная активность', callback_data=f'withdraw_reject_confirm_{transaction_id}_suspicious')],
-            [InlineKeyboardButton(text='Неверные реквизиты', callback_data=f'withdraw_reject_confirm_{transaction_id}_invalid')],
-            [InlineKeyboardButton(text='❌ Отмена', callback_data=f'withdraw_cancel_{transaction_id}')]
-        ])
-        
-        await callback.message.edit_reply_markup(reply_markup=reason_keyboard)
-        await callback.answer('Выберите причину отказа')
-    except Exception as e:
-        logger.error(f"Error handling withdraw reject: {e}")
-        await callback.answer('Ошибка обработки', show_alert=True)
-
-
 @dp.callback_query(F.data.startswith('withdraw_reject_confirm_'))
 async def handle_withdraw_reject_confirm(callback: CallbackQuery):
     """Подтверждение отказа с причиной"""
     try:
+        if not await _require_withdraw_admin(callback):
+            return
         parts = callback.data.split('_')
         transaction_id = int(parts[3])
         reason_code = parts[4] if len(parts) > 4 else 'none'
-        
+
         reasons = {
             'none': '',
             'suspicious': 'Подозрительная активность',
             'invalid': 'Неверные реквизиты'
         }
         reason = reasons.get(reason_code, '')
-        
+
         conn = database.get_db_connection()
         cursor = conn.cursor()
-        
-        # Получаем информацию о транзакции
+
         cursor.execute("""
             SELECT t.*, u.telegram_id, u.username
             FROM transactions t
             JOIN users u ON t.user_id = u.id
             WHERE t.id = ?
         """, (transaction_id,))
-        
+
         transaction = cursor.fetchone()
         if not transaction:
             await callback.answer('Транзакция не найдена', show_alert=True)
@@ -722,32 +723,53 @@ async def handle_withdraw_reject_confirm(callback: CallbackQuery):
         if transaction['status'] not in ('Pending', 'Approved'):
             await callback.answer('Заявка уже завершена', show_alert=True)
             return
-        
+
         amount = abs(float(transaction['amount']))
         user_id = transaction['user_id']
-        
+
         cursor.execute("""
             UPDATE users SET partner_balance = partner_balance + ? WHERE id = ?
         """, (amount, user_id))
-        
+
         cursor.execute("""
             UPDATE transactions SET status = 'Rejected', description = description || ' | Причина отказа: ' || ? WHERE id = ?
         """, (reason or 'Не указана', transaction_id))
-        
+
         conn.commit()
         conn.close()
-        
+
         core.send_notification_to_user(
             transaction['telegram_id'],
             notify_msgs.build_withdrawal_rejected_message(transaction_id, amount, reason),
         )
-        
-        # Удаляем сообщение с запросом
+
         await callback.message.delete()
         await callback.answer('Вывод отклонён, средства возвращены', show_alert=True)
-        
+
     except Exception as e:
         logger.error(f"Error confirming rejection: {e}")
+        await callback.answer('Ошибка обработки', show_alert=True)
+
+
+@dp.callback_query(F.data.regexp(r'^withdraw_reject_\d+$'))
+async def handle_withdraw_reject(callback: CallbackQuery):
+    """Обработка отказа в выводе"""
+    try:
+        if not await _require_withdraw_admin(callback):
+            return
+        transaction_id = int(callback.data.split('_')[-1])
+
+        reason_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='Без причины', callback_data=f'withdraw_reject_confirm_{transaction_id}_none')],
+            [InlineKeyboardButton(text='Подозрительная активность', callback_data=f'withdraw_reject_confirm_{transaction_id}_suspicious')],
+            [InlineKeyboardButton(text='Неверные реквизиты', callback_data=f'withdraw_reject_confirm_{transaction_id}_invalid')],
+            [InlineKeyboardButton(text='❌ Отмена', callback_data=f'withdraw_cancel_{transaction_id}')]
+        ])
+
+        await callback.message.edit_reply_markup(reply_markup=reason_keyboard)
+        await callback.answer('Выберите причину отказа')
+    except Exception as e:
+        logger.error(f"Error handling withdraw reject: {e}")
         await callback.answer('Ошибка обработки', show_alert=True)
 
 
@@ -755,6 +777,8 @@ async def handle_withdraw_reject_confirm(callback: CallbackQuery):
 async def handle_withdraw_cancel(callback: CallbackQuery):
     """Отмена действия — вернуть кнопки к текущему статусу заявки."""
     try:
+        if not await _require_withdraw_admin(callback):
+            return
         transaction_id = int(callback.data.split('_')[-1])
         conn = database.get_db_connection()
         cursor = conn.cursor()
@@ -921,6 +945,12 @@ async def subscription_notifications_task():
                 ):
                     continue
                 try:
+                    key_uuid = remnawave.refresh_vpn_key_remnawave_ref(
+                        cursor,
+                        key_uuid=key_uuid,
+                        vpn_key_id=key_id,
+                        telegram_id=row['telegram_id'],
+                    ) or key_uuid
                     ever_connected = await asyncio.to_thread(
                         remnawave.remnawave_api.subscription_ever_connected_sync,
                         key_uuid,

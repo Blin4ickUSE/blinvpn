@@ -255,33 +255,31 @@ class HeleketAPI:
         return self.get_payment_info(order_id=order_id)
     
     def verify_webhook_signature(self, payload: Dict[str, Any]) -> bool:
-        """Проверить подпись webhook от Heleket"""
+        """Проверить подпись webhook от Heleket. Fail-closed если провайдер не настроен."""
         if not self.is_configured:
-            logger.warning("Heleket не настроен, пропускаем проверку подписи")
-            return True
-        
-        if not isinstance(payload, dict):
-            logger.error(f"Heleket webhook payload не dict: {payload}")
+            logger.error("Heleket не настроен — отклоняем webhook")
             return False
-        
+
+        if not isinstance(payload, dict):
+            logger.error("Heleket webhook payload не dict: %s", type(payload))
+            return False
+
         signature = payload.get('sign')
         if not signature:
             logger.error("Heleket webhook без подписи")
             return False
-        
-        # Убираем sign из payload перед проверкой
+
         data = dict(payload)
         data.pop('sign', None)
-        
-        # Для webhook не сортируем ключи
+
         body = self._prepare_body(data, ignore_none=False, sort_keys=False)
         expected = self._generate_signature(body)
-        
-        is_valid = hmac.compare_digest(expected, str(signature))
-        
+
+        is_valid = hmac.compare_digest(str(expected), str(signature))
+
         if not is_valid:
-            logger.error(f"Неверная подпись Heleket webhook: ожидается {expected}, получено {signature}")
-        
+            logger.error("Неверная подпись Heleket webhook")
+
         return is_valid
     
     def check_payment_status(self, order_id: str = None, uuid: str = None) -> Optional[Dict[str, Any]]:

@@ -4,6 +4,7 @@
 import sqlite3
 import os
 import logging
+import math
 import re
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
@@ -484,33 +485,9 @@ def init_database():
             )
         """)
 
-        # Ноды для мониторинга
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS monitoring_nodes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                host TEXT NOT NULL,
-                ssh_port INTEGER DEFAULT 22,
-                ssh_user TEXT NOT NULL,
-                ssh_password TEXT NOT NULL,
-                is_active INTEGER DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        # События мониторинга (downtime, ping spike, traffic spike)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS monitoring_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                node_id INTEGER NOT NULL,
-                event_type TEXT NOT NULL,
-                message TEXT,
-                details TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (node_id) REFERENCES monitoring_nodes(id) ON DELETE CASCADE
-            )
-        """)
+        # Удаляем устаревшие таблицы мониторинга (функционал снят)
+        cursor.execute("DROP TABLE IF EXISTS monitoring_events")
+        cursor.execute("DROP TABLE IF EXISTS monitoring_nodes")
         
         # Индексы
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)")
@@ -522,10 +499,19 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_traffic_stats_date ON traffic_stats(date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_telegram_id ON blacklist(telegram_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_panel_ip_blocks_ip ON panel_ip_blocks(ip_address)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_monitoring_events_node ON monitoring_events(node_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_monitoring_events_created ON monitoring_events(created_at)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_web_sessions_token ON web_sessions(token_hash)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_web_sessions_tg ON web_sessions(telegram_id)")
+        # Идемпотентность депозитов: один payment_id на провайдера (NULL payment_id допускаются многократно)
+        try:
+            cursor.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_provider_payment
+                ON transactions(payment_provider, payment_id)
+                WHERE payment_id IS NOT NULL AND TRIM(payment_id) != ''
+                """
+            )
+        except Exception as e:
+            logger.warning("Could not create unique payment index (possible duplicates): %s", e)
         
         conn.commit()
         
@@ -1550,6 +1536,21 @@ def compute_vpn_subscription_price(days: int, devices: int) -> Optional[float]:
         conn.close()
 
 
+def compute_extra_devices_upgrade_price(remaining_days: int, add_count: int) -> float:
+    """
+    Доплата за +N устройств до конца текущей подписки.
+    Берём ближайший тарифный период >= remaining_days и считаем пропорцию
+    (add_count * цена_доп_устройства * remaining / period).
+    """
+    add_count = max(1, min(19, int(add_count)))
+    rem = max(1, int(math.ceil(float(remaining_days))))
+    periods = sorted(_PLAN_EXTRA_DEVICE_PRICE.keys())
+    period = next((p for p in periods if p >= rem), periods[-1])
+    unit = float(_PLAN_EXTRA_DEVICE_PRICE[period])
+    price = add_count * unit * (rem / float(period))
+    return round(max(1.0, price), 2)
+
+
 def user_has_paid_subscription_purchase(user_id: int) -> bool:
     """Была ли у пользователя платная покупка/продление подписки (после оплаты)."""
     conn = get_db_connection()
@@ -1952,16 +1953,46 @@ def set_subscription_squads(subscription_type: str, squad_uuids: List[str]) -> b
 
 # ===== АВТОРИЗАЦИЯ ПАНЕЛИ =====
 
+def _hash_panel_password(password: str) -> str:
+    """bcrypt-хэш пароля админа (формат bcrypt:<hash>)."""
+    import bcrypt
+    hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt(rounds=12))
+    return 'bcrypt:' + hashed.decode('ascii')
+
+
+def _verify_panel_password(stored: str, password: str) -> bool:
+    """Проверка пароля: bcrypt или legacy salt:sha256."""
+    import hmac as _hmac
+    if not stored:
+        return False
+    if stored.startswith('bcrypt:'):
+        import bcrypt
+        try:
+            return bcrypt.checkpw(password.encode('utf-8'), stored[7:].encode('ascii'))
+        except Exception:
+            return False
+    try:
+        salt, expected = stored.split(':', 1)
+        computed = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+        return _hmac.compare_digest(computed, expected)
+    except Exception:
+        return False
+
+
+def _panel_session_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+
 def create_panel_admin(username: str, password: str) -> Optional[int]:
-    import secrets
-    salt = secrets.token_hex(16)
-    password_hash = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
-    
+    password_hash = _hash_panel_password(password)
+
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO panel_admins (username, password_hash) VALUES (?, ?)",
-                      (username, f"{salt}:{password_hash}"))
+        cursor.execute(
+            "INSERT INTO panel_admins (username, password_hash) VALUES (?, ?)",
+            (username, password_hash),
+        )
         conn.commit()
         return cursor.lastrowid
     except sqlite3.IntegrityError:
@@ -1974,17 +2005,27 @@ def verify_panel_admin(username: str, password: str) -> Optional[Dict[str, Any]]
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id, username, password_hash, is_active FROM panel_admins WHERE username = ? AND is_active = 1",
-                      (username,))
+        cursor.execute(
+            "SELECT id, username, password_hash, is_active FROM panel_admins WHERE username = ? AND is_active = 1",
+            (username,),
+        )
         row = cursor.fetchone()
         if not row:
             return None
-        
-        salt, expected = row['password_hash'].split(':', 1)
-        computed = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
-        if computed != expected:
+
+        stored = str(row['password_hash'] or '')
+        if not _verify_panel_password(stored, password):
             return None
-        
+
+        if not stored.startswith('bcrypt:'):
+            try:
+                cursor.execute(
+                    "UPDATE panel_admins SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (_hash_panel_password(password), row['id']),
+                )
+            except Exception as e:
+                logger.warning("panel password rehash failed: %s", e)
+
         cursor.execute("UPDATE panel_admins SET last_login = CURRENT_TIMESTAMP WHERE id = ?", (row['id'],))
         conn.commit()
         return {'id': row['id'], 'username': row['username']}
@@ -1995,42 +2036,66 @@ def verify_panel_admin(username: str, password: str) -> Optional[Dict[str, Any]]
 def create_panel_session(admin_id: int) -> Optional[str]:
     import secrets
     token = secrets.token_urlsafe(32)
+    token_hash = _panel_session_token_hash(token)
     expires = datetime.now() + timedelta(days=7)
-    
+
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("DELETE FROM panel_sessions WHERE admin_id = ?", (admin_id,))
-        cursor.execute("INSERT INTO panel_sessions (admin_id, session_token, expires_at) VALUES (?, ?, ?)",
-                      (admin_id, token, expires.isoformat()))
+        cursor.execute(
+            "INSERT INTO panel_sessions (admin_id, session_token, expires_at) VALUES (?, ?, ?)",
+            (admin_id, token_hash, expires.isoformat()),
+        )
         conn.commit()
         return token
-    except:
+    except Exception:
         return None
     finally:
         conn.close()
 
 
 def verify_panel_session(session_token: str) -> Optional[Dict[str, Any]]:
+    if not session_token:
+        return None
+    token_hash = _panel_session_token_hash(session_token)
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("""
             SELECT ps.*, pa.username FROM panel_sessions ps
             JOIN panel_admins pa ON ps.admin_id = pa.id
-            WHERE ps.session_token = ? AND ps.expires_at > CURRENT_TIMESTAMP AND pa.is_active = 1
-        """, (session_token,))
+            WHERE (ps.session_token = ? OR ps.session_token = ?)
+              AND ps.expires_at > CURRENT_TIMESTAMP AND pa.is_active = 1
+        """, (token_hash, session_token))
         row = cursor.fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        if row['session_token'] == session_token and session_token != token_hash:
+            try:
+                cursor.execute(
+                    "UPDATE panel_sessions SET session_token = ? WHERE id = ?",
+                    (token_hash, row['id']),
+                )
+                conn.commit()
+            except Exception:
+                pass
+        return dict(row)
     finally:
         conn.close()
 
 
 def delete_panel_session(session_token: str) -> bool:
+    if not session_token:
+        return False
+    token_hash = _panel_session_token_hash(session_token)
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("DELETE FROM panel_sessions WHERE session_token = ?", (session_token,))
+        cursor.execute(
+            "DELETE FROM panel_sessions WHERE session_token = ? OR session_token = ?",
+            (token_hash, session_token),
+        )
         conn.commit()
         return cursor.rowcount > 0
     finally:
@@ -2207,7 +2272,13 @@ def panel_admin_has_any_session(admin_id: int) -> bool:
         conn.close()
 
 
-def get_or_create_default_admin() -> Dict[str, Any]:
+def get_or_create_default_admin(*, allow_reveal: bool = False, allow_regenerate: bool = False) -> Dict[str, Any]:
+    """
+    Bootstrap админа панели.
+
+    Пароль в plaintext возвращается только если allow_reveal=True (валидный PANEL_SETUP_TOKEN).
+    Регенерация пароля — только при allow_regenerate=True и allow_reveal=True.
+    """
     import secrets
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -2223,23 +2294,49 @@ def get_or_create_default_admin() -> Dict[str, Any]:
 
             pending = get_panel_pending_initial_credentials()
             if pending and pending.get('username') == username and pending.get('password'):
+                if allow_reveal:
+                    return {
+                        'username': username,
+                        'password': pending['password'],
+                        'exists': True,
+                        'pending': True,
+                    }
                 return {
                     'username': username,
-                    'password': pending['password'],
+                    'password': None,
                     'exists': True,
                     'pending': True,
+                    'needs_setup_token': True,
                 }
 
-            # Старые установки: админ есть, пароль не сохранялся — выдаём новый до первого входа
-            password = secrets.token_urlsafe(12)
-            update_admin_password(admin_id, password)
-            set_panel_pending_initial_credentials(username, password)
+            # Админ есть, пароль pending отсутствует — регенерация только с setup token
+            if allow_reveal and allow_regenerate:
+                password = secrets.token_urlsafe(12)
+                update_admin_password(admin_id, password)
+                set_panel_pending_initial_credentials(username, password)
+                return {
+                    'username': username,
+                    'password': password,
+                    'exists': True,
+                    'pending': True,
+                    'password_regenerated': True,
+                }
+
             return {
                 'username': username,
-                'password': password,
+                'password': None,
                 'exists': True,
-                'pending': True,
-                'password_regenerated': True,
+                'pending': False,
+                'needs_setup_token': True,
+            }
+
+        # Нет админа — создать только при allow_reveal (есть setup token или localhost bootstrap)
+        if not allow_reveal:
+            return {
+                'username': None,
+                'password': None,
+                'exists': False,
+                'needs_setup_token': True,
             }
 
         username = 'admin'
@@ -2254,15 +2351,15 @@ def get_or_create_default_admin() -> Dict[str, Any]:
 
 
 def update_admin_password(admin_id: int, new_password: str) -> bool:
-    import secrets
-    salt = secrets.token_hex(16)
-    password_hash = hashlib.sha256(f"{salt}:{new_password}".encode()).hexdigest()
-    
+    password_hash = _hash_panel_password(new_password)
+
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE panel_admins SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                      (f"{salt}:{password_hash}", admin_id))
+        cursor.execute(
+            "UPDATE panel_admins SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (password_hash, admin_id),
+        )
         conn.commit()
         return cursor.rowcount > 0
     finally:
@@ -2723,184 +2820,6 @@ def delete_tracking_link(link_id: int) -> bool:
         cursor.execute("DELETE FROM tracking_links WHERE id = ?", (link_id,))
         conn.commit()
         return cursor.rowcount > 0
-    finally:
-        conn.close()
-
-
-# ========== Мониторинг нод ==========
-
-def _monitoring_node_row(row) -> Dict[str, Any]:
-    return {
-        'id': row['id'],
-        'name': row['name'],
-        'host': row['host'],
-        'ssh_port': row['ssh_port'],
-        'ssh_user': row['ssh_user'],
-        'ssh_password': row['ssh_password'],
-        'is_active': bool(row['is_active']),
-        'created_at': row['created_at'],
-        'updated_at': row['updated_at'],
-    }
-
-
-def get_monitoring_nodes(active_only: bool = False) -> List[Dict[str, Any]]:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        query = "SELECT * FROM monitoring_nodes"
-        if active_only:
-            query += " WHERE is_active = 1"
-        query += " ORDER BY id ASC"
-        cursor.execute(query)
-        return [_monitoring_node_row(r) for r in cursor.fetchall()]
-    finally:
-        conn.close()
-
-
-def get_monitoring_node(node_id: int) -> Optional[Dict[str, Any]]:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT * FROM monitoring_nodes WHERE id = ?", (node_id,))
-        row = cursor.fetchone()
-        return _monitoring_node_row(row) if row else None
-    finally:
-        conn.close()
-
-
-def create_monitoring_node(data: dict) -> Dict[str, Any]:
-    name = str(data.get('name') or '').strip()
-    host = str(data.get('host') or '').strip()
-    ssh_user = str(data.get('ssh_user') or '').strip()
-    ssh_password = str(data.get('ssh_password') or '')
-    ssh_port = int(data.get('ssh_port') or 22)
-    if not name or not host or not ssh_user or not ssh_password:
-        raise ValueError('Заполните имя, хост, SSH-пользователя и пароль')
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            """INSERT INTO monitoring_nodes (name, host, ssh_port, ssh_user, ssh_password, is_active)
-               VALUES (?, ?, ?, ?, ?, 1)""",
-            (name, host, ssh_port, ssh_user, ssh_password),
-        )
-        conn.commit()
-        return get_monitoring_node(cursor.lastrowid)  # type: ignore
-    finally:
-        conn.close()
-
-
-def update_monitoring_node(node_id: int, data: dict) -> Optional[Dict[str, Any]]:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT id FROM monitoring_nodes WHERE id = ?", (node_id,))
-        if not cursor.fetchone():
-            return None
-        fields = []
-        values = []
-        for key, col in [
-            ('name', 'name'), ('host', 'host'), ('ssh_port', 'ssh_port'),
-            ('ssh_user', 'ssh_user'), ('ssh_password', 'ssh_password'),
-            ('is_active', 'is_active'),
-        ]:
-            if key in data:
-                val = data[key]
-                if key == 'is_active':
-                    val = 1 if val else 0
-                elif key in ('name', 'host', 'ssh_user'):
-                    val = str(val or '').strip()
-                elif key == 'ssh_port':
-                    val = int(val or 22)
-                fields.append(f'{col} = ?')
-                values.append(val)
-        if fields:
-            fields.append('updated_at = CURRENT_TIMESTAMP')
-            values.append(node_id)
-            cursor.execute(
-                f"UPDATE monitoring_nodes SET {', '.join(fields)} WHERE id = ?",
-                values,
-            )
-            conn.commit()
-        return get_monitoring_node(node_id)
-    finally:
-        conn.close()
-
-
-def delete_monitoring_node(node_id: int) -> bool:
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM monitoring_nodes WHERE id = ?", (node_id,))
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
-
-
-def create_monitoring_event(
-    node_id: int,
-    event_type: str,
-    message: str,
-    details: Optional[Dict[str, Any]] = None,
-) -> None:
-    import json as _json
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            """INSERT INTO monitoring_events (node_id, event_type, message, details)
-               VALUES (?, ?, ?, ?)""",
-            (node_id, event_type, message, _json.dumps(details or {}, ensure_ascii=False)),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def get_monitoring_events(
-    node_id: Optional[int] = None,
-    limit: int = 100,
-) -> List[Dict[str, Any]]:
-    import json as _json
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        if node_id:
-            cursor.execute(
-                """SELECT e.*, n.name as node_name, n.host as node_host
-                   FROM monitoring_events e
-                   JOIN monitoring_nodes n ON n.id = e.node_id
-                   WHERE e.node_id = ?
-                   ORDER BY e.created_at DESC LIMIT ?""",
-                (node_id, limit),
-            )
-        else:
-            cursor.execute(
-                """SELECT e.*, n.name as node_name, n.host as node_host
-                   FROM monitoring_events e
-                   JOIN monitoring_nodes n ON n.id = e.node_id
-                   ORDER BY e.created_at DESC LIMIT ?""",
-                (limit,),
-            )
-        events = []
-        for row in cursor.fetchall():
-            details = {}
-            try:
-                details = _json.loads(row['details'] or '{}')
-            except Exception:
-                pass
-            events.append({
-                'id': row['id'],
-                'node_id': row['node_id'],
-                'node_name': row['node_name'],
-                'node_host': row['node_host'],
-                'event_type': row['event_type'],
-                'message': row['message'],
-                'details': details,
-                'created_at': row['created_at'],
-            })
-        return events
     finally:
         conn.close()
 

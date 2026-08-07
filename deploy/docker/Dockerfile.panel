@@ -7,10 +7,11 @@ RUN npm install
 
 COPY src/panel/ ./
 
-RUN npm run build
+RUN npm run build \
+    && chown -R node:node /app
+
+USER node
 
 EXPOSE 3000
 
-# --cors разрешает все origins, -L разрешает все хосты
 CMD ["npx", "serve", "-s", "dist", "-l", "3000", "--cors", "-L"]
-

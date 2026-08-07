@@ -505,6 +505,31 @@ function computePlanPrice(plan: Plan, devices: number): number {
   return plan.price + (d - 1) * extra;
 }
 
+/** Доплата за +N устройств до конца подписки (как на сервере). */
+function computeExtraDevicesUpgradePrice(remainingDays: number, addCount: number): number {
+  const add = Math.max(1, Math.min(19, Math.floor(addCount)));
+  const rem = Math.max(1, Math.ceil(remainingDays));
+  const periods = Object.keys(PLAN_EXTRA_DEVICE_PRICE).map(Number).sort((a, b) => a - b);
+  const period = periods.find((p) => p >= rem) ?? periods[periods.length - 1];
+  const unit = PLAN_EXTRA_DEVICE_PRICE[period] ?? 50;
+  const price = add * unit * (rem / period);
+  return Math.max(1, Math.round(price * 100) / 100);
+}
+
+function remainingDaysUntilExpiry(expiryDate?: string, daysLeft?: number): number {
+  if (expiryDate) {
+    const dt = new Date(expiryDate);
+    if (!Number.isNaN(dt.getTime())) {
+      const ms = dt.getTime() - Date.now();
+      return Math.max(1, Math.ceil(ms / 86400000));
+    }
+  }
+  if (daysLeft != null && daysLeft > 0) {
+    return Math.max(1, Math.ceil(daysLeft));
+  }
+  return 1;
+}
+
 // Платежные методы загружаются из API с комиссиями, но оставляем дефолтные
 const PAYMENT_METHODS_DEFAULT: PaymentMethod[] = [
   {
@@ -1436,6 +1461,8 @@ export default function App() {
   const [extendingDevice, setExtendingDevice] = useState<Device | null>(null);
   const [extendPlan, setExtendPlan] = useState<Plan | null>(null);
   const [extendDeviceCount, setExtendDeviceCount] = useState(1);
+  const [upgradingDevice, setUpgradingDevice] = useState<Device | null>(null);
+  const [upgradeDeviceCount, setUpgradeDeviceCount] = useState(2);
   const [wizardActivating, setWizardActivating] = useState(false);
 
   useEffect(() => {
@@ -1443,6 +1470,110 @@ export default function App() {
       setExtendDeviceCount(normalizedDevicesCount(extendingDevice.devices_limit || 1));
     }
   }, [extendingDevice]);
+
+  useEffect(() => {
+    if (upgradingDevice) {
+      const cur = normalizedDevicesCount(upgradingDevice.devices_limit || 1);
+      setUpgradeDeviceCount(Math.min(20, cur + 1));
+    }
+  }, [upgradingDevice]);
+
+  const openBuyDevices = (device: Device) => {
+    if (device.is_trial) {
+      alert('На пробном периоде нельзя докупить устройства. Сначала оформите платную подписку.');
+      return;
+    }
+    if (device.is_expired) {
+      alert('Подписка истекла. Сначала продлите её, затем докупите устройства.');
+      return;
+    }
+    const cur = normalizedDevicesCount(device.devices_limit || 1);
+    if (cur >= 20) {
+      alert('Достигнут максимум — 20 устройств на подписку.');
+      return;
+    }
+    setDeviceMenuOpenId(null);
+    setUpgradingDevice(device);
+    setUpgradeDeviceCount(Math.min(20, cur + 1));
+    setView('buy_device');
+  };
+
+  const priceForDeviceUpgrade = (device: Device, newTotal: number): number => {
+    const cur = normalizedDevicesCount(device.devices_limit || 1);
+    const target = Math.max(cur + 1, Math.min(20, normalizedDevicesCount(newTotal)));
+    const add = target - cur;
+    if (add <= 0) return 0;
+    const rem = remainingDaysUntilExpiry(device.expiry_date, device.days_left);
+    let price = computeExtraDevicesUpgradePrice(rem, add);
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    // Как на сервере: промокод → глобальная скидка (рефералка на докупку не действует)
+    if (nextDiscountPercent > 0 && price > 0) {
+      price = round2(price * (100 - nextDiscountPercent) / 100);
+    }
+    if (globalDiscountPercent > 0 && price > 0) {
+      price = round2(price * (100 - globalDiscountPercent) / 100);
+    }
+    return Math.max(1, price);
+  };
+
+  const purchaseExtraDevices = async (device: Device, newTotal: number) => {
+    if (device.is_expired) {
+      alert('Подписка истекла. Сначала продлите её, затем докупите устройства.');
+      return;
+    }
+    const cur = normalizedDevicesCount(device.devices_limit || 1);
+    const target = Math.max(cur + 1, Math.min(20, normalizedDevicesCount(newTotal)));
+    const price = priceForDeviceUpgrade(device, target);
+    const currentUserId = await ensureUserId();
+
+    if (!currentUserId) {
+      alert('Не удалось загрузить данные пользователя. Попробуйте перезагрузить приложение.');
+      return;
+    }
+
+    if (balance < price) {
+      if (window.confirm(`Недостаточно средств. Стоимость: ${price} ₽. Ваш баланс: ${balance} ₽. Пополнить баланс?`)) {
+        setPendingAction({
+          type: 'add_devices',
+          payload: {
+            device,
+            devices: target,
+            price,
+            name: `Докупка устройств (+${target - cur})`,
+          },
+        });
+        setTopupAmount(price - balance);
+        setTopupStep(2);
+        setView('topup');
+      }
+      return;
+    }
+
+    try {
+      const res = await miniApiFetch('/subscription/add-devices', {
+        method: 'POST',
+        body: JSON.stringify({
+          user_id: currentUserId,
+          key_id: device.id,
+          devices: target,
+          price,
+        }),
+      });
+
+      if (res && res.success) {
+        addHistoryItem('buy_dev', `Докупка устройств: ${cur} → ${target}`, -(res.price ?? price));
+        await refreshAll();
+        setUpgradingDevice(null);
+        setView('devices');
+        alert(`Готово! Теперь в подписке ${res.devices_limit ?? target} устройств.`);
+      } else {
+        alert(res?.error || 'Не удалось докупить устройства');
+      }
+    } catch (e) {
+      console.error('Failed to add devices', e);
+      alert('Ошибка докупки устройств');
+    }
+  };
 
   // Instructions State
   const [activePlatform, setActivePlatform] = useState<string>('android');
@@ -2244,8 +2375,8 @@ export default function App() {
 
   // Функция продления существующей подписки
   const extendSubscription = async (device: Device, plan: Plan) => {
-    const minDevs = normalizedDevicesCount(device.devices_limit || 1);
-    const devs = Math.max(minDevs, extendDeviceCount);
+    // Продление всегда на текущее число устройств (уменьшать нельзя; увеличить — через докупку)
+    const devs = normalizedDevicesCount(device.devices_limit || 1);
     const price = priceFinal(plan, devs);
     const currentUserId = await ensureUserId();
     
@@ -2897,6 +3028,16 @@ export default function App() {
                       <Smartphone size={15} className="text-zinc-400 shrink-0" />
                       Устройства
                     </button>
+                    {/* Докупить устройства */}
+                    {!device.is_trial && !isBlocked && !isExpired && normalizedDevicesCount(device.devices_limit || 1) < 20 && (
+                      <button
+                        onClick={() => openBuyDevices(device)}
+                        className="w-full flex items-center gap-3 px-4 py-3 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors text-left"
+                      >
+                        <Plus size={15} className="text-zinc-400 shrink-0" />
+                        Докупить устройства
+                      </button>
+                    )}
                     {/* Продлить — всегда в меню */}
                     <button
                       onClick={() => { setDeviceMenuOpenId(null); setExtendingDevice(device); setExtendPlan(null); setView('extend_subscription'); }}
@@ -2998,8 +3139,19 @@ export default function App() {
         <Header title="Устройства в подписке" onBack={() => setView('devices')} />
 
         {subscription && (
-          <div className="mb-4 px-1 text-xs text-zinc-500">
-            Подписка #{subscription.id} · слотов: <span className="text-orange-400 font-semibold">{hwidList.length}/{limit}</span>
+          <div className="mb-4 px-1 text-xs text-zinc-500 flex items-center justify-between gap-2">
+            <span>
+              Подписка #{subscription.id} · слотов: <span className="text-orange-400 font-semibold">{hwidList.length}/{limit}</span>
+            </span>
+            {!subscription.is_trial && !subscription.is_expired && limit < 20 && (
+              <button
+                type="button"
+                onClick={() => openBuyDevices(subscription)}
+                className="text-orange-400 font-semibold hover:text-orange-300"
+              >
+                + слоты
+              </button>
+            )}
           </div>
         )}
 
@@ -3076,9 +3228,8 @@ export default function App() {
   // View для продления подписки - выбор тарифа
   const ExtendSubscriptionView = () => {
     const plansForExtend = vpnPlans.filter(p => !p.isTrial); // Без триала
-    const extMinCnt = extendingDevice ? normalizedDevicesCount(extendingDevice.devices_limit || 1) : 1;
-    const extPricingCnt = Math.max(extMinCnt, extendDeviceCount);
-    const priceForExtend = (p: Plan) => priceFinal(p, extPricingCnt);
+    const extDevices = extendingDevice ? normalizedDevicesCount(extendingDevice.devices_limit || 1) : 1;
+    const priceForExtend = (p: Plan) => priceFinal(p, extDevices);
 
     return (
       <div className="min-h-full flex flex-col">
@@ -3097,39 +3248,19 @@ export default function App() {
             <div className="text-white font-medium">
 {extendingDevice.is_trial ? 'Пробная подписка' : 'Подписка'} | #{extendingDevice.id}
             </div>
+            <div className="text-xs text-zinc-500 mt-2">
+              Устройств: <span className="text-orange-400 font-semibold">{extDevices}</span>
+              {' · '}продление только на текущее число слотов
+            </div>
           </div>
         )}
         
         <div className="flex-1">
-          <div className="bg-black/60 border border-zinc-900 rounded-2xl p-4 mb-4">
-            <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2 font-bold">Устройств в подписке</div>
-            <div className="text-[11px] text-zinc-500 mb-3">Можно только увеличить (сейчас в ключе: {extMinCnt}).</div>
-            <div className="flex items-center justify-between gap-3">
-              <button
-                type="button"
-                className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-orange-600/80 transition-colors disabled:opacity-40"
-                disabled={!extendingDevice || extendDeviceCount <= extMinCnt}
-                onClick={() => setExtendDeviceCount(c => Math.max(extMinCnt, c - 1))}
-              >−</button>
-              <div className="text-center flex-1">
-                <div className="text-3xl font-black text-white">{extendDeviceCount}</div>
-                <div className="text-[11px] text-zinc-500 mt-1">мин. {extMinCnt}, макс. 20</div>
-              </div>
-              <button
-                type="button"
-                className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-orange-600/80 transition-colors"
-                onClick={() => setExtendDeviceCount(c => Math.min(20, c + 1))}
-              >+</button>
-            </div>
-          </div>
-          <div className="text-xs text-zinc-500 mb-2">
-            Цена продления считается по выбранному числу устройств (<span className="text-orange-400 font-semibold">{extPricingCnt}</span>).
-          </div>
           <div className="text-zinc-400 text-sm mb-4">Выберите период продления:</div>
           <div className="grid gap-3">
             {plansForExtend.map(plan => {
               const fin = priceForExtend(plan);
-              const pre = hasAnyProductDiscount ? priceAfterReferralOnly(plan, extPricingCnt) : null;
+              const pre = hasAnyProductDiscount ? priceAfterReferralOnly(plan, extDevices) : null;
               const discLabel = [
                 nextDiscountPercent > 0 ? `−${nextDiscountPercent}%` : null,
                 globalDiscountPercent > 0 ? `−${globalDiscountPercent}%` : null,
@@ -3149,7 +3280,7 @@ export default function App() {
                     <div className={`font-bold ${extendPlan?.id === plan.id ? 'text-orange-400' : 'text-white'}`}>
                       {plan.duration}
                     </div>
-                    <div className="text-zinc-500 text-sm">{plan.days} дней</div>
+                    <div className="text-zinc-500 text-sm">{plan.days} дней · {extDevices} устр.</div>
                   </div>
                   <div className={`text-right ${extendPlan?.id === plan.id ? 'text-orange-400' : 'text-zinc-300'}`}>
                     {pre != null && pre !== fin ? (
@@ -3438,24 +3569,131 @@ export default function App() {
     </div>
   );
 
-  const BuyDeviceView = () => (
-    <div className="min-h-full flex flex-col">
-      <Header title="Новое подключение" onBack={() => setView('devices')} />
-      
-      <div className="flex-1 flex flex-col items-center justify-center text-center py-10">
-        <div className="w-20 h-20 bg-orange-600/20 rounded-full flex items-center justify-center mb-6">
-          <Shield size={40} className="text-orange-500" />
+  const BuyDeviceView = () => {
+    if (!upgradingDevice) {
+      return (
+        <div className="min-h-full flex flex-col">
+          <Header title="Докупить устройства" onBack={() => setView('devices')} />
+          <div className="flex-1 flex flex-col items-center justify-center text-center py-10">
+            <p className="text-zinc-400 mb-6">Выберите подписку в списке и нажмите «Докупить устройства».</p>
+            <Button onClick={() => setView('devices')}>К подпискам</Button>
+          </div>
         </div>
-        <h2 className="text-xl font-bold text-white mb-2">Подключите защиту</h2>
-        <p className="text-zinc-400 mb-6 max-w-xs">
-          Единая подписка включает VPN и обход блокировок операторов
-        </p>
-        <Button onClick={() => { setWizardStep(1); setWizardPlan(null); setWizardDeviceCount(1); setView('wizard'); }}>
-          Открыть мастер подключения
-        </Button>
+      );
+    }
+
+    if (upgradingDevice.is_expired) {
+      return (
+        <div className="min-h-full flex flex-col">
+          <Header
+            title="Докупить устройства"
+            onBack={() => {
+              setUpgradingDevice(null);
+              setView('devices');
+            }}
+          />
+          <div className="flex-1 flex flex-col items-center justify-center text-center py-10 px-4">
+            <div className="w-16 h-16 bg-red-600/15 rounded-full flex items-center justify-center mb-5">
+              <AlertTriangle size={28} className="text-red-400" />
+            </div>
+            <h2 className="text-lg font-bold text-white mb-2">Подписка истекла</h2>
+            <p className="text-zinc-400 mb-6 max-w-xs">
+              Докупить устройства можно только для активной подписки. Сначала продлите её.
+            </p>
+            <Button
+              onClick={() => {
+                setExtendingDevice(upgradingDevice);
+                setExtendPlan(null);
+                setUpgradingDevice(null);
+                setView('extend_subscription');
+              }}
+            >
+              <Zap size={18} /> Продлить подписку
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    const cur = normalizedDevicesCount(upgradingDevice.devices_limit || 1);
+    const target = Math.max(cur + 1, Math.min(20, upgradeDeviceCount));
+    const add = target - cur;
+    const rem = remainingDaysUntilExpiry(upgradingDevice.expiry_date, upgradingDevice.days_left);
+    const price = priceForDeviceUpgrade(upgradingDevice, target);
+    const discLabel = [
+      nextDiscountPercent > 0 ? `−${nextDiscountPercent}%` : null,
+      globalDiscountPercent > 0 ? `−${globalDiscountPercent}%` : null,
+    ].filter(Boolean).join(' · ');
+
+    return (
+      <div className="min-h-full flex flex-col">
+        <Header
+          title="Докупить устройства"
+          onBack={() => {
+            setUpgradingDevice(null);
+            setView('devices');
+          }}
+        />
+
+        <div className="bg-zinc-800/50 p-4 rounded-xl border border-zinc-700 mb-4">
+          <div className="text-zinc-400 text-sm mb-1">Подписка</div>
+          <div className="text-white font-medium">
+            {upgradingDevice.is_trial ? 'Пробная' : 'VPN'} | #{upgradingDevice.id}
+          </div>
+          <div className="text-xs text-zinc-500 mt-2">
+            Сейчас слотов: <span className="text-orange-400 font-semibold">{cur}</span>
+            {' · '}осталось ≈ <span className="text-zinc-300 font-semibold">{rem}</span> дн.
+          </div>
+        </div>
+
+        <div className="bg-black/60 border border-zinc-900 rounded-2xl p-4 mb-4">
+          <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2 font-bold">Новое число устройств</div>
+          <div className="text-[11px] text-zinc-500 mb-3">
+            Оплата только за дополнительные слоты до конца текущей подписки. Срок не меняется.
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <button
+              type="button"
+              className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-orange-600/80 transition-colors disabled:opacity-40"
+              disabled={upgradeDeviceCount <= cur + 1}
+              onClick={() => setUpgradeDeviceCount((c) => Math.max(cur + 1, c - 1))}
+            >−</button>
+            <div className="text-center flex-1">
+              <div className="text-3xl font-black text-white">{target}</div>
+              <div className="text-[11px] text-zinc-500 mt-1">+{add} к текущим {cur}, макс. 20</div>
+            </div>
+            <button
+              type="button"
+              className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-bold hover:bg-orange-600/80 transition-colors disabled:opacity-40"
+              disabled={upgradeDeviceCount >= 20}
+              onClick={() => setUpgradeDeviceCount((c) => Math.min(20, c + 1))}
+            >+</button>
+          </div>
+        </div>
+
+        <div className="bg-zinc-900/80 border border-zinc-800 rounded-xl p-4 mb-4">
+          <div className="flex justify-between items-baseline">
+            <span className="text-zinc-400 text-sm">К оплате</span>
+            <div className="text-right">
+              <div className="text-2xl font-black text-white tabular-nums">{price} ₽</div>
+              {discLabel && (
+                <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-400/85 mt-0.5">{discLabel}</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-auto mb-4">
+          <Button
+            disabled={add < 1 || !!upgradingDevice.is_expired}
+            onClick={() => purchaseExtraDevices(upgradingDevice, target)}
+          >
+            <Plus size={18} /> Докупить +{add} за {price} ₽
+          </Button>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
   
   const PaymentWaitView = () => {
     const PAYMENT_FALLBACK_MS = 10 * 60 * 1000;
@@ -3492,7 +3730,7 @@ export default function App() {
             const currentUserId = await ensureUserId();
             if (currentUserId) {
               if (action.type === 'extend' && payload.device && payload.plan) {
-                const extDevices = payload.devices ?? normalizedDevicesCount(payload.device.devices_limit || 1);
+                const extDevices = normalizedDevicesCount(payload.device.devices_limit || 1);
                 const res = await miniApiFetch('/subscription/extend', {
                   method: 'POST',
                   body: JSON.stringify({
@@ -3510,6 +3748,28 @@ export default function App() {
                   setPaymentUrl(null);
                   setExtendingDevice(null);
                   setExtendPlan(null);
+                  await refreshAll();
+                  setView('devices');
+                  return;
+                }
+              } else if (action.type === 'add_devices' && payload.device) {
+                const res = await miniApiFetch('/subscription/add-devices', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    user_id: currentUserId,
+                    key_id: payload.device.id,
+                    devices: payload.devices,
+                    price: payload.price,
+                  }),
+                });
+
+                if (res && res.success) {
+                  const from = normalizedDevicesCount(payload.device.devices_limit || 1);
+                  const to = res.devices_limit ?? payload.devices;
+                  addHistoryItem('buy_dev', `Докупка устройств: ${from} → ${to}`, -(res.price ?? payload.price));
+                  setPendingAction(null);
+                  setPaymentUrl(null);
+                  setUpgradingDevice(null);
                   await refreshAll();
                   setView('devices');
                   return;

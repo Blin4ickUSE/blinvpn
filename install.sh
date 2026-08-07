@@ -418,6 +418,11 @@ create_env_file() {
     if [[ "$ssl_port" != "443" ]]; then
         port_suffix=":${ssl_port}"
     fi
+
+    # Одноразовые секреты для панели / вебхуков / internal API
+    TELEGRAM_WEBHOOK_SECRET="$(openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | xxd -p)"
+    PANEL_SETUP_TOKEN="$(openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | xxd -p)"
+    INTERNAL_API_SECRET="$(openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | xxd -p)"
     
     cat > .env <<EOF
 # ===== телеграм =====
@@ -477,6 +482,14 @@ SSL_PORT=${ssl_port}
 # Database
 DB_PATH=data/data.db
 
+# ===== Security =====
+ENV=production
+CORS_ORIGINS=https://${domain}${port_suffix},https://web.telegram.org
+TELEGRAM_INITDATA_MAX_AGE=86400
+TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET}
+PANEL_SETUP_TOKEN=${PANEL_SETUP_TOKEN}
+INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+
 # SSL
 SSL_EMAIL=${email}
 PANEL_DOMAIN=${panel_domain}
@@ -486,6 +499,8 @@ WEBHOOK_DOMAIN=${domain}
 EOF
 
     log_success "✔ Файл .env создан."
+    log_warn "\n⚠️  PANEL_SETUP_TOKEN сохранён в .env — нужен для первого показа пароля панели:"
+    log_warn "   https://${panel_domain}${port_suffix}/?setup_token=<PANEL_SETUP_TOKEN>"
     log_warn "\n⚠️  Платежные системы (Heleket, Platega, CryptoBot) настраиваются"
     log_warn "   в панели управления: https://${panel_domain}${port_suffix}"
 }
@@ -515,15 +530,24 @@ register_telegram_webhook() {
 
     local webhook_url="https://${domain}${port_suffix}/api/telegram/webhook"
     local allowed_updates='["message","callback_query","pre_checkout_query","shipping_query"]'
+    local secret_token
+    secret_token="$(get_env_var TELEGRAM_WEBHOOK_SECRET .env 2>/dev/null || true)"
+    if [[ -z "$secret_token" ]]; then
+        secret_token="$(openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | xxd -p)"
+        set_env_var TELEGRAM_WEBHOOK_SECRET "$secret_token" .env 2>/dev/null || true
+    fi
 
     log_info "\nРегистрация Telegram webhook (Telegram Stars)..."
     log_info "  URL: ${webhook_url}"
 
     local response http_code body
+    local payload
+    payload=$(printf '{"url":"%s","allowed_updates":%s,"secret_token":"%s"}' \
+        "$webhook_url" "$allowed_updates" "$secret_token")
     response=$(curl -s -w "\n%{http_code}" -X POST \
         "https://api.telegram.org/bot${bot_token}/setWebhook" \
         -H "Content-Type: application/json" \
-        -d "{\"url\":\"${webhook_url}\",\"allowed_updates\":${allowed_updates}}" \
+        -d "${payload}" \
         --max-time 15 2>/dev/null || true)
 
     body=$(echo "$response" | head -n -1)
@@ -601,6 +625,110 @@ set_env_var() {
     else
         printf '%s=%s\n' "$key" "$val" >> "$file"
     fi
+}
+
+# Записать значение только если ключ отсутствует или пустой.
+ensure_env_var() {
+    local key="$1"
+    local val="$2"
+    local file="${3:-.env}"
+    local cur=""
+    cur="$(get_env_var "$key" "$file" 2>/dev/null || true)"
+    if [[ -z "$cur" ]]; then
+        set_env_var "$key" "$val" "$file"
+        return 0
+    fi
+    return 1
+}
+
+gen_secret_hex() {
+    openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | xxd -p
+}
+
+# Собрать CORS_ORIGINS из URL в .env (для уже установленных серверов).
+build_cors_origins_from_env() {
+    local file="${1:-.env}"
+    local origins=()
+    local u key
+    for key in MINIAPP_URL PANEL_URL SITE_URL; do
+        u="$(get_env_var "$key" "$file" 2>/dev/null || true)"
+        u="${u%/}"
+        if [[ -n "$u" ]]; then
+            origins+=("$u")
+        fi
+    done
+    origins+=("https://web.telegram.org")
+    local IFS=,
+    printf '%s' "${origins[*]}"
+}
+
+# Права на data/ под non-root контейнеры (uid 10001 в Dockerfile.*).
+fix_container_data_permissions() {
+    mkdir -p data src/monitoring/logs
+    # Numeric uid/gid — пользователь на хосте может отсутствовать
+    if sudo chown -R 10001:10001 data src/monitoring/logs 2>/dev/null; then
+        sudo chmod -R u+rwX,g+rwX data src/monitoring/logs 2>/dev/null || true
+        log_success "✔ права data/ и logs/ выставлены для uid 10001 (non-root контейнеры)."
+    else
+        log_warn "Не удалось chown data/ на 10001 — контейнеры могут не писать в SQLite."
+        log_warn "  Выполните вручную: sudo chown -R 10001:10001 data src/monitoring/logs"
+    fi
+}
+
+# Миграция .env / прав после security-апдейта (безопасно для уже установленного сервера).
+migrate_security_update() {
+    local file="${1:-.env}"
+    if [[ ! -f "$file" ]]; then
+        log_warn "Файл ${file} не найден — миграция безопасности пропущена."
+        return 0
+    fi
+
+    section "Миграция безопасности (.env + права data/)"
+
+    local secret
+    if ensure_env_var TELEGRAM_INITDATA_MAX_AGE "86400" "$file"; then
+        log_info "  + TELEGRAM_INITDATA_MAX_AGE=86400"
+    fi
+
+    secret="$(gen_secret_hex)"
+    if ensure_env_var TELEGRAM_WEBHOOK_SECRET "$secret" "$file"; then
+        log_info "  + TELEGRAM_WEBHOOK_SECRET сгенерирован (нужен только при TELEGRAM_STARS_DELIVERY=webhook)"
+    fi
+
+    secret="$(gen_secret_hex)"
+    if ensure_env_var PANEL_SETUP_TOKEN "$secret" "$file"; then
+        log_info "  + PANEL_SETUP_TOKEN сгенерирован"
+        log_warn "    Для сброса начального пароля панели: /?setup_token=$(get_env_var PANEL_SETUP_TOKEN "$file")"
+    fi
+
+    secret="$(gen_secret_hex)"
+    if ensure_env_var INTERNAL_API_SECRET "$secret" "$file"; then
+        log_info "  + INTERNAL_API_SECRET сгенерирован"
+    fi
+
+    local cors
+    cors="$(get_env_var CORS_ORIGINS "$file" 2>/dev/null || true)"
+    if [[ -z "$cors" ]]; then
+        cors="$(build_cors_origins_from_env "$file")"
+        set_env_var CORS_ORIGINS "$cors" "$file"
+        log_info "  + CORS_ORIGINS=${cors}"
+    fi
+
+    # ENV=production только вместе с CORS (иначе API мог бы отказать в старте на старых сборках)
+    if ensure_env_var ENV "production" "$file"; then
+        log_info "  + ENV=production"
+    fi
+
+    # Опасный dev-флаг в проде
+    local unauth
+    unauth="$(get_env_var MINIAPP_ALLOW_UNAUTH "$file" 2>/dev/null || true)"
+    if [[ "${unauth,,}" =~ ^(1|true|yes)$ ]]; then
+        set_env_var MINIAPP_ALLOW_UNAUTH "0" "$file"
+        log_warn "  ! MINIAPP_ALLOW_UNAUTH отключён (был включён — недопустимо в production)"
+    fi
+
+    fix_container_data_permissions
+    log_success "✔ миграция безопасности завершена."
 }
 
 # Выпускает сертификаты Let's Encrypt для переданных доменов через webroot (порт 80).
@@ -855,6 +983,42 @@ if [[ -f "$NGINX_CONF" ]]; then
     fi
     cd "$PROJECT_DIR"
 
+    # После git pull перезапускаем уже новый install.sh из репо (иначе в памяти старый скрипт без migrate_*).
+    if [[ "${BLINVPN_POST_UPDATE:-}" == "1" ]]; then
+        unset BLINVPN_POST_UPDATE
+        section "Пост-обновление (security migrate + rebuild)"
+        migrate_security_update ".env"
+        deploy_site_files
+        sudo docker-compose down --remove-orphans
+        fix_container_data_permissions
+        sudo docker-compose up -d --build
+        fix_container_data_permissions
+        sudo docker-compose restart api webhook bot 2>/dev/null || true
+
+        if [[ -f "$NGINX_CONF" ]]; then
+            _upd_mini="$(get_env_var MINIAPP_DOMAIN .env 2>/dev/null || get_env_var WEBHOOK_DOMAIN .env 2>/dev/null || true)"
+            _upd_panel="$(get_env_var PANEL_DOMAIN .env 2>/dev/null || true)"
+            _upd_site="$(get_env_var SITE_DOMAIN .env 2>/dev/null || true)"
+            _upd_port="$(get_env_var SSL_PORT .env 2>/dev/null || true)"
+            _upd_port="${_upd_port:-443}"
+            if [[ -n "$_upd_mini" && -n "$_upd_panel" && -n "$_upd_site" ]]; then
+                configure_nginx "$_upd_mini" "$_upd_panel" "$_upd_site" "$_upd_port" "$NGINX_CONF" "$NGINX_LINK"
+            else
+                sudo nginx -t && sudo systemctl reload nginx || true
+            fi
+        fi
+
+        log_success "\n🎉 Обновление успешно завершено!"
+        log_info "Замечания после security-апдейта:"
+        log_info "  • Перелогиньтесь в панели (сессии перехешированы)."
+        log_info "  • Пароль админа при первом входе мигрирует на bcrypt автоматически."
+        _upd_pst="$(get_env_var PANEL_SETUP_TOKEN .env 2>/dev/null || true)"
+        if [[ -n "$_upd_pst" ]]; then
+            log_info "  • PANEL_SETUP_TOKEN записан в .env (для сброса начального пароля панели)."
+        fi
+        exit 0
+    fi
+
     section "Существующая установка — выберите действие"
     step "1)" "Обновить код и перезапустить контейнеры (по умолчанию)"
     step "2)" "Заменить домен(ы) и перевыпустить сертификаты"
@@ -879,19 +1043,16 @@ if [[ -f "$NGINX_CONF" ]]; then
             git checkout "$REPO_BRANCH" 2>/dev/null || git checkout -b "$REPO_BRANCH" --track origin/"$REPO_BRANCH"
             git reset --hard origin/"$REPO_BRANCH"
             log_success "✔ Репозиторий обновлён."
-            log_info "\nШаг 2: публикация лендинга"
-            deploy_site_files
 
-            log_info "\nШаг 3: пересборка и перезапуск контейнеров"
-            sudo docker-compose down --remove-orphans
-            sudo docker-compose up -d --build
-
-            if [[ -f "$NGINX_CONF" ]]; then
-                sudo nginx -t && sudo systemctl reload nginx
+            if [[ ! -f ./install.sh ]]; then
+                log_error "После обновления не найден ./install.sh — прервано."
+                exit 1
             fi
-
-            log_success "\n🎉 Обновление успешно завершено!"
-            exit 0
+            log_info "\nШаг 2: запуск свежего install.sh (миграция безопасности + rebuild)..."
+            export BLINVPN_POST_UPDATE=1
+            # Возврат в каталог, откуда обычно вызывают install (родитель PROJECT_DIR)
+            cd ..
+            exec bash "$PROJECT_DIR/install.sh"
             ;;
     esac
 fi
@@ -1078,6 +1239,7 @@ if [[ -f ".env" ]]; then
     log_warn "Файл .env уже существует."
     if ! confirm "Перезаписать существующий .env? (y/n): "; then
         log_info "Используется существующий .env файл."
+        migrate_security_update ".env"
     else
         create_env_file "$DOMAIN" "$PANEL_DOMAIN" "$SITE_DOMAIN" "$EMAIL" "$SSL_PORT"
     fi
@@ -1086,14 +1248,15 @@ else
 fi
 
 log_info "\nШаг 6: подготовка директорий и запуск Docker-контейнеров"
-mkdir -p data
-chmod 755 data
+fix_container_data_permissions
 
 if [[ -n "$(sudo docker-compose ps -q 2>/dev/null)" ]]; then
     sudo docker-compose down
 fi
 sudo docker-compose up -d --build
-
+# После первого старта том мог создать файлы от root — выровнять права
+fix_container_data_permissions
+sudo docker-compose restart api webhook bot 2>/dev/null || true
 log_info "\nШаг 7: регистрация Telegram webhook (Telegram Stars)"
 register_telegram_webhook "$TELEGRAM_BOT_TOKEN" "$DOMAIN" "$SSL_PORT"
 
