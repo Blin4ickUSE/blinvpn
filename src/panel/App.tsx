@@ -1,15 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Home, DollarSign, BarChart2, Users, Key, Mail, Tag, Percent, 
-  MessageSquare, Server, FileText, Globe, Settings, Menu, X, CheckCircle, 
-  AlertCircle, TrendingUp, CreditCard, Search, Filter, ArrowUpRight, 
-  ArrowDownLeft, Activity, Calendar, Download, Loader, RefreshCcw, 
-  Hash, Monitor, PieChart, Ban, UserX, UserCheck, Trophy, UserPlus, UserMinus,
-  Clock, XCircle, Edit2, Copy, Shield, Smartphone, Zap, Wifi, Database,
-  Bell, CheckSquare, Square, ChevronRight, Wallet, Bitcoin, Plus,
-  Terminal, Lock, Briefcase, Star, TrendingDown, Send, Image as ImageIcon, MousePointer,
-  Gift, Layers, Flame, ShoppingBag, Paperclip, MoreVertical, MessageCircle, User as UserIcon,
-  Moon, Dices, ToggleLeft, ToggleRight, FileCheck, FileText as FileTextIcon,
+  Home, DollarSign, BarChart2, Users, Key, Mail, Tag, Percent, FileText, Settings, Menu, X,
+  CheckCircle, AlertCircle, CreditCard, Search, Filter, ArrowUpRight, ArrowDownLeft,
+  Activity, Calendar, Download, Loader, Hash, Ban, Trophy, UserPlus, UserMinus, Clock,
+  Edit2, Copy, Shield, Smartphone, Zap, Database, Bell, Wallet, Plus, Lock, Send,
+  MousePointer, Gift, Layers, ToggleLeft, ToggleRight, FileCheck, FileText as FileTextIcon,
   Trash2, ChevronDown, Save, AlertTriangle, Cloud, Link, RefreshCw
 } from 'lucide-react';
 
@@ -348,7 +343,7 @@ const PaginationBar: React.FC<PaginationBarProps> = ({
   return (
     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1">
       <div className="text-sm text-gray-400 flex items-center gap-2">
-        {loading && <Loader size={14} className="animate-spin text-orange-400" />}
+        {loading && <Loader size={14} className="animate-spin text-gray-200" />}
         <span>
           {totalLabel}: <span className="text-white font-semibold">{total.toLocaleString('ru-RU')}</span>
         </span>
@@ -548,37 +543,26 @@ interface StatCardProps {
   className?: string;
 }
 
-function StatCard({ title, value, change, icon: Icon, color, subValue, className }: StatCardProps) {
+function StatCard({ title, value, change, icon: Icon, subValue, className }: StatCardProps) {
   const isPositive = change && (change.startsWith('+') || !change.startsWith('-'));
-  const colors = { 
-    blue: "bg-orange-500 text-orange-500", 
-    green: "bg-green-500 text-green-500", 
-    indigo: "bg-indigo-500 text-indigo-500", 
-    orange: "bg-orange-500 text-orange-500", 
-    purple: "bg-purple-500 text-purple-500", 
-    red: "bg-red-500 text-red-500", 
-    gray: "bg-gray-500 text-gray-500" 
-  };
-  const bgClass = colors[color]?.split(' ')[0] + '/10';
-  const textClass = colors[color]?.split(' ')[1];
 
   return (
-    <div className={`bg-gray-900 border border-gray-800 rounded-2xl p-5 hover:border-gray-700 transition-all duration-300 group h-full ${className}`}>
+    <div className={`bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-colors h-full ${className}`}>
       <div className="flex justify-between items-start mb-4">
         <div>
-          <p className="text-gray-400 text-sm font-medium">{title}</p>
+          <p className="text-gray-500 text-sm">{title}</p>
           <div className="flex items-baseline mt-1">
-             <h3 className="text-2xl font-bold text-white group-hover:translate-x-1 transition-transform">{value}</h3>
+             <h3 className="text-2xl font-semibold text-white">{value}</h3>
              {subValue && <span className="ml-2 text-sm text-gray-500">{subValue}</span>}
           </div>
         </div>
-        <div className={`p-3 rounded-xl ${bgClass}`}>
-          <Icon size={22} className={textClass} />
+        <div className="p-2.5 rounded-lg bg-white/5">
+          <Icon size={20} className="text-gray-400" />
         </div>
       </div>
       {change && (
         <div className="flex items-center text-xs">
-          <span className={`font-medium px-2 py-0.5 rounded ${isPositive ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+          <span className={`font-medium px-2 py-0.5 rounded ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
             {change}
           </span>
           <span className="text-gray-500 ml-2">за период</span>
@@ -587,325 +571,6 @@ function StatCard({ title, value, change, icon: Icon, color, subValue, className
     </div>
   );
 }
-
-interface SmoothAreaChartProps {
-    color: string;
-    data: number[];
-    label: string;
-    height?: number;
-    id?: string;
-    labels?: string[]; // Даты для отображения в tooltip
-}
-
-const SmoothAreaChart: React.FC<SmoothAreaChartProps> = ({ color, data, label, height = 200, id, labels = [] }) => {
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const uniqueId = id || Math.random().toString(36).substr(2, 9);
-  
-  if (!data || data.length === 0) return <div className="h-48 flex items-center justify-center text-gray-500">Нет данных</div>;
-
-  const max = Math.max(...data);
-  const min = Math.min(...data);
-  const svgWidth = 1000; 
-  const svgHeight = 400;
-
-  const getPathData = (data: number[], width: number, height: number, max: number, min: number) => {
-    const points = data.map((val, index) => {
-      const x = (index / (data.length - 1)) * width;
-      const normalizedY = ((val - min) / (max - min || 1));
-      const y = height - (normalizedY * (height * 0.7) + (height * 0.15));
-      return [x, y];
-    });
-
-    const line = (pointA: number[], pointB: number[]) => {
-      const lengthX = pointB[0] - pointA[0];
-      const lengthY = pointB[1] - pointA[1];
-      return { length: Math.sqrt(Math.pow(lengthX, 2) + Math.pow(lengthY, 2)), angle: Math.atan2(lengthY, lengthX) };
-    };
-
-    const controlPoint = (current: number[], previous: number[], next: number[], reverse?: boolean) => {
-      const p = previous || current; const n = next || current; const smoothing = 0.2;
-      const o = line(p, n); const angle = o.angle + (reverse ? Math.PI : 0); const length = o.length * smoothing;
-      const x = current[0] + Math.cos(angle) * length; const y = current[1] + Math.sin(angle) * length;
-      return [x, y];
-    };
-
-    const bezierCommand = (point: number[], i: number, a: number[][]) => {
-      const [cpsX, cpsY] = controlPoint(a[i - 1], a[i - 2], point);
-      const [cpeX, cpeY] = controlPoint(point, a[i - 1], a[i + 1], true);
-      return `C ${cpsX},${cpsY} ${cpeX},${cpeY} ${point[0]},${point[1]}`;
-    };
-
-    return points.reduce((acc, point, i, a) => {
-      if (i === 0) return `M ${point[0]},${point[1]}`;
-      return `${acc} ${bezierCommand(point, i, a)}`;
-    }, "");
-  };
-  
-  const pathD = getPathData(data, svgWidth, svgHeight, max, min);
-  const fillPathD = `${pathD} L ${svgWidth},${svgHeight} L 0,${svgHeight} Z`;
-  const points = data.map((val, index) => ({ x: (index / (data.length - 1)) * 100, val }));
-
-  return (
-    <div className={`w-full relative group select-none`} style={{ height: `${height}px` }} onMouseLeave={() => setActiveIndex(null)}>
-      {activeIndex !== null && (
-        <div 
-          className="absolute -top-10 transform -translate-x-1/2 bg-gray-800 text-white text-xs py-1.5 px-3 rounded-lg shadow-xl border border-gray-700 whitespace-nowrap z-20 pointer-events-none transition-all duration-75"
-          style={{ left: `${points[activeIndex].x}%` }}
-        >
-            {labels[activeIndex] && <span className="text-gray-400 mr-2">{labels[activeIndex]}</span>}
-            <span className="font-bold">{points[activeIndex].val.toLocaleString('ru-RU')}</span>
-            <span className="text-gray-400 ml-1">{label}</span>
-        </div>
-      )}
-
-      <svg viewBox={`0 0 ${svgWidth} ${svgHeight}`} preserveAspectRatio="none" className="w-full h-full overflow-visible">
-        <defs>
-          <linearGradient id={`grad-${uniqueId}`} x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor={color} stopOpacity="0.4" />
-            <stop offset="100%" stopColor={color} stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <path d={fillPathD} fill={`url(#grad-${uniqueId})`} />
-        <path d={pathD} fill="none" stroke={color} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-      </svg>
-      
-      <div className="absolute inset-0 flex items-stretch">
-         {data.map((_, i) => (
-             <div 
-                key={i}
-                className="flex-1 hover:bg-white/5 transition-colors cursor-crosshair relative group/bar"
-                onMouseEnter={() => setActiveIndex(i)}
-             >
-                 {activeIndex === i && (
-                     <div className="absolute w-3 h-3 rounded-full border-2 border-white transform -translate-x-1/2 -translate-y-1/2 pointer-events-none shadow-lg"
-                        style={{ 
-                            backgroundColor: color, 
-                            left: '50%', 
-                            top: `${100 - (((data[i] - min) / (max - min || 1)) * 70 + 15)}%`
-                        }}
-                     />
-                 )}
-             </div>
-         ))}
-      </div>
-    </div>
-  );
-};
-
-type DynamicsPoint = {
-  label: string;
-  keysNew: number;
-  subsNew: number;
-};
-
-const CombinedLinesChart: React.FC<{
-  labels: string[];
-  keysNewData: number[];
-  subsNewData: number[];
-}> = ({ labels, keysNewData, subsNewData }) => {
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const points: DynamicsPoint[] = labels.map((label, index) => ({
-    label,
-    keysNew: keysNewData[index] || 0,
-    subsNew: subsNewData[index] || 0,
-  }));
-  if (!points.length) return <div className="h-56 flex items-center justify-center text-gray-500">Нет данных</div>;
-
-  const allValues = points.flatMap((p) => [p.keysNew, p.subsNew]);
-  const max = Math.max(...allValues);
-  const min = Math.min(...allValues);
-  const svgWidth = 1000;
-  const svgHeight = 400;
-
-  const getPathData = (series: number[]) => {
-    const pathPoints = series.map((val, index) => {
-      const x = (index / Math.max(1, series.length - 1)) * svgWidth;
-      const normalizedY = ((val - min) / (max - min || 1));
-      const y = svgHeight - (normalizedY * (svgHeight * 0.7) + (svgHeight * 0.15));
-      return [x, y];
-    });
-
-    const line = (pointA: number[], pointB: number[]) => {
-      const lengthX = pointB[0] - pointA[0];
-      const lengthY = pointB[1] - pointA[1];
-      return { length: Math.sqrt(Math.pow(lengthX, 2) + Math.pow(lengthY, 2)), angle: Math.atan2(lengthY, lengthX) };
-    };
-
-    const controlPoint = (current: number[], previous: number[], next: number[], reverse?: boolean) => {
-      const p = previous || current;
-      const n = next || current;
-      const smoothing = 0.2;
-      const o = line(p, n);
-      const angle = o.angle + (reverse ? Math.PI : 0);
-      const length = o.length * smoothing;
-      const x = current[0] + Math.cos(angle) * length;
-      const y = current[1] + Math.sin(angle) * length;
-      return [x, y];
-    };
-
-    const bezierCommand = (point: number[], i: number, a: number[][]) => {
-      const [cpsX, cpsY] = controlPoint(a[i - 1], a[i - 2], point);
-      const [cpeX, cpeY] = controlPoint(point, a[i - 1], a[i + 1], true);
-      return `C ${cpsX},${cpsY} ${cpeX},${cpeY} ${point[0]},${point[1]}`;
-    };
-
-    return pathPoints.reduce((acc, point, i, arr) => {
-      if (i === 0) return `M ${point[0]},${point[1]}`;
-      return `${acc} ${bezierCommand(point, i, arr)}`;
-    }, "");
-  };
-
-  const keysPath = getPathData(points.map((p) => p.keysNew));
-  const subsPath = getPathData(points.map((p) => p.subsNew));
-  const keysFillPath = `${keysPath} L ${svgWidth},${svgHeight} L 0,${svgHeight} Z`;
-  const subsFillPath = `${subsPath} L ${svgWidth},${svgHeight} L 0,${svgHeight} Z`;
-
-  const active = activeIndex !== null ? points[activeIndex] : null;
-  const tooltipLeftPercent =
-    activeIndex === null
-      ? 50
-      : Math.max(24, Math.min(76, (activeIndex / Math.max(1, points.length - 1)) * 100));
-
-  return (
-    <div className="space-y-4">
-      <div className="relative h-72 w-full" onMouseLeave={() => setActiveIndex(null)}>
-        {active && (
-          <div
-            className="absolute top-2 z-20 bg-gray-900/95 border border-gray-700 rounded-xl p-3 text-xs text-gray-200 shadow-2xl pointer-events-none min-w-[240px]"
-            style={{ left: `${tooltipLeftPercent}%`, transform: 'translateX(-50%)' }}
-          >
-            <div className="text-gray-400 mb-2">{active.label}</div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-              <span className="text-purple-400 whitespace-nowrap">Ключи новые:</span><span className="font-semibold text-white text-right whitespace-nowrap">+{active.keysNew.toLocaleString('ru-RU')}</span>
-              <span className="text-orange-400 whitespace-nowrap">Подписки новые:</span><span className="font-semibold text-white text-right whitespace-nowrap">+{active.subsNew.toLocaleString('ru-RU')}</span>
-            </div>
-          </div>
-        )}
-
-        <svg viewBox={`0 0 ${svgWidth} ${svgHeight}`} preserveAspectRatio="none" className="w-full h-full overflow-visible">
-          <defs>
-            <linearGradient id="keysAreaGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#a855f7" stopOpacity="0.32" />
-              <stop offset="100%" stopColor="#a855f7" stopOpacity="0" />
-            </linearGradient>
-            <linearGradient id="subsAreaGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#f97316" stopOpacity="0.36" />
-              <stop offset="100%" stopColor="#f97316" stopOpacity="0" />
-            </linearGradient>
-          </defs>
-
-          <path d={keysFillPath} fill="url(#keysAreaGradient)" />
-          <path d={subsFillPath} fill="url(#subsAreaGradient)" />
-
-          <path
-            d={keysPath}
-            fill="none"
-            stroke="#a855f7"
-            strokeWidth="4"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            opacity="0.2"
-            vectorEffect="non-scaling-stroke"
-          />
-          <path
-            d={subsPath}
-            fill="none"
-            stroke="#f97316"
-            strokeWidth="4"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            opacity="0.24"
-            vectorEffect="non-scaling-stroke"
-          />
-
-          <path
-            d={keysPath}
-            fill="none"
-            stroke="#a855f7"
-            strokeWidth="2.7"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            vectorEffect="non-scaling-stroke"
-          />
-          <path
-            d={subsPath}
-            fill="none"
-            stroke="#f97316"
-            strokeWidth="2.7"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            vectorEffect="non-scaling-stroke"
-          />
-        </svg>
-
-        <div className="absolute inset-0 flex">
-          {points.map((_, i) => (
-            <div key={i} className="flex-1 cursor-crosshair relative" onMouseEnter={() => setActiveIndex(i)}>
-              {activeIndex === i && <div className="absolute inset-y-0 left-1/2 w-px bg-white/25" />}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex gap-5 text-sm">
-        <div className="flex items-center text-purple-300"><span className="w-4 h-0.5 bg-purple-400 mr-2" />Новые ключи</div>
-        <div className="flex items-center text-orange-300"><span className="w-4 h-0.5 bg-orange-400 mr-2" />Новые подписки</div>
-      </div>
-    </div>
-  );
-};
-
-interface PieChartItem {
-    label: string;
-    value: number;
-}
-
-interface PieChartProps {
-    data: PieChartItem[];
-    colors: string[];
-}
-
-const PieChartComponent: React.FC<PieChartProps> = ({ data, colors }) => {
-  const total = data.reduce((acc, item) => acc + item.value, 0);
-  let cumulativePercent = 0;
-
-  const getCoordinatesForPercent = (percent: number) => {
-    const x = Math.cos(2 * Math.PI * percent);
-    const y = Math.sin(2 * Math.PI * percent);
-    return [x, y];
-  };
-
-  return (
-    <div className="flex items-center justify-center gap-8">
-      <div className="relative w-40 h-40">
-        <svg viewBox="-1 -1 2 2" className="transform -rotate-90 w-full h-full">
-          {data.map((item, index) => {
-            const startPercent = cumulativePercent;
-            const slicePercent = item.value / total;
-            cumulativePercent += slicePercent;
-            const [startX, startY] = getCoordinatesForPercent(startPercent);
-            const [endX, endY] = getCoordinatesForPercent(cumulativePercent);
-            const largeArcFlag = slicePercent > 0.5 ? 1 : 0;
-            const pathData = `M 0 0 L ${startX} ${startY} A 1 1 0 ${largeArcFlag} 1 ${endX} ${endY} Z`;
-            
-            return (
-              <path key={index} d={pathData} fill={colors[index % colors.length]} className="hover:opacity-80 transition-opacity cursor-pointer" />
-            );
-          })}
-        </svg>
-      </div>
-      <div className="space-y-2">
-        {data.map((item, index) => (
-          <div key={index} className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: colors[index % colors.length] }}></div>
-            <span className="text-gray-300 text-sm font-medium">{item.label}</span>
-            <span className="text-gray-500 text-xs">({Math.round((item.value / total) * 100)}%)</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
 
 // ==========================================
 // 5. MODALS
@@ -944,13 +609,13 @@ const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConf
   const config: ActionConfig = ({
       'ADD_BALANCE': { title: 'Начислить баланс', label: 'Сумма (₽)', icon: ArrowUpRight, color: 'text-green-400', type: 'number' },
       'SUB_BALANCE': { title: 'Списать баланс', label: 'Сумма (₽)', icon: ArrowDownLeft, color: 'text-red-400', type: 'number' },
-      'EXTEND_SUB': { title: 'Продлить подписку', label: 'Количество дней', icon: Clock, color: 'text-orange-400', type: 'number' },
-      'REDUCE_SUB': { title: 'Уменьшить срок', label: 'Количество дней', icon: Clock, color: 'text-orange-400', type: 'number' },
+      'EXTEND_SUB': { title: 'Продлить подписку', label: 'Количество дней', icon: Clock, color: 'text-gray-200', type: 'number' },
+      'REDUCE_SUB': { title: 'Уменьшить срок', label: 'Количество дней', icon: Clock, color: 'text-gray-200', type: 'number' },
       'SET_TRAFFIC': { title: 'Лимит трафика', label: 'Макс. трафик (GB)', icon: Database, color: 'text-purple-400', type: 'number' },
       'SET_DEVICES': { title: 'Лимит устройств', label: 'Кол-во устройств (1–20)', icon: Smartphone, color: 'text-indigo-400', type: 'number', min: 1, max: 20, presets: DEVICE_LIMIT_PRESETS },
       'BAN': { title: 'Заблокировать', label: 'Причина бана', icon: Ban, color: 'text-red-400', type: 'text' },
       'UNBAN': { title: 'Разблокировать', label: '', icon: CheckCircle, color: 'text-green-400', type: 'text' },
-      'MASS_ADD_DAYS': { title: 'Всем добавить дни', label: 'Количество дней', icon: Calendar, color: 'text-orange-500', type: 'number' },
+      'MASS_ADD_DAYS': { title: 'Всем добавить дни', label: 'Количество дней', icon: Calendar, color: 'text-gray-300', type: 'number' },
       'MASS_ADD_BALANCE': { title: 'Всем начислить', label: 'Сумма (₽)', icon: DollarSign, color: 'text-green-500', type: 'number' },
       'MASS_BAN': { title: 'Забанить всех', label: 'Причина', icon: Ban, color: 'text-red-500', type: 'text' },
       'MASS_UNBAN': { title: 'Разбанить всех', label: '', icon: CheckCircle, color: 'text-green-500', type: 'text' },
@@ -990,7 +655,7 @@ const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConf
                               type="number"
                               value={value}
                               onChange={e => setValue(e.target.value)}
-                              className="flex-1 bg-gray-950 border border-gray-700 text-white text-2xl rounded-xl px-4 py-3 focus:ring-2 focus:ring-orange-500 outline-none font-mono text-center"
+                              className="flex-1 bg-gray-950 border border-gray-700 text-white text-2xl rounded-xl px-4 py-3 focus:ring-2 focus:ring-gray-500 outline-none font-mono text-center"
                               autoFocus
                               min={numMin}
                               max={numMax}
@@ -1011,7 +676,7 @@ const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConf
                                   onClick={() => setNumberValue(preset)}
                                   className={`px-3 py-1.5 rounded-lg text-sm font-mono border transition-colors ${
                                     numValue === preset
-                                      ? 'bg-orange-600/20 border-orange-500 text-orange-400'
+                                      ? 'bg-gray-700/20 border-gray-600 text-gray-200'
                                       : 'bg-gray-950 border-gray-800 text-gray-400 hover:border-gray-600'
                                   }`}
                                 >
@@ -1026,7 +691,7 @@ const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConf
                           type={config.type} 
                           value={value} 
                           onChange={e => setValue(e.target.value)} 
-                          className="w-full bg-gray-950 border border-gray-700 text-white text-lg rounded-xl px-4 py-3 focus:ring-2 focus:ring-orange-500 outline-none font-mono" 
+                          className="w-full bg-gray-950 border border-gray-700 text-white text-lg rounded-xl px-4 py-3 focus:ring-2 focus:ring-gray-500 outline-none font-mono" 
                           placeholder="0" 
                           autoFocus 
                           min={numMin}
@@ -1035,7 +700,7 @@ const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConf
                       )}
                   </div>
                   <label className="flex items-center cursor-pointer group bg-gray-950/50 p-3 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors">
-                      <div className="relative"><input type="checkbox" checked={notify} onChange={() => setNotify(!notify)} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full shadow-inner transition-colors ${notify ? 'bg-orange-600' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${notify ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="text-sm text-gray-200 font-medium">Уведомить пользователя</div><div className="text-xs text-gray-500">Отправить сообщение в бот</div></div>
+                      <div className="relative"><input type="checkbox" checked={notify} onChange={() => setNotify(!notify)} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full shadow-inner transition-colors ${notify ? 'bg-gray-700' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${notify ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="text-sm text-gray-200 font-medium">Уведомить пользователя</div><div className="text-xs text-gray-500">Отправить сообщение в бот</div></div>
                   </label>
                   <div className="flex gap-3 pt-2">
                       <button onClick={onClose} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl font-medium transition-colors">Отмена</button>
@@ -1044,7 +709,7 @@ const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConf
                           config.type === 'number' ? String(clampNumber(value, numMin, numMax, numMin || 0)) : value,
                           notify,
                         )}
-                        className="flex-1 py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-bold shadow-lg shadow-orange-900/20 transition-colors"
+                        className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-bold shadow-lg shadow-black/40 transition-colors"
                       >Применить</button>
                   </div>
               </div>
@@ -1089,7 +754,7 @@ const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, o
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200" onClick={onClose}>
             <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-md p-6 shadow-2xl relative animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
                 <div className="flex justify-between items-start mb-6">
-                    <h3 className="text-xl font-bold text-white flex items-center"><Key size={22} className="mr-2 text-orange-500"/> Редактирование ключа</h3>
+                    <h3 className="text-xl font-bold text-white flex items-center"><Key size={22} className="mr-2 text-gray-300"/> Редактирование ключа</h3>
                     <button onClick={onClose} className="text-gray-400 hover:text-white"><X size={20}/></button>
                 </div>
 
@@ -1111,7 +776,7 @@ const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, o
                                 <div 
                                     className={`h-2 rounded-full transition-all ${
                                         keyItem.trafficLimit > 0 && keyItem.trafficUsed/keyItem.trafficLimit > 0.9 ? 'bg-red-500' : 
-                                        keyItem.trafficLimit > 0 && keyItem.trafficUsed/keyItem.trafficLimit > 0.7 ? 'bg-yellow-500' : 'bg-orange-500'
+                                        keyItem.trafficLimit > 0 && keyItem.trafficUsed/keyItem.trafficLimit > 0.7 ? 'bg-yellow-500' : 'bg-gray-700'
                                     }`}
                                     style={{ width: `${keyItem.trafficLimit > 0 ? Math.min(100, (keyItem.trafficUsed/keyItem.trafficLimit)*100) : 0}%` }}
                                 ></div>
@@ -1153,7 +818,7 @@ const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, o
                                     type="number" 
                                     value={expiryDays} 
                                     onChange={(e) => setExpiryDays(parseInt(e.target.value) || 0)}
-                                    className="flex-1 bg-gray-950 border border-gray-700 text-center text-white text-lg rounded-xl focus:border-orange-500 outline-none font-mono"
+                                    className="flex-1 bg-gray-950 border border-gray-700 text-center text-white text-lg rounded-xl focus:border-gray-500 outline-none font-mono"
                                 />
                                 <button onClick={() => setExpiryDays(Number(expiryDays) + 1)} className="p-3 bg-gray-800 rounded-xl hover:bg-gray-700 transition-colors"><ArrowUpRight size={18}/></button>
                             </div>
@@ -1163,7 +828,7 @@ const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, o
                             <button onClick={() => setConfirmDelete(true)} className="flex-1 py-3 bg-red-600/10 hover:bg-red-600/20 text-red-500 border border-red-600/20 rounded-xl font-medium transition-colors flex items-center justify-center">
                                 <Trash2 size={18} className="mr-2"/> Удалить
                             </button>
-                            <button onClick={() => onSave(keyItem.id, expiryDays)} className="flex-[2] py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-bold shadow-lg shadow-orange-900/20 transition-colors flex items-center justify-center">
+                            <button onClick={() => onSave(keyItem.id, expiryDays)} className="flex-[2] py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-bold shadow-lg shadow-black/40 transition-colors flex items-center justify-center">
                                 <Save size={18} className="mr-2"/> Сохранить
                             </button>
                         </div>
@@ -1210,7 +875,7 @@ const TransactionModal: React.FC<TransactionModalProps> = ({ transaction, onClos
 
         <div className="space-y-4 mb-8">
             <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><Hash size={14} className="mr-2"/> ID</span><span className="text-white font-mono">#{transaction.id}</span></div>
-            <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><Users size={14} className="mr-2"/> Пользователь</span><span className="text-orange-400">{transaction.user}</span></div>
+            <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><Users size={14} className="mr-2"/> Пользователь</span><span className="text-gray-200">{transaction.user}</span></div>
             <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><DollarSign size={14} className="mr-2"/> Сумма</span><span className={`font-bold ${isIncome ? 'text-green-400' : 'text-red-400'}`}>{transaction.amount} ₽</span></div>
             <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><CreditCard size={14} className="mr-2"/> Метод</span><span className="text-white">{transaction.method}</span></div>
             <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><FileText size={14} className="mr-2"/> Hash</span><span className="text-xs text-gray-500 font-mono">{transaction.hash}</span></div>
@@ -1347,7 +1012,7 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
     return (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200" onClick={onClose}>
             <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-lg shadow-2xl relative animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
-                <div className="p-5 border-b border-gray-800 flex justify-between items-center"><h3 className="text-xl font-bold text-white flex items-center"><Plus size={24} className="mr-2 text-orange-500"/> Создание ключа</h3><button onClick={onClose} className="text-gray-400 hover:text-white"><X size={24} /></button></div>
+                <div className="p-5 border-b border-gray-800 flex justify-between items-center"><h3 className="text-xl font-bold text-white flex items-center"><Plus size={24} className="mr-2 text-gray-300"/> Создание ключа</h3><button onClick={onClose} className="text-gray-400 hover:text-white"><X size={24} /></button></div>
                 <div className="p-6 overflow-y-auto space-y-6">
                     <div className="relative">
                         <label className="text-sm font-medium text-gray-400 mb-1.5 block">Пользователь</label>
@@ -1361,7 +1026,7 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
                                 }}
                                 className={`w-full bg-gray-950 border ${
                                     selectedUser ? 'border-green-500/50 text-green-400' : 'border-gray-700 text-white'
-                                } rounded-xl px-4 py-3 focus:outline-none focus:border-orange-500`}
+                                } rounded-xl px-4 py-3 focus:outline-none focus:border-gray-500`}
                                 placeholder="Введите ID или Username"
                             />
                             {selectedUser && (
@@ -1400,7 +1065,7 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
                             onClick={() => setParams((p) => ({ ...p, devices: preset }))}
                             className={`px-3 py-1.5 rounded-lg text-xs font-mono border transition-colors ${
                               params.devices === preset
-                                ? 'bg-orange-600/20 border-orange-500 text-orange-400'
+                                ? 'bg-gray-700/20 border-gray-600 text-gray-200'
                                 : 'bg-gray-950 border-gray-800 text-gray-500 hover:border-gray-600'
                             }`}
                           >
@@ -1423,7 +1088,7 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
                                         <button 
                                             key={sq.uuid} 
                                             onClick={() => setSelectedSquads(prev => isSelected ? prev.filter(s => s !== sq.uuid) : [...prev, sq.uuid])} 
-                                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${isSelected ? 'bg-orange-600/20 border-orange-500 text-orange-400' : 'bg-gray-950 border-gray-800 text-gray-500 hover:border-gray-600'}`}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${isSelected ? 'bg-gray-700/20 border-gray-600 text-gray-200' : 'bg-gray-950 border-gray-800 text-gray-500 hover:border-gray-600'}`}
                                         >
                                             {sq.name}
                                         </button>
@@ -1433,7 +1098,7 @@ const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], on
                         )}
                     </div>
                 </div>
-                <div className="p-5 border-t border-gray-800"><button onClick={handleCreate} className="w-full py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-bold shadow-lg shadow-orange-900/20 transition-colors">Создать ключ</button></div>
+                <div className="p-5 border-t border-gray-800"><button onClick={handleCreate} className="w-full py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-bold shadow-lg shadow-black/40 transition-colors">Создать ключ</button></div>
             </div>
         </div>
     );
@@ -1681,7 +1346,7 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
                     </div>
                     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                          <h3 className="text-lg font-bold text-gray-200 flex items-center mb-4">
-                           <Zap size={18} className="mr-2 text-orange-400"/> Подписки ({subscriptions.length})
+                           <Zap size={18} className="mr-2 text-gray-200"/> Подписки ({subscriptions.length})
                          </h3>
                          {loadingSubs ? (
                            <div className="text-center py-4 text-gray-500">Загрузка...</div>
@@ -1693,7 +1358,7 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
                                <div key={sub.id} className="p-3 rounded-lg border bg-gray-950 border-gray-800">
                                  <div className="flex justify-between items-start mb-2">
                                    <div>
-                                     <div className="font-mono text-xs text-orange-400">#{sub.short_uuid || sub.key_uuid?.slice(0,8)}</div>
+                                     <div className="font-mono text-xs text-gray-200">#{sub.short_uuid || sub.key_uuid?.slice(0,8)}</div>
                                      <div className="text-xs text-gray-500 mt-0.5">Подписка</div>
                                    </div>
                                    <span className={`text-xs px-2 py-0.5 rounded ${
@@ -1776,7 +1441,7 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
                                    <div className="text-xs text-gray-500">ID: {r.telegram_id} {r.is_partner ? `· Партнер ${r.partner_rate}%` : ''}</div>
                                  </div>
                                  <div className="flex gap-2">
-                                   <button onClick={() => openReferralProfile(r.id)} className="px-2.5 py-1.5 bg-orange-600/10 hover:bg-orange-600/20 border border-orange-600/20 text-orange-400 rounded text-xs">Открыть</button>
+                                   <button onClick={() => openReferralProfile(r.id)} className="px-2.5 py-1.5 bg-white/5 hover:bg-gray-600/20 border border-gray-600/20 text-gray-200 rounded text-xs">Открыть</button>
                                    <button onClick={() => unlinkReferral(r.id)} className="px-2.5 py-1.5 bg-red-600/10 hover:bg-red-600/20 border border-red-600/20 text-red-400 rounded text-xs">Отвязать</button>
                                  </div>
                                </div>
@@ -1909,8 +1574,19 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
     <div className="min-h-screen bg-black flex items-center justify-center p-4">
       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 w-full max-w-md shadow-2xl">
         <div className="text-center mb-8">
-          <div className="w-16 h-16 bg-orange-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <Lock size={32} className="text-white" />
+          <div className="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mx-auto mb-4 overflow-hidden">
+            <img
+              src="https://blinvpn.cc/assets/logo.png"
+              alt="BlinVPN"
+              className="w-full h-full object-contain p-2"
+              onError={(e) => {
+                const img = e.currentTarget;
+                img.style.display = 'none';
+                const fb = img.nextElementSibling as HTMLElement | null;
+                if (fb) fb.style.display = 'block';
+              }}
+            />
+            <Lock size={32} className="text-white" style={{ display: 'none' }} />
           </div>
           <h1 className="text-2xl font-bold text-white">BlinVPN Panel</h1>
           <p className="text-gray-400 mt-2">Войдите для доступа к панели</p>
@@ -1941,7 +1617,7 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none transition-all"
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-gray-500 focus:border-transparent outline-none transition-all"
                 placeholder="admin"
                 required
               />
@@ -1952,7 +1628,7 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none transition-all"
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-gray-500 focus:border-transparent outline-none transition-all"
                 placeholder="••••••••"
                 required
               />
@@ -1967,7 +1643,7 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
             <button
               type="submit"
               disabled={loading || !username || !password}
-              className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-orange-900/30"
+              className="w-full bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-black/40"
             >
               {loading ? (
                 <span className="flex items-center justify-center">
@@ -1981,7 +1657,7 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
           </form>
         ) : (
           <form onSubmit={handleVerifyCodeSubmit} className="space-y-4">
-            <div className="bg-orange-500/10 border border-orange-500/30 text-orange-300 px-4 py-3 rounded-lg text-sm">
+            <div className="bg-white/5 border border-white/10 text-gray-300 px-4 py-3 rounded-lg text-sm">
               Код подтверждения отправлен администраторам в Telegram.
             </div>
             <div>
@@ -1990,13 +1666,13 @@ function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
                 type="text"
                 value={verifyCode}
                 onChange={(e) => setVerifyCode(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none transition-all"
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-gray-500 focus:border-transparent outline-none transition-all"
                 placeholder="123456"
                 required
               />
             </div>
             {error && <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg text-sm">{error}</div>}
-            <button type="submit" disabled={loading || !verifyCode} className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-orange-900/30">
+            <button type="submit" disabled={loading || !verifyCode} className="w-full bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-black/40">
               {loading ? 'Проверка...' : 'Подтвердить вход'}
             </button>
           </form>
@@ -2053,7 +1729,7 @@ export default function App() {
   if (isAuthenticated === null) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
-        <Loader size={40} className="animate-spin text-orange-500" />
+        <Loader size={40} className="animate-spin text-gray-300" />
       </div>
     );
   }
@@ -2198,7 +1874,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
   };
 
   return (
-    <div className="min-h-screen bg-black text-gray-100 font-sans selection:bg-orange-500 selection:text-white">
+    <div className="min-h-screen bg-black text-gray-100 font-sans selection:bg-gray-700 selection:text-white">
       <ToastContainer toasts={toasts} removeToast={(id) => setToasts(prev => prev.filter(t => t.id !== id))} />
       
       {selectedTransaction && (<TransactionModal transaction={selectedTransaction} onClose={() => setSelectedTransaction(null)} />)}
@@ -2219,7 +1895,18 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
       }} />}
 
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-black border-r border-gray-800 transform transition-transform duration-300 ease-in-out ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 overflow-y-auto custom-scrollbar`}>
-        <div className="p-6 border-b border-gray-800 hidden md:block"><h1 className="text-2xl font-bold text-orange-500 tracking-wider">BlinVPN</h1><p className="text-xs text-gray-500 mt-1">Панель управления v2.0</p></div>
+        <div className="p-6 border-b border-gray-800 hidden md:flex items-center gap-3">
+          <img
+            src="https://blinvpn.cc/assets/logo.png"
+            alt="BlinVPN"
+            className="w-9 h-9 rounded-lg object-contain"
+            onError={(e) => { e.currentTarget.style.display = 'none'; }}
+          />
+          <div>
+            <h1 className="text-lg font-semibold text-white tracking-wide">BlinVPN</h1>
+            <p className="text-xs text-gray-500">Панель управления</p>
+          </div>
+        </div>
         <nav className="p-4 space-y-6">
             {[
                 { category: "Главное", items: [{ name: "Главная страница", icon: Home }, { name: "Финансы", icon: DollarSign }] },
@@ -2229,7 +1916,7 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
             ].map((section, idx) => (
                 <div key={idx}>
                     <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">{section.category}</h3>
-                    <ul className="space-y-1">{section.items.map((item, itemIdx) => (<li key={itemIdx}><button onClick={() => { setActivePage(item.name); setIsMobileMenuOpen(false); }} className={`w-full flex items-center px-2 py-2 text-sm font-medium rounded-lg transition-colors ${activePage === item.name ? 'bg-orange-600/10 text-orange-400' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}><item.icon size={18} className={`mr-3 ${activePage === item.name ? 'text-orange-400' : 'text-gray-500'}`} />{item.name}</button></li>))}</ul>
+                    <ul className="space-y-1">{section.items.map((item, itemIdx) => (<li key={itemIdx}><button onClick={() => { setActivePage(item.name); setIsMobileMenuOpen(false); }} className={`w-full flex items-center px-2 py-2 text-sm font-medium rounded-lg transition-colors ${activePage === item.name ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800/60 hover:text-white'}`}><item.icon size={18} className={`mr-3 ${activePage === item.name ? 'text-white' : 'text-gray-500'}`} />{item.name}</button></li>))}</ul>
                 </div>
             ))}
         </nav>
@@ -2261,10 +1948,33 @@ function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
 
 // --- SUB-COMPONENTS FOR PAGES ---
 
+// Простой горизонтальный список «метка — значение — доля» вместо круговой диаграммы
+const DistributionList: React.FC<{ data: { label: string; value: number }[] }> = ({ data }) => {
+    const total = (data || []).reduce((acc, it) => acc + (it.value || 0), 0) || 1;
+    if (!data || data.length === 0) {
+        return <p className="text-sm text-gray-600">Нет данных</p>;
+    }
+    return (
+        <div className="space-y-3">
+            {data.map((it, i) => {
+                const pct = Math.round((it.value / total) * 100);
+                return (
+                    <div key={i}>
+                        <div className="flex justify-between text-sm mb-1">
+                            <span className="text-gray-300">{it.label}</span>
+                            <span className="text-gray-500">{pct}%</span>
+                        </div>
+                        <div className="w-full bg-gray-800 h-1.5 rounded-full">
+                            <div className="bg-gray-500 h-1.5 rounded-full" style={{ width: `${pct}%` }} />
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
+
 const Dashboard = () => {
-    const [keysNewData, setKeysNewData] = useState<number[]>([]);
-    const [subsNewData, setSubsNewData] = useState<number[]>([]);
-    const [labels, setLabels] = useState<string[]>([]);
     const [summary, setSummary] = useState<{
         total_users: number;
         active_keys: number;
@@ -2275,19 +1985,6 @@ const Dashboard = () => {
     const [period, setPeriod] = useState<'week' | 'month' | 'year'>('month');
 
     useEffect(() => {
-        (async () => {
-            try {
-                const data = await apiFetch('/panel/stats/charts');
-                if (data) {
-                    setKeysNewData(Array.isArray(data.keys_new) ? data.keys_new : []);
-                    setSubsNewData(Array.isArray(data.subs_new) ? data.subs_new : []);
-                    setLabels(Array.isArray(data.labels) ? data.labels : []);
-                }
-            } catch (e) {
-                console.error('Failed to load dashboard charts', e);
-            }
-        })();
-
         (async () => {
             try {
                 const data = await apiFetch('/panel/stats/summary');
@@ -2313,155 +2010,119 @@ const Dashboard = () => {
         })();
     }, [period]);
 
-    // Кол-во точек графика для выбранного периода
-    const periodDays: Record<typeof period, number> = { week: 7, month: 30, year: 365 };
-    const periodLabel: Record<typeof period, string> = { week: 'Выручка по неделе', month: 'Выручка по дням', year: 'Выручка по году' };
-
-    // Обрезаем данные под период на клиенте — график меняется даже если бэкенд вернул полный массив
-    const sliceByPeriod = (arr: any[]) => {
-        const n = periodDays[period];
-        return Array.isArray(arr) && arr.length > n ? arr.slice(-n) : (arr || []);
-    };
-
     const fmtNumber = (v: number) =>
-        v.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+        (v ?? 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 });
 
-    const fmtMoney = (v: number) =>
-        `${v.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₽`;
+    const fmtMoneyStat = (v: number) =>
+        v >= 1000000
+            ? `${(v / 1000000).toFixed(1)}M ₽`
+            : `${(v ?? 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽`;
 
-    const fmtMoneyStat = (v: number) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M ₽` : `${v.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₽`;
+    // Единый источник для карточек: сперва детальная статистика, иначе краткая сводка
+    const totalUsers = stats?.totalUsers ?? summary?.total_users;
+    const activeSubs = stats?.activeSubscriptions ?? summary?.active_keys;
+    const monthlyRevenue = summary?.monthly_revenue;
 
     return (
-        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div><h2 className="text-2xl font-bold text-white">Добро пожаловать в панель управления</h2><p className="text-gray-400 mt-1">Вот что происходит с BlinVPN сегодня.</p></div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              <StatCard
-                title="Всего пользователей"
-                value={summary ? fmtNumber(summary.total_users) : '—'}
-                icon={Users}
-                color="blue"
-              />
-              <StatCard
-                title="Активных ключей"
-                value={summary ? fmtNumber(summary.active_keys) : '—'}
-                icon={Key}
-                color="green"
-              />
-              <StatCard
-                title="Доход за месяц"
-                value={summary ? fmtMoney(summary.monthly_revenue) : '—'}
-                icon={DollarSign}
-                color="indigo"
-              />
-            </div>
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-sm">
-                <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-lg font-semibold text-gray-200 flex items-center"><TrendingUp className="w-5 h-5 mr-2 text-orange-500" />Динамика</h3>
-                </div>
-                <CombinedLinesChart
-                  labels={labels}
-                  keysNewData={keysNewData}
-                  subsNewData={subsNewData}
-                />
+        <div className="space-y-6">
+            <div>
+                <h2 className="text-xl font-semibold text-white">Панель управления</h2>
+                <p className="text-gray-500 mt-1 text-sm">Обзор BlinVPN</p>
             </div>
 
-            {/* --- Перенесено из Статистики --- */}
-            <div><h2 className="text-2xl font-bold text-white">Статистика</h2><p className="text-gray-400 mt-1">Детальная аналитика проекта</p></div>
+            {/* Ключевые метрики — без повторов */}
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+                <StatCard title="Пользователи" value={totalUsers != null ? fmtNumber(totalUsers) : '—'} icon={Users} color="gray" />
+                <StatCard title="Активные подписки" value={activeSubs != null ? fmtNumber(activeSubs) : '—'} icon={Key} color="gray" />
+                <StatCard title="Доход за месяц" value={monthlyRevenue != null ? fmtMoneyStat(monthlyRevenue) : '—'} icon={DollarSign} color="gray" />
+                <StatCard title="Платежей сегодня" value={stats ? fmtNumber(stats.paymentsToday) : '—'} icon={CreditCard} color="gray" />
+                <StatCard title="Баланс клиентов" value={stats ? fmtMoneyStat(stats.clientsBalance) : '—'} icon={Wallet} color="gray" />
+            </div>
 
             {!stats ? (
-                <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-orange-500" size={32} /></div>
+                <div className="flex items-center justify-center h-48"><Loader className="animate-spin text-gray-500" size={28} /></div>
             ) : (
                 <>
-                    {/* Core Metrics */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-                        <StatCard title="Всего пользователей" value={fmtNumber(stats.totalUsers)} icon={Users} color="blue" />
-                        <StatCard title="Активных подписок" value={fmtNumber(stats.activeSubscriptions)} icon={CheckCircle} color="green" />
-                        <StatCard title="Платежей сегодня" value={fmtNumber(stats.paymentsToday)} icon={CreditCard} color="indigo" />
-                        <StatCard title="Баланс клиентов" value={fmtMoneyStat(stats.clientsBalance)} icon={Wallet} color="gray" />
-                    </div>
-
-                    {/* Revenue & Quick Metrics */}
-                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-                        <div className="lg:col-span-3 bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                            <div className="flex justify-between items-center mb-6">
-                                <h3 className="text-lg font-bold text-gray-200">{periodLabel[period]}</h3>
-                                <select
-                                    value={period}
-                                    onChange={(e) => setPeriod(e.target.value as 'week' | 'month' | 'year')}
-                                    className="bg-gray-800 border-gray-700 text-gray-300 text-sm rounded-lg p-2 focus:ring-orange-500 focus:border-orange-500"
-                                >
-                                    <option value="month">За 30 дней</option>
-                                    <option value="week">За неделю</option>
-                                    <option value="year">За год</option>
-                                </select>
-                            </div>
-                            <SmoothAreaChart color="#10b981" label="Выручка (₽)" data={sliceByPeriod(stats.revenueData)} height={250} id="revChart" labels={sliceByPeriod(stats.revenueLabels)} />
+                    {/* Выручка (сводка вместо графика) */}
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                        <div className="flex justify-between items-center mb-5">
+                            <h3 className="text-base font-semibold text-white">Выручка</h3>
+                            <select
+                                value={period}
+                                onChange={(e) => setPeriod(e.target.value as 'week' | 'month' | 'year')}
+                                className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-3 py-1.5 focus:ring-gray-500 focus:border-gray-500 outline-none"
+                            >
+                                <option value="month">За 30 дней</option>
+                                <option value="week">За неделю</option>
+                                <option value="year">За год</option>
+                            </select>
                         </div>
-                        <div className="space-y-4">
-                            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 flex flex-col justify-center h-[calc(50%-8px)]">
-                                <p className="text-gray-400 text-sm">В среднем в день</p>
-                                <div className="text-2xl font-bold text-white mt-1">{fmtMoneyStat(stats.avgDaily || 0)}</div>
-                                <div className="text-green-400 text-xs mt-2 flex items-center"><ArrowUpRight size={12} className="mr-1" /> Растет</div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <div className="rounded-lg bg-gray-800/40 p-4">
+                                <p className="text-gray-500 text-sm">В среднем в день</p>
+                                <div className="text-2xl font-semibold text-white mt-1">{fmtMoneyStat(stats.avgDaily || 0)}</div>
                             </div>
-                            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 flex flex-col justify-center h-[calc(50%-8px)]">
-                                <p className="text-gray-400 text-sm">Лучший день</p>
-                                <div className="text-2xl font-bold text-white mt-1">{fmtMoneyStat(stats.bestDayValue || 0)}</div>
-                                <div className="text-gray-500 text-xs mt-2">{stats.bestDayDate || ''}</div>
+                            <div className="rounded-lg bg-gray-800/40 p-4">
+                                <p className="text-gray-500 text-sm">Лучший день</p>
+                                <div className="text-2xl font-semibold text-white mt-1">{fmtMoneyStat(stats.bestDayValue || 0)}</div>
+                                <div className="text-gray-500 text-xs mt-1">{stats.bestDayDate || ''}</div>
+                            </div>
+                            <div className="rounded-lg bg-gray-800/40 p-4">
+                                <p className="text-gray-500 text-sm">Куплено за неделю</p>
+                                <div className="text-2xl font-semibold text-white mt-1">+{fmtNumber(stats.boughtThisWeek)}</div>
                             </div>
                         </div>
                     </div>
 
-                    {/* Distributions */}
+                    {/* Распределения — простые полосы вместо круговых диаграмм */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                            <h3 className="text-lg font-bold text-gray-200 mb-6">Распределение пользователей</h3>
-                            <PieChartComponent data={stats.userDistData || []} colors={['#3b82f6', '#ef4444', '#a855f7', '#f97316', '#6b7280']} />
+                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                            <h3 className="text-base font-semibold text-white mb-5">Распределение пользователей</h3>
+                            <DistributionList data={stats.userDistData || []} />
                         </div>
-                        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                             <h3 className="text-lg font-bold text-gray-200 mb-6">Способы оплаты</h3>
-                             <PieChartComponent data={stats.paymentMethodsData || []} colors={['#10b981', '#3b82f6', '#f59e0b', '#6b7280']} />
+                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                            <h3 className="text-base font-semibold text-white mb-5">Способы оплаты</h3>
+                            <DistributionList data={stats.paymentMethodsData || []} />
                         </div>
                     </div>
 
-                    {/* Subscriptions & Conversion */}
+                    {/* Подписки / Конверсия / Рефералы */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                             <h3 className="text-lg font-bold text-gray-200 mb-4">Подписки</h3>
-                             <div className="space-y-4">
-                                 <div className="flex justify-between"><span className="text-gray-400">Всего подписок</span><span className="text-white font-bold">{fmtNumber(stats.totalSubscriptions)}</span></div>
-                                 <div className="flex justify-between"><span className="text-gray-400">Платные</span><span className="text-green-400 font-bold">{fmtNumber(stats.paidSubscriptions)}</span></div>
-                                 <div className="flex justify-between"><span className="text-gray-400">Куплено за неделю</span><span className="text-orange-400 font-bold">+{fmtNumber(stats.boughtThisWeek)}</span></div>
-                             </div>
-                         </div>
-                         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                             <h3 className="text-lg font-bold text-gray-200 mb-4">Конверсия Trial {'>'} Paid</h3>
-                             <div className="flex items-end gap-2 mb-2">
-                                 <span className="text-4xl font-bold text-white">{stats.conversionRate?.toFixed(1) || 0}%</span>
-                             </div>
-                             <p className="text-xs text-gray-500">Пользователей переходят на платный тариф после пробного периода.</p>
-                             <div className="w-full bg-gray-800 h-2 rounded-full mt-4"><div className="bg-green-500 h-2 rounded-full" style={{width: `${Math.min(stats.conversionRate || 0, 100)}%`}}></div></div>
-                         </div>
-                         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                             <h3 className="text-lg font-bold text-gray-200 mb-4">Рефералы</h3>
-                             <div className="space-y-4">
-                                 <div className="flex justify-between"><span className="text-gray-400">Всего приглашено</span><span className="text-white font-bold">{fmtNumber(stats.totalInvited)}</span></div>
-                                 <div className="flex justify-between"><span className="text-gray-400">Партнеров</span><span className="text-white font-bold">{fmtNumber(stats.partners)}</span></div>
-                                 <div className="flex justify-between"><span className="text-gray-400">Выплачено</span><span className="text-white font-bold">{fmtMoneyStat(stats.totalPaid)}</span></div>
-                             </div>
-                         </div>
+                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                            <h3 className="text-base font-semibold text-white mb-4">Подписки</h3>
+                            <div className="space-y-3 text-sm">
+                                <div className="flex justify-between"><span className="text-gray-500">Всего подписок</span><span className="text-white font-medium">{fmtNumber(stats.totalSubscriptions)}</span></div>
+                                <div className="flex justify-between"><span className="text-gray-500">Платные</span><span className="text-green-400 font-medium">{fmtNumber(stats.paidSubscriptions)}</span></div>
+                                <div className="flex justify-between"><span className="text-gray-500">Куплено за неделю</span><span className="text-white font-medium">+{fmtNumber(stats.boughtThisWeek)}</span></div>
+                            </div>
+                        </div>
+                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                            <h3 className="text-base font-semibold text-white mb-4">Конверсия Trial {'>'} Paid</h3>
+                            <span className="text-4xl font-semibold text-white">{stats.conversionRate?.toFixed(1) || 0}%</span>
+                            <p className="text-xs text-gray-500 mt-2">Переходят на платный тариф после пробного периода.</p>
+                            <div className="w-full bg-gray-800 h-1.5 rounded-full mt-4"><div className="bg-gray-400 h-1.5 rounded-full" style={{ width: `${Math.min(stats.conversionRate || 0, 100)}%` }} /></div>
+                        </div>
+                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                            <h3 className="text-base font-semibold text-white mb-4">Рефералы</h3>
+                            <div className="space-y-3 text-sm">
+                                <div className="flex justify-between"><span className="text-gray-500">Всего приглашено</span><span className="text-white font-medium">{fmtNumber(stats.totalInvited)}</span></div>
+                                <div className="flex justify-between"><span className="text-gray-500">Партнеров</span><span className="text-white font-medium">{fmtNumber(stats.partners)}</span></div>
+                                <div className="flex justify-between"><span className="text-gray-500">Выплачено</span><span className="text-white font-medium">{fmtMoneyStat(stats.totalPaid)}</span></div>
+                            </div>
+                        </div>
                     </div>
 
-                    {/* Top Referrers */}
-                    <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-                        <div className="p-5 border-b border-gray-800"><h3 className="text-lg font-bold text-gray-200">Топ рефералов</h3></div>
+                    {/* Топ рефералов */}
+                    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                        <div className="p-5 border-b border-gray-800"><h3 className="text-base font-semibold text-white">Топ рефералов</h3></div>
                         <table className="w-full text-left">
-                            <thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase"><th className="px-6 py-4">Пользователь</th><th className="px-6 py-4">Пригласил</th><th className="px-6 py-4">Заработал</th></tr></thead>
+                            <thead><tr className="text-gray-500 text-xs uppercase border-b border-gray-800"><th className="px-6 py-3 font-medium">Пользователь</th><th className="px-6 py-3 font-medium">Пригласил</th><th className="px-6 py-3 font-medium">Заработал</th></tr></thead>
                             <tbody className="divide-y divide-gray-800">
                                 {(stats.topReferrers || []).map((r: any) => (
                                     <tr key={r.id}>
-                                        <td className="px-6 py-4 text-white font-medium flex items-center"><Trophy size={16} className={`mr-2 ${r.id === 1 ? 'text-yellow-400' : r.id === 2 ? 'text-gray-400' : 'text-orange-400'}`}/> {r.name}</td>
-                                        <td className="px-6 py-4 text-gray-300">{r.count} чел.</td>
-                                        <td className="px-6 py-4 text-green-400 font-bold">{r.earned.toLocaleString('ru-RU')} ₽</td>
+                                        <td className="px-6 py-3 text-white flex items-center"><Trophy size={15} className="mr-2 text-gray-500" /> {r.name}</td>
+                                        <td className="px-6 py-3 text-gray-400">{r.count} чел.</td>
+                                        <td className="px-6 py-3 text-gray-200 font-medium">{r.earned.toLocaleString('ru-RU')} ₽</td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -2636,13 +2297,13 @@ const UsersPage: React.FC<UsersPageProps> = ({ userSearch, setUserSearch, setSel
                 
                 {/* REPLACED BUTTONS WITH MASS ACTION DROPDOWN */}
                 <div className="relative" ref={menuRef}>
-                    <button onClick={() => setShowMassMenu(!showMassMenu)} className="flex items-center px-4 py-2.5 bg-orange-600 hover:bg-orange-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-orange-900/20 transition-all">
+                    <button onClick={() => setShowMassMenu(!showMassMenu)} className="flex items-center px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-black/40 transition-all">
                         <Layers size={18} className="mr-2" /> Массовые действия <ChevronDown size={16} className={`ml-2 transition-transform ${showMassMenu ? 'rotate-180' : ''}`} />
                     </button>
                     {showMassMenu && (
                         <div className="absolute right-0 mt-2 w-56 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-20 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
                             <button onClick={() => { setMassActionType('MASS_ADD_DAYS'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
-                                <Calendar size={16} className="mr-2 text-orange-400" /> Добавить дни всем
+                                <Calendar size={16} className="mr-2 text-gray-200" /> Добавить дни всем
                             </button>
                             <button onClick={() => { setMassActionType('MASS_ADD_BALANCE'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
                                 <DollarSign size={16} className="mr-2 text-green-400" /> Начислить баланс всем
@@ -2671,16 +2332,16 @@ const UsersPage: React.FC<UsersPageProps> = ({ userSearch, setUserSearch, setSel
             </div>
 
             <div className="flex space-x-4">
-                <div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500" placeholder="Поиск по имени, username или ID..." /></div>
+                <div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-500" placeholder="Поиск по имени, username или ID..." /></div>
                 <div className="relative">
-                    <button onClick={() => setShowFilterMenu(!showFilterMenu)} className={`px-4 py-3 bg-gray-900 border rounded-xl text-gray-300 hover:bg-gray-800 transition-colors flex items-center ${statusFilter !== 'all' ? 'border-orange-500 text-orange-400' : 'border-gray-700'}`}>
+                    <button onClick={() => setShowFilterMenu(!showFilterMenu)} className={`px-4 py-3 bg-gray-900 border rounded-xl text-gray-300 hover:bg-gray-800 transition-colors flex items-center ${statusFilter !== 'all' ? 'border-gray-600 text-gray-200' : 'border-gray-700'}`}>
                         <Filter size={18} className="mr-2" /> 
                         {statusFilter === 'all' ? 'Фильтр' : statusFilter === 'Trial' ? 'Триал' : statusFilter === 'Active' ? 'Активные' : 'Забаненные'}
                     </button>
                     {showFilterMenu && (
                         <div className="absolute top-full right-0 mt-2 bg-gray-900 border border-gray-700 rounded-xl shadow-xl z-20 overflow-hidden min-w-[150px]">
                             {[{v: 'all', l: 'Все'}, {v: 'Trial', l: 'Триал'}, {v: 'Active', l: 'Активные'}, {v: 'Banned', l: 'Забаненные'}].map(opt => (
-                                <button key={opt.v} onClick={() => { setStatusFilter(opt.v as any); setShowFilterMenu(false); }} className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-800 transition-colors ${statusFilter === opt.v ? 'text-orange-400 bg-orange-600/10' : 'text-gray-300'}`}>{opt.l}</button>
+                                <button key={opt.v} onClick={() => { setStatusFilter(opt.v as any); setShowFilterMenu(false); }} className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-800 transition-colors ${statusFilter === opt.v ? 'text-gray-200 bg-white/5' : 'text-gray-300'}`}>{opt.l}</button>
                             ))}
                         </div>
                     )}
@@ -2695,7 +2356,7 @@ const UsersPage: React.FC<UsersPageProps> = ({ userSearch, setUserSearch, setSel
                         <thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase tracking-wider"><th className="px-6 py-4">Пользователь</th><th className="px-6 py-4">Баланс</th><th className="px-6 py-4">Подписка</th><th className="px-6 py-4">Партнер</th><th className="px-6 py-4 text-right">Действие</th></tr></thead>
                         <tbody className="divide-y divide-gray-800">
                             {loading && filteredUsers.length === 0 ? (
-                                <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-500"><Loader size={20} className="animate-spin inline-block mr-2 text-orange-400" />Загрузка...</td></tr>
+                                <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-500"><Loader size={20} className="animate-spin inline-block mr-2 text-gray-200" />Загрузка...</td></tr>
                             ) : filteredUsers.length === 0 ? (
                                 <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-500">Ничего не найдено</td></tr>
                             ) : filteredUsers.map((user) => (
@@ -2756,19 +2417,19 @@ const KeysPage: React.FC<KeysPageProps> = ({ keySearch, setKeySearch, setIsCreat
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4"><div><h2 className="text-2xl font-bold text-white">Подписки</h2><p className="text-gray-400 mt-1">Управление подписками VLESS/Vmess</p></div><button onClick={() => setIsCreateKeyOpen(true)} className="flex items-center px-5 py-2.5 bg-orange-600 hover:bg-orange-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-orange-900/20 transition-all"><Plus size={18} className="mr-2" />Создать</button></div>
+             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4"><div><h2 className="text-2xl font-bold text-white">Подписки</h2><p className="text-gray-400 mt-1">Управление подписками VLESS/Vmess</p></div><button onClick={() => setIsCreateKeyOpen(true)} className="flex items-center px-5 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-black/40 transition-all"><Plus size={18} className="mr-2" />Создать</button></div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6"><StatCard title="Всего ключей" value={total} icon={Key} color="blue" /><StatCard title="Истёкшие (стр.)" value={filteredKeys.filter(k => k.status === 'Expired').length} icon={Clock} color="orange" /><StatCard title="Заблок. (стр.)" value={filteredKeys.filter(k => k.status === 'Banned').length} icon={Ban} color="red" /></div>
             <div className="flex space-x-4">
-                <div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={keySearch} onChange={e => setKeySearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500" placeholder="Поиск по ключу, пользователю..." /></div>
+                <div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={keySearch} onChange={e => setKeySearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-500" placeholder="Поиск по ключу, пользователю..." /></div>
                 <div className="relative">
-                    <button onClick={() => setShowFilterMenu(!showFilterMenu)} className={`px-4 py-3 bg-gray-900 border rounded-xl text-gray-300 hover:bg-gray-800 transition-colors flex items-center ${statusFilter !== 'all' ? 'border-orange-500 text-orange-400' : 'border-gray-700'}`}>
+                    <button onClick={() => setShowFilterMenu(!showFilterMenu)} className={`px-4 py-3 bg-gray-900 border rounded-xl text-gray-300 hover:bg-gray-800 transition-colors flex items-center ${statusFilter !== 'all' ? 'border-gray-600 text-gray-200' : 'border-gray-700'}`}>
                         <Filter size={18} className="mr-2" /> 
                         {statusFilter === 'all' ? 'Фильтр' : statusFilter === 'Active' ? 'Активные' : statusFilter === 'Expired' ? 'Истёкшие' : 'Забаненные'}
                     </button>
                     {showFilterMenu && (
                         <div className="absolute top-full right-0 mt-2 bg-gray-900 border border-gray-700 rounded-xl shadow-xl z-20 overflow-hidden min-w-[150px]">
                             {[{v: 'all', l: 'Все'}, {v: 'Active', l: 'Активные'}, {v: 'Expired', l: 'Истёкшие'}, {v: 'Banned', l: 'Забаненные'}].map(opt => (
-                                <button key={opt.v} onClick={() => { setStatusFilter(opt.v as any); setShowFilterMenu(false); }} className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-800 transition-colors ${statusFilter === opt.v ? 'text-orange-400 bg-orange-600/10' : 'text-gray-300'}`}>{opt.l}</button>
+                                <button key={opt.v} onClick={() => { setStatusFilter(opt.v as any); setShowFilterMenu(false); }} className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-800 transition-colors ${statusFilter === opt.v ? 'text-gray-200 bg-white/5' : 'text-gray-300'}`}>{opt.l}</button>
                             ))}
                         </div>
                     )}
@@ -2783,16 +2444,16 @@ const KeysPage: React.FC<KeysPageProps> = ({ keySearch, setKeySearch, setIsCreat
                         <thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase tracking-wider"><th className="px-6 py-4">ID / Ключ</th><th className="px-6 py-4">Пользователь</th><th className="px-6 py-4">Статус</th><th className="px-6 py-4">Осталось</th><th className="px-6 py-4">Трафик</th><th className="px-6 py-4">Устр.</th><th className="px-6 py-4 text-right"></th></tr></thead>
                         <tbody className="divide-y divide-gray-800">
                             {loading && filteredKeys.length === 0 ? (
-                                <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-500"><Loader size={20} className="animate-spin inline-block mr-2 text-orange-400" />Загрузка...</td></tr>
+                                <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-500"><Loader size={20} className="animate-spin inline-block mr-2 text-gray-200" />Загрузка...</td></tr>
                             ) : filteredKeys.length === 0 ? (
                                 <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-500">Ничего не найдено</td></tr>
                             ) : filteredKeys.map((k) => (
                                 <tr key={k.id} onClick={() => setEditingKey(k)} className="hover:bg-gray-800/30 transition-colors group cursor-pointer relative">
                                     <td className="px-6 py-4"><div className="text-sm font-mono text-white">#{k.id}</div><div className="text-xs text-gray-500 truncate w-32 font-mono mt-0.5 opacity-70">{k.key}</div></td>
-                                    <td className="px-6 py-4 text-sm text-orange-400 font-medium">{k.user}</td><td className="px-6 py-4"><span className={`px-2 py-1 rounded text-xs font-medium border ${k.status === 'Active' ? 'bg-green-500/10 text-green-400 border-green-500/20' : k.status === 'Expired' ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>{k.status}</span></td>
+                                    <td className="px-6 py-4 text-sm text-gray-200 font-medium">{k.user}</td><td className="px-6 py-4"><span className={`px-2 py-1 rounded text-xs font-medium border ${k.status === 'Active' ? 'bg-green-500/10 text-green-400 border-green-500/20' : k.status === 'Expired' ? 'bg-white/5 text-gray-200 border-white/10' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>{k.status}</span></td>
                                     <td className="px-6 py-4 text-sm text-gray-300">{k.expiry > 0 ? `${k.expiry} дн.` : 'Истёк'}</td>
-                                    <td className="px-6 py-4"><div className="text-xs text-gray-400 mb-1">{(k.trafficUsed / (1024**3)).toFixed(1)} / {k.trafficLimit > 0 ? (k.trafficLimit / (1024**3)).toFixed(0) : '∞'} GB</div><div className="w-24 bg-gray-800 rounded-full h-1.5"><div className={`h-1.5 rounded-full ${k.trafficLimit > 0 && k.trafficUsed/k.trafficLimit > 0.9 ? 'bg-red-500' : k.trafficLimit > 0 && k.trafficUsed/k.trafficLimit > 0.7 ? 'bg-yellow-500' : 'bg-orange-500'}`} style={{ width: `${k.trafficLimit > 0 ? Math.min(100, (k.trafficUsed/k.trafficLimit)*100) : 0}%` }}></div></div></td><td className="px-6 py-4 text-sm text-gray-400 text-center">{k.devicesUsed}/{k.devicesLimit}</td>
-                                    <td className="px-6 py-4 text-right"><div className="p-2 bg-gray-800 rounded-lg text-gray-500 group-hover:bg-orange-600 group-hover:text-white transition-colors inline-block"><Edit2 size={16} /></div></td>
+                                    <td className="px-6 py-4"><div className="text-xs text-gray-400 mb-1">{(k.trafficUsed / (1024**3)).toFixed(1)} / {k.trafficLimit > 0 ? (k.trafficLimit / (1024**3)).toFixed(0) : '∞'} GB</div><div className="w-24 bg-gray-800 rounded-full h-1.5"><div className={`h-1.5 rounded-full ${k.trafficLimit > 0 && k.trafficUsed/k.trafficLimit > 0.9 ? 'bg-red-500' : k.trafficLimit > 0 && k.trafficUsed/k.trafficLimit > 0.7 ? 'bg-yellow-500' : 'bg-gray-700'}`} style={{ width: `${k.trafficLimit > 0 ? Math.min(100, (k.trafficUsed/k.trafficLimit)*100) : 0}%` }}></div></div></td><td className="px-6 py-4 text-sm text-gray-400 text-center">{k.devicesUsed}/{k.devicesLimit}</td>
+                                    <td className="px-6 py-4 text-right"><div className="p-2 bg-gray-800 rounded-lg text-gray-500 group-hover:bg-gray-600 group-hover:text-white transition-colors inline-block"><Edit2 size={16} /></div></td>
                                 </tr>
                             ))}
                         </tbody>
@@ -2954,14 +2615,14 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2 space-y-6">
                     <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                        <h3 className="text-lg font-bold text-gray-200 mb-4 flex items-center"><Plus size={20} className="mr-2 text-orange-500"/> Новая рассылка</h3>
+                        <h3 className="text-lg font-bold text-gray-200 mb-4 flex items-center"><Plus size={20} className="mr-2 text-gray-300"/> Новая рассылка</h3>
                         <div className="space-y-4">
                             <div>
                                 <label className="text-sm text-gray-400 mb-1.5 block">Текст сообщения</label>
                                 <textarea 
                                     value={message}
                                     onChange={(e) => setMessage(e.target.value)}
-                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl p-4 text-white focus:outline-none focus:border-orange-500 h-32 resize-none" 
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl p-4 text-white focus:outline-none focus:border-gray-500 h-32 resize-none" 
                                     placeholder="Введите текст рассылки... Поддерживается Markdown"
                                 />
                             </div>
@@ -2970,7 +2631,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                 <select 
                                     value={buttonType}
                                     onChange={(e) => handleButtonTypeChange(e.target.value)}
-                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-orange-500"
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-gray-500"
                                 >
                                     {buttonTypes.map(bt => (
                                         <option key={bt.value} value={bt.value}>{bt.label}</option>
@@ -2985,7 +2646,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                             type="text" 
                                             value={buttonLabel}
                                             onChange={(e) => setButtonLabel(e.target.value)}
-                                            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-orange-500" 
+                                            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-gray-500" 
                                             placeholder={buttonType === 'open_miniapp' ? 'Открыть приложение' : 'Перейти'}
                                         />
                                     </div>
@@ -2997,7 +2658,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                             type="text" 
                                             value={buttonUrl}
                                             onChange={(e) => setButtonUrl(e.target.value)}
-                                            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-orange-500" 
+                                            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-gray-500" 
                                             placeholder={buttonType === 'open_miniapp' ? 'https://app.example.com' : 'https://example.com'}
                                         />
                                     </div>
@@ -3010,7 +2671,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                         type="text" 
                                         value={promoCode}
                                         onChange={(e) => setPromoCode(e.target.value)}
-                                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-orange-500" 
+                                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-gray-500" 
                                         placeholder="PROMOCODE"
                                     />
                                 </div>
@@ -3021,7 +2682,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                     type="text"
                                     value={imageUrl}
                                     onChange={(e) => setImageUrl(e.target.value)}
-                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-orange-500"
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-gray-500"
                                     placeholder="https://.../image.jpg"
                                 />
                                 <div className="text-xs text-gray-500 mt-1">
@@ -3037,7 +2698,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                             onClick={() => setTargetUsers(filter)}
                                             className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
                                                 targetUsers === filter 
-                                                    ? 'bg-orange-600 text-white border-orange-500' 
+                                                    ? 'bg-gray-700 text-white border-gray-600' 
                                                     : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700'
                                             }`}
                                         >
@@ -3052,7 +2713,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                 <button 
                                     onClick={handleSend}
                                     disabled={isSending}
-                                    className="flex-1 py-3 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-bold shadow-lg shadow-orange-900/20 transition-colors flex justify-center items-center"
+                                    className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-bold shadow-lg shadow-black/40 transition-colors flex justify-center items-center"
                                 >
                                     {isSending ? <><Loader size={18} className="animate-spin mr-2" /> Запуск...</> : <><Send size={18} className="mr-2" /> Отправить</>}
                                 </button>
@@ -3077,7 +2738,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                             item.status === 'Completed' 
                                                 ? 'bg-green-500/10 text-green-400 border-green-500/20' 
                                                 : item.status === 'Sending'
-                                                ? 'bg-orange-500/10 text-orange-400 border-orange-500/20'
+                                                ? 'bg-white/5 text-gray-200 border-white/10'
                                                 : item.status === 'Cancelled'
                                                 ? 'bg-red-500/10 text-red-400 border-red-500/20'
                                                 : 'bg-gray-500/10 text-gray-400 border-gray-500/20'
@@ -3089,7 +2750,7 @@ const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
                                         </span>
                                     </div>
                                     <div className="flex gap-2 mt-3">
-                                        <button onClick={() => setSelectedHistoryItem(item)} className="text-xs px-2 py-1 rounded bg-orange-600/20 text-orange-300 hover:bg-orange-600/30">Открыть</button>
+                                        <button onClick={() => setSelectedHistoryItem(item)} className="text-xs px-2 py-1 rounded bg-gray-700/20 text-gray-300 hover:bg-gray-600/30">Открыть</button>
                                         <button onClick={async () => {
                                             if (!confirm('Удалить рассылку и попытаться удалить сообщения у пользователей?')) return;
                                             try {
@@ -3237,7 +2898,7 @@ const PromocodesPage: React.FC<{ promos: Promo[]; onToast: (title: string, msg: 
                     <input type="number" value={newPromo.limit} onChange={e => setNewPromo({ ...newPromo, limit: e.target.value })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Лимит" />
                     <input type="text" value={newPromo.expires} onChange={e => setNewPromo({ ...newPromo, expires: e.target.value })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="2026-12-31" />
                 </div>
-                <button onClick={handleCreatePromo} className="mt-4 px-6 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg">Создать</button>
+                <button onClick={handleCreatePromo} className="mt-4 px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Создать</button>
             </div>
 
             <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
@@ -3302,7 +2963,7 @@ const PromocodesPage: React.FC<{ promos: Promo[]; onToast: (title: string, msg: 
                         </div>
                         <div className="flex gap-3 mt-5">
                             <button onClick={() => setEditingPromo(null)} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Отмена</button>
-                            <button onClick={handleSavePromo} className="flex-1 px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg">Сохранить</button>
+                            <button onClick={handleSavePromo} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Сохранить</button>
                         </div>
                     </div>
                 </div>
@@ -3554,7 +3215,7 @@ const PromotionsPage: React.FC<{ onToast: (title: string, msg: string, type: Toa
                         className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
                     />
                 </div>
-                <button onClick={handleCreate} className="px-6 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg">
+                <button onClick={handleCreate} className="px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">
                     Создать
                 </button>
             </div>
@@ -3587,7 +3248,7 @@ const PromotionsPage: React.FC<{ onToast: (title: string, msg: string, type: Toa
                                     <tr key={p.id} className={!p.is_active ? 'opacity-50' : ''}>
                                         <td className="px-4 py-3 text-white font-medium">{p.name}</td>
                                         <td className="px-4 py-3 text-gray-300">{typeLabel(p.type)}</td>
-                                        <td className="px-4 py-3 text-orange-400 font-semibold">
+                                        <td className="px-4 py-3 text-gray-200 font-semibold">
                                             {p.type === 'deposit_multiplier' ? `x${p.value}` : `−${p.value}%`}
                                         </td>
                                         <td className="px-4 py-3 text-gray-400 text-sm">
@@ -3716,7 +3377,7 @@ const PromotionsPage: React.FC<{ onToast: (title: string, msg: string, type: Toa
                         </div>
                         <div className="flex gap-3 mt-5">
                             <button onClick={() => setEditing(null)} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Отмена</button>
-                            <button onClick={handleSave} className="flex-1 px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg">Сохранить</button>
+                            <button onClick={handleSave} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Сохранить</button>
                         </div>
                     </div>
                 </div>
@@ -3891,7 +3552,7 @@ const TrackingLinksPage: React.FC<{ onToast: (title: string, msg: string, type: 
                     <input type="text" value={newLink.name} onChange={e => setNewLink({ ...newLink, name: e.target.value })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Название (YouTube, VK Ads…)" />
                     <input type="text" value={newLink.code} onChange={e => setNewLink({ ...newLink, code: e.target.value.replace(/[^A-Za-z0-9_-]/g, '') })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono" placeholder="Код (ad, youtube1…)" />
                     <input type="text" value={newLink.promocode} onChange={e => setNewLink({ ...newLink, promocode: e.target.value.toUpperCase() })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono" placeholder="Промокод (необяз.)" />
-                    <button onClick={handleCreate} className="px-6 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg font-medium">Создать ссылку</button>
+                    <button onClick={handleCreate} className="px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium">Создать ссылку</button>
                 </div>
                 <div className="mt-3">
                     <textarea
@@ -3942,7 +3603,7 @@ const TrackingLinksPage: React.FC<{ onToast: (title: string, msg: string, type: 
                                             <div className="text-xs text-gray-500 font-mono mt-0.5">trk_{l.code}{l.promocode ? ` · ${l.promocode}` : ''}</div>
                                         </td>
                                         <td className="px-4 py-3">
-                                            <button onClick={() => copyToClipboard(l.url)} className="flex items-center gap-1.5 text-sm text-orange-400 hover:text-orange-300 font-mono max-w-[180px] truncate" title={l.url}>
+                                            <button onClick={() => copyToClipboard(l.url)} className="flex items-center gap-1.5 text-sm text-gray-200 hover:text-gray-300 font-mono max-w-[180px] truncate" title={l.url}>
                                                 <Copy size={13} /> копировать
                                             </button>
                                         </td>
@@ -3999,7 +3660,7 @@ const TrackingLinksPage: React.FC<{ onToast: (title: string, msg: string, type: 
                         </div>
                         <div className="flex gap-3 mt-5">
                             <button onClick={() => setEditingLink(null)} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Отмена</button>
-                            <button onClick={handleSaveEdit} className="flex-1 px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg">Сохранить</button>
+                            <button onClick={handleSaveEdit} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Сохранить</button>
                         </div>
                     </div>
                 </div>
@@ -4011,7 +3672,7 @@ const TrackingLinksPage: React.FC<{ onToast: (title: string, msg: string, type: 
                         <div className="p-6 border-b border-gray-800 flex items-start justify-between gap-4">
                             <div>
                                 <h3 className="text-xl font-bold text-white">{detailLink.name || detailLink.code}</h3>
-                                <button onClick={() => copyToClipboard(detailLink.url)} className="flex items-center gap-1.5 text-sm text-orange-400 hover:text-orange-300 font-mono mt-1">
+                                <button onClick={() => copyToClipboard(detailLink.url)} className="flex items-center gap-1.5 text-sm text-gray-200 hover:text-gray-300 font-mono mt-1">
                                     <Copy size={13} /> {detailLink.url}
                                 </button>
                             </div>
@@ -4022,7 +3683,7 @@ const TrackingLinksPage: React.FC<{ onToast: (title: string, msg: string, type: 
                             <div className="bg-gray-950 rounded-xl p-3 border border-gray-800"><div className="text-xs text-gray-500">Переходы</div><div className="text-xl font-bold text-white">{detailLink.clicks}</div></div>
                             <div className="bg-gray-950 rounded-xl p-3 border border-gray-800"><div className="text-xs text-gray-500">Уникальные</div><div className="text-xl font-bold text-white">{detailLink.unique_users}</div></div>
                             <div className="bg-gray-950 rounded-xl p-3 border border-gray-800"><div className="text-xs text-gray-500">Доход</div><div className="text-xl font-bold text-green-400">{fmtMoney(detailLink.total_revenue)}</div></div>
-                            <div className="bg-gray-950 rounded-xl p-3 border border-gray-800"><div className="text-xs text-gray-500">Конверсия</div><div className="text-xl font-bold text-orange-400">{fmtPct(detailLink.conversion_rate)}</div></div>
+                            <div className="bg-gray-950 rounded-xl p-3 border border-gray-800"><div className="text-xs text-gray-500">Конверсия</div><div className="text-xl font-bold text-gray-200">{fmtPct(detailLink.conversion_rate)}</div></div>
                         </div>
 
                         <div className="flex-1 overflow-y-auto p-6">
@@ -4169,7 +3830,7 @@ const AutoDiscountsPage: React.FC<{ onToast: (title: string, msg: string, type: 
                     <h3 className="text-lg font-bold text-white">Автоматические правила</h3>
                     <button 
                         onClick={() => setShowCreateModal(true)}
-                        className="text-orange-400 text-sm hover:underline font-medium"
+                        className="text-gray-200 text-sm hover:underline font-medium"
                     >
                         + Добавить правило
                     </button>
@@ -4299,7 +3960,7 @@ const AutoDiscountsPage: React.FC<{ onToast: (title: string, msg: string, type: 
                             </div>
                         </div>
                         <div className="p-5 border-t border-gray-800">
-                            <button onClick={handleCreate} className="w-full py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-bold">
+                            <button onClick={handleCreate} className="w-full py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-bold">
                                 Создать правило
                             </button>
                         </div>
@@ -4362,7 +4023,7 @@ const PublicPages: React.FC<PublicPagesProps> = ({ onToast }) => {
     if (loading) {
         return (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-orange-500" size={32} /></div>
+                <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-gray-300" size={32} /></div>
             </div>
         );
     }
@@ -4379,7 +4040,7 @@ const PublicPages: React.FC<PublicPagesProps> = ({ onToast }) => {
             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 flex flex-col h-[calc(100vh-240px)]">
                 <div className="flex justify-between items-center mb-4">
                     <h3 className="text-lg font-bold text-gray-200 flex items-center">
-                        {activeTab === 'offer' ? <FileTextIcon size={20} className="mr-2 text-orange-500"/> : <Shield size={20} className="mr-2 text-green-500"/>}
+                        {activeTab === 'offer' ? <FileTextIcon size={20} className="mr-2 text-gray-300"/> : <Shield size={20} className="mr-2 text-green-500"/>}
                         {activeTab === 'offer' ? 'Редактор оферты' : 'Редактор политики'}
                     </h3>
                     <div className="text-xs text-gray-500 flex items-center">
@@ -4390,11 +4051,11 @@ const PublicPages: React.FC<PublicPagesProps> = ({ onToast }) => {
                 <textarea 
                     value={content}
                     onChange={e => setContent(e.target.value)}
-                    className="flex-1 w-full bg-gray-950 border border-gray-700 rounded-xl p-6 text-gray-300 font-mono text-sm leading-relaxed focus:outline-none focus:border-orange-500 resize-none mb-4" 
+                    className="flex-1 w-full bg-gray-950 border border-gray-700 rounded-xl p-6 text-gray-300 font-mono text-sm leading-relaxed focus:outline-none focus:border-gray-500 resize-none mb-4" 
                     placeholder={activeTab === 'offer' ? "# Договор оферты\n\n1. Общие положения..." : "# Политика конфиденциальности\n\n1. Сбор данных..."} 
                 />
                 <div className="flex justify-end">
-                    <button onClick={handleSave} className="px-6 py-2.5 bg-orange-600 hover:bg-orange-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-orange-900/20 transition-all flex items-center">
+                    <button onClick={handleSave} className="px-6 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-black/40 transition-all flex items-center">
                         <FileCheck size={18} className="mr-2" /> Сохранить изменения
                     </button>
                 </div>
@@ -4487,7 +4148,7 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
             <p className="text-sm text-gray-400 mb-4">{description}</p>
             {loading ? (
                 <div className="flex items-center justify-center py-4">
-                    <Loader className="animate-spin text-orange-500" size={20} />
+                    <Loader className="animate-spin text-gray-300" size={20} />
                     <span className="ml-2 text-gray-400">Загрузка...</span>
                 </div>
             ) : squads.length === 0 ? (
@@ -4501,7 +4162,7 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
                             key={sq.uuid} 
                             className={`flex items-center space-x-3 px-3 py-2 rounded-xl border cursor-pointer transition-all ${
                                 selectedSquads.includes(sq.uuid) 
-                                    ? 'bg-orange-600/20 border-orange-500 shadow-lg shadow-orange-900/20' 
+                                    ? 'bg-gray-700/20 border-gray-600 shadow-lg shadow-black/40' 
                                     : 'bg-gray-950 border-gray-700 hover:border-gray-600'
                             }`}
                             style={selectedSquads.includes(sq.uuid) ? {
@@ -4534,7 +4195,7 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
                 <div className="space-y-6">
                     <div className="flex justify-between items-center p-4 bg-gray-950 rounded-xl border border-gray-800">
                         <span className="text-gray-300 font-medium">Включить пробный период</span>
-                        <button onClick={() => setTrialEnabled(!trialEnabled)} className={`w-12 h-6 rounded-full p-1 transition-colors relative ${trialEnabled ? 'bg-orange-600' : 'bg-gray-700'}`}>
+                        <button onClick={() => setTrialEnabled(!trialEnabled)} className={`w-12 h-6 rounded-full p-1 transition-colors relative ${trialEnabled ? 'bg-gray-700' : 'bg-gray-700'}`}>
                             <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${trialEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
                         </button>
                     </div>
@@ -4544,7 +4205,7 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
                             type="number" 
                             value={trialHours}
                             onChange={e => setTrialHours(e.target.value)}
-                            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-orange-500 transition-colors" 
+                            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gray-500 transition-colors" 
                             placeholder="24" 
                         />
                     </div>
@@ -4556,7 +4217,7 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
                 <button 
                     onClick={saveSquads}
                     disabled={saving}
-                    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center"
+                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center"
                 >
                     {saving && <Loader className="animate-spin mr-2" size={14} />}
                     Сохранить
@@ -4564,11 +4225,11 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
             </div>
 
             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <div className="flex items-start gap-3 p-4 bg-orange-900/20 border border-orange-500/30 rounded-xl mb-4">
-                    <Zap className="text-orange-400 shrink-0 mt-0.5" size={20} />
+                <div className="flex items-start gap-3 p-4 bg-gray-800/20 border border-white/10 rounded-xl mb-4">
+                    <Zap className="text-gray-200 shrink-0 mt-0.5" size={20} />
                     <div>
-                        <div className="text-orange-400 font-bold mb-1">Автоматический балансировщик</div>
-                        <div className="text-orange-300 text-sm">
+                        <div className="text-gray-200 font-bold mb-1">Автоматический балансировщик</div>
+                        <div className="text-gray-300 text-sm">
                             При создании ключа система автоматически выберет сквад с наименьшим количеством пользователей из выбранных ниже. 
                             Если сквады не выбраны — будет использован сквад с минимальной нагрузкой из всех доступных.
                         </div>
@@ -4591,7 +4252,7 @@ const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, 
                 <button 
                     onClick={syncWithRemnawave}
                     disabled={syncing}
-                    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center"
+                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center"
                 >
                     {syncing && <Loader className="animate-spin mr-2" size={14} />}
                     {syncing ? 'Синхронизация...' : '🔄 Синхронизировать'}
@@ -4658,7 +4319,7 @@ const BackupSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: 
                         <span className="text-gray-300 font-medium">Автоматическое резервное копирование</span>
                         <p className="text-xs text-gray-500 mt-1">Бекапы будут создаваться автоматически и отправляться администратору</p>
                     </div>
-                    <button onClick={() => setBackupEnabled(!backupEnabled)} className={`w-12 h-6 rounded-full p-1 transition-colors relative ${backupEnabled ? 'bg-orange-600' : 'bg-gray-700'}`}>
+                    <button onClick={() => setBackupEnabled(!backupEnabled)} className={`w-12 h-6 rounded-full p-1 transition-colors relative ${backupEnabled ? 'bg-gray-700' : 'bg-gray-700'}`}>
                         <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${backupEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
                     </button>
                 </div>
@@ -4669,7 +4330,7 @@ const BackupSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: 
                         type="number" 
                         value={backupInterval}
                         onChange={e => setBackupInterval(e.target.value)}
-                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-orange-500 transition-colors" 
+                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gray-500 transition-colors" 
                         placeholder="12" 
                     />
                 </div>
@@ -4681,11 +4342,11 @@ const BackupSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: 
                     </div>
                 )}
 
-                <div className="p-4 bg-orange-900/20 border border-orange-500/30 rounded-xl flex items-start">
-                    <Cloud className="text-orange-400 mr-3 mt-0.5" size={20} />
+                <div className="p-4 bg-gray-800/20 border border-white/10 rounded-xl flex items-start">
+                    <Cloud className="text-gray-200 mr-3 mt-0.5" size={20} />
                     <div>
-                        <h4 className="text-orange-400 font-bold text-sm">Важно</h4>
-                        <p className="text-orange-300/80 text-xs mt-1">Бэкапы будут отправляться в личные сообщения администратору в виде архива базы данных.</p>
+                        <h4 className="text-gray-200 font-bold text-sm">Важно</h4>
+                        <p className="text-gray-300/80 text-xs mt-1">Бэкапы будут отправляться в личные сообщения администратору в виде архива базы данных.</p>
                     </div>
                 </div>
 
@@ -4700,7 +4361,7 @@ const BackupSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: 
                     </button>
                     <button 
                         onClick={handleSaveSettings}
-                        className="flex-1 px-4 py-3 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-medium transition-colors flex items-center justify-center"
+                        className="flex-1 px-4 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-medium transition-colors flex items-center justify-center"
                     >
                         <Save size={18} className="mr-2" />
                         Сохранить настройки
@@ -4820,7 +4481,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
 
     const getSquadTypeColor = (type: string) => {
         switch(type) {
-            case 'vpn': return 'bg-orange-500/20 text-orange-400 border-orange-500/30';
+            case 'vpn': return 'bg-white/10 text-gray-200 border-white/10';
             case 'trial': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
             case 'whitelist': return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
             default: return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
@@ -4828,7 +4489,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
     };
 
     if (loading) {
-        return <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-orange-500" size={32} /></div>;
+        return <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-gray-300" size={32} /></div>;
     }
 
     return (
@@ -4842,7 +4503,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                 <button
                     onClick={handleSync}
                     disabled={syncing}
-                    className="flex items-center px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
+                    className="flex items-center px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
                 >
                     {syncing ? <Loader className="animate-spin mr-2" size={18} /> : <RefreshCw size={18} className="mr-2" />}
                     Синхронизировать с Remnawave
@@ -4891,7 +4552,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                             {squad.max_users > 0 && (
                                 <div className="w-full bg-gray-800 rounded-full h-2 mt-2">
                                     <div 
-                                        className="bg-orange-500 h-2 rounded-full transition-all"
+                                        className="bg-gray-700 h-2 rounded-full transition-all"
                                         style={{ width: `${Math.min(100, (squad.current_users / squad.max_users) * 100)}%` }}
                                     />
                                 </div>
@@ -4906,7 +4567,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                     <Zap size={48} className="mx-auto text-gray-600 mb-4" />
                     <h3 className="text-lg font-bold text-white mb-2">Нет сквадов</h3>
                     <p className="text-gray-400 mb-4">Синхронизируйте сквады с Remnawave</p>
-                    <button onClick={handleSync} className="px-4 py-2 bg-orange-600 text-white rounded-lg font-medium">
+                    <button onClick={handleSync} className="px-4 py-2 bg-gray-700 text-white rounded-lg font-medium">
                         Синхронизировать
                     </button>
                 </div>
@@ -4926,7 +4587,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                             <div key={type}>
                                 <h3 className="font-medium text-white mb-3 flex items-center">
                                     <span className={`w-3 h-3 rounded-full mr-2 ${
-                                        type === 'vpn' ? 'bg-orange-500' : 'bg-yellow-500'
+                                        type === 'vpn' ? 'bg-gray-700' : 'bg-yellow-500'
                                     }`} />
                                     {type === 'vpn' ? 'Подписка (VPN + обход блокировок)' : 'Пробный период'}
                                 </h3>
@@ -4937,7 +4598,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                                             onClick={() => toggleSquadMapping(type, squad.squad_uuid)}
                                             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${
                                                 mapping[type]?.includes(squad.squad_uuid)
-                                                    ? 'bg-orange-600 border-orange-500 text-white'
+                                                    ? 'bg-gray-700 border-gray-600 text-white'
                                                     : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600'
                                             }`}
                                         >
@@ -4951,7 +4612,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
 
                     <button 
                         onClick={handleSaveMapping}
-                        className="mt-6 px-6 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg font-medium transition-colors"
+                        className="mt-6 px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium transition-colors"
                     >
                         Сохранить привязки
                     </button>
@@ -5023,7 +4684,7 @@ const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
                             </button>
                             <button
                                 onClick={() => handleSaveSquad(editingSquad)}
-                                className="flex-1 px-4 py-2 bg-orange-600 text-white rounded-lg font-medium hover:bg-orange-500 transition-colors"
+                                className="flex-1 px-4 py-2 bg-gray-700 text-white rounded-lg font-medium hover:bg-gray-600 transition-colors"
                             >
                                 Сохранить
                             </button>
@@ -5114,8 +4775,8 @@ const ToolsPage: React.FC<ToolsPageProps> = ({ onToast }) => {
                 {/* Экспорт данных */}
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
                     <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 rounded-xl bg-orange-600/20 flex items-center justify-center">
-                            <Download size={20} className="text-orange-400" />
+                        <div className="w-10 h-10 rounded-xl bg-gray-700/20 flex items-center justify-center">
+                            <Download size={20} className="text-gray-200" />
                         </div>
                         <div>
                             <h3 className="text-white font-bold">Экспорт данных</h3>
@@ -5239,7 +4900,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
                     <div className="p-4 border-b border-gray-800"><h2 className="font-bold text-white">Категории</h2></div>
                     <nav className="p-2 space-y-1">
                         {[{id: 'squads', icon: Zap, label: 'Сквады'}, {id: 'backups', icon: Cloud, label: 'Резервные копии'}].map(tab => (
-                            <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`w-full flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-colors ${activeTab === tab.id ? 'bg-orange-600/10 text-orange-400' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+                            <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`w-full flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-colors ${activeTab === tab.id ? 'bg-white/5 text-gray-200' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
                                 <tab.icon size={18} className="mr-3"/> {tab.label}
                             </button>
                         ))}
