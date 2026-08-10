@@ -1,72 +1,46 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Home, DollarSign, BarChart2, Users, Key, Mail, Tag, Percent, FileText, Settings, Menu, X,
+  Home, DollarSign, Users, Key, Mail, Gift, Percent, Link, Settings, Menu, X,
   CheckCircle, AlertCircle, CreditCard, Search, Filter, ArrowUpRight, ArrowDownLeft,
   Activity, Calendar, Download, Loader, Hash, Ban, Trophy, UserPlus, UserMinus, Clock,
-  Edit2, Copy, Shield, Smartphone, Zap, Database, Bell, Wallet, Plus, Lock, Send,
-  MousePointer, Gift, Layers, ToggleLeft, ToggleRight, FileCheck, FileText as FileTextIcon,
-  Trash2, ChevronDown, Save, AlertTriangle, Cloud, Link, RefreshCw
+  Edit2, Copy, Smartphone, Zap, Database, Bell, Wallet, Plus, Lock, Send,
+  MousePointer, Layers, ToggleLeft, ToggleRight, Trash2, ChevronDown, Save,
+  AlertTriangle, Cloud, RefreshCw, BarChart2
 } from 'lucide-react';
 
-// ==========================================
-// 0. ENV & API HELPERS
-// ==========================================
+// ==========================================================
+// 0. ENV & API
+// ==========================================================
 
 declare const importMeta: any | undefined;
 
-// Унифицированный доступ к env для Vite/CRA/простого window.__ENV__
 const rawEnv: any =
   (typeof importMeta !== 'undefined' && importMeta.env) ||
   (typeof (window as any) !== 'undefined' && (window as any).__ENV__) ||
   {};
 
-const API_BASE_URL: string = rawEnv.VITE_API_URL || rawEnv.REACT_APP_API_URL || '/api';
 const BOT_USERNAME: string = rawEnv.VITE_BOT_USERNAME || rawEnv.REACT_APP_BOT_USERNAME || 'blinvpn_bot';
 
 function getPanelToken(): string {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem('panel_token') || '';
-  }
-  return '';
+  return typeof window !== 'undefined' ? localStorage.getItem('panel_token') || '' : '';
 }
-
 function setPanelToken(token: string): void {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem('panel_token', token);
-  }
+  if (typeof window !== 'undefined') localStorage.setItem('panel_token', token);
 }
-
 function clearPanelToken(): void {
-  if (typeof window !== 'undefined') {
-    localStorage.removeItem('panel_token');
-  }
+  if (typeof window !== 'undefined') localStorage.removeItem('panel_token');
 }
 
 async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
-  // Всегда используем относительный путь /api - nginx проксирует на backend
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   const url = `/api${cleanPath}`;
-  
-  const headers: any = {
-    'Content-Type': 'application/json',
-    ...(options.headers || {}),
-  };
-
-  // Все panel-* эндпоинты требуют Bearer
+  const headers: any = { 'Content-Type': 'application/json', ...(options.headers || {}) };
   if (cleanPath.startsWith('/panel')) {
     const token = getPanelToken();
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
+    if (token) headers['Authorization'] = `Bearer ${token}`;
   }
-
-  const res = await fetch(url, {
-    ...options,
-    headers,
-  });
-
+  const res = await fetch(url, { ...options, headers });
   if (!res.ok) {
-    // Если 401 - сбрасываем авторизацию
     if (res.status === 401) {
       clearPanelToken();
       window.location.reload();
@@ -74,42 +48,30 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
     const text = await res.text();
     throw new Error(text || `Request failed with status ${res.status}`);
   }
-  try {
-    return await res.json();
-  } catch {
-    return null;
-  }
+  try { return await res.json(); } catch { return null; }
 }
 
-// ==========================================
-// 0.1 PAGINATION / SERVER-SIDE SEARCH HELPERS
-// ==========================================
+// ==========================================================
+// 0.1 PAGINATION / SERVER-SIDE SEARCH
+// ==========================================================
 
-// Сколько строк показываем на одной странице
 const PAGE_SIZE = 100;
 
-// Универсальный парсер ответа backend:
-// поддерживает голый массив [...] и обёртки { items/data/results, total/count }
 function parseListResponse(res: any): { items: any[]; total: number | null } {
-  if (Array.isArray(res)) {
-    return { items: res, total: null };
-  }
+  if (Array.isArray(res)) return { items: res, total: null };
   if (res && typeof res === 'object') {
     const items =
       (Array.isArray(res.items) && res.items) ||
       (Array.isArray(res.data) && res.data) ||
       (Array.isArray(res.results) && res.results) ||
-      (Array.isArray(res.rows) && res.rows) ||
-      [];
-    const totalRaw =
-      res.total ?? res.count ?? res.total_count ?? res.totalCount ?? null;
+      (Array.isArray(res.rows) && res.rows) || [];
+    const totalRaw = res.total ?? res.count ?? res.total_count ?? res.totalCount ?? null;
     const total = totalRaw == null ? null : Number(totalRaw);
     return { items, total: Number.isFinite(total as number) ? total : null };
   }
   return { items: [], total: null };
 }
 
-// Простой debounce-хук для поля поиска
 function useDebouncedValue<T>(value: T, delay = 300): T {
   const [debounced, setDebounced] = useState<T>(value);
   useEffect(() => {
@@ -120,143 +82,68 @@ function useDebouncedValue<T>(value: T, delay = 300): T {
 }
 
 interface UsePaginatedListOptions {
-  // базовый путь, например '/panel/users'
   basePath: string;
-  // строка поиска (raw, до debounce)
   search: string;
-  // доп. фильтры в query (например { status: 'Banned' }); пустые/'all' игнорируются
   extraParams?: Record<string, string | undefined>;
-  // маппер элемента из API в нужный тип
   mapItem: (raw: any) => any;
-  // дополнительный клиентский фильтр (например по статусу),
-  // применяется ТОЛЬКО когда работаем в клиентском режиме (backend отдал всё)
   clientFilter?: (item: any) => boolean;
-  // включить загрузку (например только когда страница активна)
   enabled?: boolean;
-  // сигнал внешнего обновления
   reloadKey?: number;
 }
 
-interface UsePaginatedListResult {
-  items: any[];        // элементы для текущей страницы (уже нарезанные)
-  total: number;       // всего записей (после поиска/фильтра)
-  page: number;        // текущая страница (1-based)
-  totalPages: number;
-  loading: boolean;
-  error: string | null;
-  setPage: (p: number) => void;
-  nextPage: () => void;
-  prevPage: () => void;
-  reload: () => void;
-}
-
-// Главный хук: серверная пагинация + серверный поиск,
-// с надёжным fallback на клиентскую пагинацию, если backend
-// игнорирует параметры (отдаёт весь список целиком).
-function usePaginatedList(opts: UsePaginatedListOptions): UsePaginatedListResult {
-  const {
-    basePath,
-    search,
-    extraParams,
-    mapItem,
-    clientFilter,
-    enabled = true,
-    reloadKey = 0,
-  } = opts;
-
+function usePaginatedList(opts: UsePaginatedListOptions) {
+  const { basePath, search, extraParams, mapItem, clientFilter, enabled = true, reloadKey = 0 } = opts;
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
-
   const [page, setPageState] = useState(1);
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [localReload, setLocalReload] = useState(0);
-
-  // Сериализуем доп. параметры, чтобы корректно реагировать на их смену
   const extraKey = JSON.stringify(extraParams || {});
 
-  // Сброс на первую страницу при изменении поиска / фильтров
-  useEffect(() => {
-    setPageState(1);
-  }, [debouncedSearch, extraKey]);
+  useEffect(() => { setPageState(1); }, [debouncedSearch, extraKey]);
 
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-
     const run = async () => {
       setLoading(true);
       setError(null);
       try {
         const offset = (page - 1) * PAGE_SIZE;
-
-        // Собираем query. Дублируем имена параметров под разные backend-схемы:
-        // limit/offset + page, search + q.
         const qp = new URLSearchParams();
         qp.set('limit', String(PAGE_SIZE));
         qp.set('offset', String(offset));
         qp.set('page', String(page));
-        if (debouncedSearch) {
-          qp.set('search', debouncedSearch);
-          qp.set('q', debouncedSearch);
-        }
+        if (debouncedSearch) { qp.set('search', debouncedSearch); qp.set('q', debouncedSearch); }
         if (extraParams) {
           for (const [k, v] of Object.entries(extraParams)) {
             if (v != null && v !== '' && v !== 'all') qp.set(k, v);
           }
         }
-
         const res = await apiFetch(`${basePath}?${qp.toString()}`);
         if (cancelled) return;
-
         const { items: rawItems, total: serverTotal } = parseListResponse(res);
-
-        // Определяем, отработал ли backend пагинацию.
-        // Если он отдал больше, чем PAGE_SIZE — значит игнорирует limit,
-        // и нам надо самим искать + резать на клиенте.
         const backendIgnoresPaging = rawItems.length > PAGE_SIZE;
 
         if (backendIgnoresPaging) {
-          // КЛИЕНТСКИЙ режим: ищем и режем сами по всему массиву.
           let all = rawItems.map(mapItem);
-
           if (debouncedSearch) {
             const q = debouncedSearch.toLowerCase();
             all = all.filter((it: any) => searchableMatch(it, q));
           }
-          if (clientFilter) {
-            all = all.filter(clientFilter);
-          }
-
-          const totalCount = all.length;
+          if (clientFilter) all = all.filter(clientFilter);
           const start = (page - 1) * PAGE_SIZE;
-          const pageItems = all.slice(start, start + PAGE_SIZE);
-
-          setItems(pageItems);
-          setTotal(totalCount);
+          setItems(all.slice(start, start + PAGE_SIZE));
+          setTotal(all.length);
         } else {
-          // СЕРВЕРНЫЙ режим: backend уже отдал нужную порцию.
           let pageItems = rawItems.map(mapItem);
-
-          // Клиентский фильтр статуса применяем только если backend
-          // его не поддержал (на всякий случай — это не ломает серверный поиск).
-          if (clientFilter) {
-            pageItems = pageItems.filter(clientFilter);
-          }
-
-          // total: берём с сервера, если он есть; иначе оцениваем.
+          if (clientFilter) pageItems = pageItems.filter(clientFilter);
           let totalCount: number;
-          if (serverTotal != null) {
-            totalCount = serverTotal;
-          } else if (pageItems.length < PAGE_SIZE) {
-            // последняя (или единственная) страница
-            totalCount = offset + pageItems.length;
-          } else {
-            // полная страница без total — есть как минимум ещё одна
-            totalCount = offset + pageItems.length + 1;
-          }
-
+          if (serverTotal != null) totalCount = serverTotal;
+          else if (pageItems.length < PAGE_SIZE) totalCount = offset + pageItems.length;
+          else totalCount = offset + pageItems.length + 1;
           setItems(pageItems);
           setTotal(totalCount);
         }
@@ -270,318 +157,232 @@ function usePaginatedList(opts: UsePaginatedListOptions): UsePaginatedListResult
         if (!cancelled) setLoading(false);
       }
     };
-
     run();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [basePath, page, debouncedSearch, extraKey, enabled, reloadKey, localReload]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-
-  const setPage = (p: number) => {
-    const clamped = Math.min(Math.max(1, p), Math.max(1, totalPages));
-    setPageState(clamped);
-  };
+  const setPage = (p: number) => setPageState(Math.min(Math.max(1, p), Math.max(1, totalPages)));
 
   return {
-    items,
-    total,
-    page,
-    totalPages,
-    loading,
-    error,
-    setPage,
+    items, total, page, totalPages, loading, error, setPage,
     nextPage: () => setPage(page + 1),
     prevPage: () => setPage(page - 1),
     reload: () => setLocalReload((n) => n + 1),
   };
 }
 
-// Поля, по которым ищем в клиентском fallback-режиме.
 function searchableMatch(item: any, q: string): boolean {
-  const fields = [
-    item.username,
-    item.name,
-    item.user,
-    item.key,
-    item.refCode,
-    item.telegramId != null ? String(item.telegramId) : '',
-    item.id != null ? String(item.id) : '',
-  ];
-  const haystack = fields
-    .filter((f) => f != null && f !== '')
-    .map((f) => String(f).toLowerCase())
-    .join(' ');
-  return haystack.includes(q);
+  const fields = [item.username, item.name, item.user, item.key, item.refCode,
+    item.telegramId != null ? String(item.telegramId) : '', item.id != null ? String(item.id) : ''];
+  return fields.filter((f) => f != null && f !== '').map((f) => String(f).toLowerCase()).join(' ').includes(q);
 }
 
-interface PaginationBarProps {
-  page: number;
-  totalPages: number;
-  total: number;
-  loading?: boolean;
-  onPrev: () => void;
-  onNext: () => void;
-  // подпись слева, например "Всего в базе"
-  totalLabel?: string;
-}
-
-// Панель пагинации в стиле панели (как на референсе VPN)
-const PaginationBar: React.FC<PaginationBarProps> = ({
-  page,
-  totalPages,
-  total,
-  loading,
-  onPrev,
-  onNext,
-  totalLabel = 'Всего в базе',
-}) => {
-  const canPrev = page > 1 && !loading;
-  const canNext = page < totalPages && !loading;
-  return (
-    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1">
-      <div className="text-sm text-gray-400 flex items-center gap-2">
-        {loading && <Loader size={14} className="animate-spin text-gray-200" />}
-        <span>
-          {totalLabel}: <span className="text-white font-semibold">{total.toLocaleString('ru-RU')}</span>
-        </span>
-      </div>
-      <div className="flex items-center gap-2">
-        <button
-          onClick={onPrev}
-          disabled={!canPrev}
-          className="px-4 py-2 rounded-xl text-sm font-medium border border-gray-700 bg-gray-900 text-gray-200 hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
-          Назад
-        </button>
-        <span className="text-sm text-gray-300 min-w-[64px] text-center tabular-nums">
-          {page} / {totalPages}
-        </span>
-        <button
-          onClick={onNext}
-          disabled={!canNext}
-          className="px-4 py-2 rounded-xl text-sm font-medium border border-gray-700 bg-gray-900 text-gray-200 hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
-          Вперёд
-        </button>
-      </div>
-    </div>
-  );
-};
-
-// ==========================================
-// 1. TYPES & INTERFACES
-// ==========================================
+// ==========================================================
+// 1. TYPES
+// ==========================================================
 
 type ToastType = 'success' | 'error' | 'info';
 type TransactionType = 'income' | 'expense';
 type UserStatus = 'Active' | 'Trial' | 'Banned' | 'Expired';
-type KeyStatus = 'Active' | 'Expired' | 'Banned';
+type KeyStatus = 'Active' | 'Expired' | 'Banned' | 'Blocked';
 
-interface Toast {
-  id: number;
-  title: string;
-  message?: string;
-  type: ToastType;
-}
+interface Toast { id: number; title: string; message?: string; type: ToastType; }
 
 interface Transaction {
-  id: number;
-  user: string;
-  amount: number;
-  type: TransactionType;
-  status: string;
-  method: string;
-  date: string;
-  hash: string;
-}
-
-interface AutoPayDetails {
-  sbp: boolean;
-  card: boolean;
-  crypto: boolean;
+  id: number; user: string; amount: number; type: TransactionType;
+  status: string; method: string; date: string; hash: string;
 }
 
 interface User {
-  id: number;
-  telegramId: number;
-  username: string;
-  name: string;
-  balance: number;
-  status: UserStatus;
-  traffic: number;
-  maxTraffic: number;
-  devices: number;
-  maxDevices: number;
-  regDate: string;
-  paidUntil: string;
-  autoPayDetails: AutoPayDetails;
-  refLink: string;
-  refCode: string;
-  squads: string[];
-  firstDeposit: boolean;
-  wasPaid: boolean;
-  isPartner: boolean;
-  partnerBalance: number;
-  partnerRate: number;
-  secondLevelRate: number;
-  thirdLevelRate: number;
-  referrals: number;
-  totalEarned: number;
-  inBlacklist: boolean;
+  id: number; telegramId: number; username: string; balance: number; status: UserStatus;
+  regDate: string; paidUntil: string; refCode: string; isPartner: boolean;
+  partnerBalance: number; partnerRate: number; secondLevelRate: number;
+  referrals: number; inBlacklist: boolean;
 }
 
 interface KeyItem {
-  id: number;
-  key: string;
-  user: string;
-  status: KeyStatus;
-  expiry: number;
-  trafficUsed: number;
-  trafficLimit: number;
-  devicesUsed: number;
-  devicesLimit: number;
-  server: string;
+  id: number; key: string; user: string; status: KeyStatus; expiry: number;
+  trafficUsed: number; trafficLimit: number; devicesUsed: number; devicesLimit: number;
 }
 
 interface Promo {
-  id: number;
-  code: string;
-  type: 'balance' | 'discount' | 'ref_boost' | 'subscription';
-  value: string;
-  uses: number;
-  limit: number;
-  expires: string;
+  id: number; code: string; type: 'balance' | 'discount' | 'ref_boost' | 'subscription';
+  value: string; uses: number; limit: number; expires: string;
 }
 
 interface TrackingLink {
-  id: number;
-  code: string;
-  name: string;
-  promocode: string | null;
-  welcome_message: string | null;
-  url: string;
-  clicks: number;
-  is_active: boolean;
-  created_at: string;
-  unique_users: number;
-  new_users: number;
-  total_revenue: number;
-  paid_users: number;
-  active_subscriptions: number;
-  total_keys: number;
-  conversion_rate: number;
+  id: number; code: string; name: string; promocode: string | null; welcome_message: string | null;
+  url: string; clicks: number; is_active: boolean; created_at: string; unique_users: number;
+  new_users: number; total_revenue: number; paid_users: number; active_subscriptions: number;
+  total_keys: number; conversion_rate: number;
 }
 
 interface TrackingLinkUser {
-  user_id: number;
-  telegram_id: number;
-  username: string | null;
-  full_name: string | null;
-  is_new_user: boolean;
-  visited_at: string;
-  trial_used: boolean;
-  total_spent: number;
-  keys_count: number;
-  active_keys: number;
-  has_paid: boolean;
+  user_id: number; telegram_id: number; username: string | null; full_name: string | null;
+  is_new_user: boolean; visited_at: string; trial_used: boolean; total_spent: number;
+  keys_count: number; active_keys: number; has_paid: boolean;
 }
 
-// ==========================================
-// 2. TOAST SYSTEM
-// ==========================================
+// ==========================================================
+// 2. SHARED HELPERS & PRIMITIVES
+// ==========================================================
 
-interface ToastContainerProps {
-  toasts: Toast[];
-  removeToast: (id: number) => void;
+const fmtInt = (v: number | null | undefined) => (v ?? 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+const fmtMoney = (v: number | null | undefined) => `${fmtInt(v)} ₽`;
+const fmtMoneyShort = (v: number | null | undefined) =>
+  (v ?? 0) >= 1_000_000 ? `${((v ?? 0) / 1_000_000).toFixed(1)}M ₽` : fmtMoney(v);
+const gb = (bytes: number) => (bytes / 1024 ** 3);
+
+function toSeries(raw: any): { label: string; value: number }[] {
+  const arr = Array.isArray(raw) ? raw : [];
+  return arr.map((d: any) => ({
+    label: String(d.label ?? d.date ?? d.day ?? d.name ?? ''),
+    value: Number(d.value ?? d.amount ?? d.revenue ?? d.total ?? d.count ?? 0) || 0,
+  }));
 }
 
-const ToastContainer: React.FC<ToastContainerProps> = ({ toasts, removeToast }) => {
+const Spinner: React.FC<{ size?: number; className?: string }> = ({ size = 20, className = '' }) => (
+  <Loader size={size} className={`animate-spin ${className}`} style={{ color: 'var(--muted)' }} />
+);
+
+// ── Modal shell ───────────────────────────────────────────
+const Modal: React.FC<{
+  onClose: () => void;
+  title?: React.ReactNode;
+  icon?: React.ElementType;
+  footer?: React.ReactNode;
+  width?: number;
+  children: React.ReactNode;
+  z?: number;
+}> = ({ onClose, title, icon: Icon, footer, width = 460, children, z = 60 }) => (
+  <div className="modal-backdrop" style={{ zIndex: z }} onClick={onClose}>
+    <div className="modal" style={{ maxWidth: width }} onClick={(e) => e.stopPropagation()}>
+      {title != null && (
+        <div className="modal-head">
+          <div className="modal-title">{Icon && <Icon size={18} className="faint" />}{title}</div>
+          <button className="icon-btn" onClick={onClose} aria-label="Закрыть"><X size={18} /></button>
+        </div>
+      )}
+      <div className="modal-body">{children}</div>
+      {footer && <div className="modal-foot">{footer}</div>}
+    </div>
+  </div>
+);
+
+// ── Toggle ────────────────────────────────────────────────
+const Toggle: React.FC<{ on: boolean; onChange: () => void }> = ({ on, onChange }) => (
+  <button type="button" className={`toggle ${on ? 'on' : ''}`} onClick={onChange} aria-pressed={on}>
+    <span className="knob" />
+  </button>
+);
+
+// ── Segmented control ─────────────────────────────────────
+function Segmented<T extends string>({ value, onChange, options }: {
+  value: T; onChange: (v: T) => void; options: { value: T; label: string }[];
+}) {
   return (
-    <div className="fixed bottom-6 right-6 z-[100] flex flex-col gap-3 pointer-events-none">
-      {toasts.map((toast) => (
-        <div 
-          key={toast.id} 
-          className={`
-            pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl border 
-            transform transition-all duration-300 animate-in slide-in-from-right-full fade-in
-            ${toast.type === 'success' ? 'bg-gray-900 border-green-500/30 text-green-400' : 'bg-gray-900 border-red-500/30 text-red-400'}
-          `}
-          role="alert"
-        >
-          {toast.type === 'success' ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
-          <div>
-            <h4 className="font-bold text-sm text-gray-100">{toast.title}</h4>
-            {toast.message && <p className="text-xs text-gray-400 mt-0.5">{toast.message}</p>}
+    <div className="seg">
+      {options.map((o) => (
+        <button key={o.value} className={`seg-item ${value === o.value ? 'on' : ''}`} onClick={() => onChange(o.value)}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Stat card ─────────────────────────────────────────────
+const Stat: React.FC<{ title: string; value: React.ReactNode; icon: React.ElementType; sub?: string }> =
+  ({ title, value, icon: Icon, sub }) => (
+    <div className="stat">
+      <div className="stat-top">
+        <span className="stat-label">{title}</span>
+        <Icon size={18} className="stat-ico" />
+      </div>
+      <div className="flex items-baseline gap-2">
+        <span className="stat-value">{value}</span>
+        {sub && <span className="stat-sub">{sub}</span>}
+      </div>
+    </div>
+  );
+
+// ── Vertical bar chart (signature) ────────────────────────
+const BarChart: React.FC<{
+  data: { label: string; value: number }[];
+  format?: (v: number) => string;
+  height?: number;
+}> = ({ data, format = (v) => String(v), height = 160 }) => {
+  if (!data.length) return <p className="sub">Нет данных для графика</p>;
+  const max = Math.max(...data.map((d) => d.value), 1);
+  const maxIdx = data.reduce((mi, d, i, a) => (d.value > a[mi].value ? i : mi), 0);
+  return (
+    <div className="bars" style={{ height }}>
+      {data.map((d, i) => (
+        <div className="bar-col" key={i} title={`${d.label}: ${format(d.value)}`}>
+          <span className="bar-v">{d.value ? format(d.value) : ''}</span>
+          <div className="bar-track">
+            <div className={`bar ${i === maxIdx ? 'hot' : ''}`} style={{ height: `${Math.max(3, (d.value / max) * 100)}%` }} />
           </div>
-          <button onClick={() => removeToast(toast.id)} className="ml-2 text-gray-500 hover:text-white">
-            <X size={16} />
-          </button>
+          <span className="bar-x">{d.label}</span>
         </div>
       ))}
     </div>
   );
 };
 
-// ==========================================
-// 3. API HELPERS (Mock generators removed - all data comes from backend)
-// ==========================================
-
-// ==========================================
-// 4. UI COMPONENTS
-// ==========================================
-
-interface StatCardProps {
-  title: string;
-  value: string | number;
-  change?: string;
-  icon: React.ElementType;
-  color: 'blue' | 'green' | 'indigo' | 'orange' | 'purple' | 'red' | 'gray';
-  subValue?: string;
-  className?: string;
-}
-
-function StatCard({ title, value, change, icon: Icon, subValue, className }: StatCardProps) {
-  const isPositive = change && (change.startsWith('+') || !change.startsWith('-'));
-
-  return (
-    <div className={`bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-colors h-full ${className}`}>
-      <div className="flex justify-between items-start mb-4">
-        <div>
-          <p className="text-gray-500 text-sm">{title}</p>
-          <div className="flex items-baseline mt-1">
-             <h3 className="text-2xl font-semibold text-white">{value}</h3>
-             {subValue && <span className="ml-2 text-sm text-gray-500">{subValue}</span>}
-          </div>
-        </div>
-        <div className="p-2.5 rounded-lg bg-white/5">
-          <Icon size={20} className="text-gray-400" />
-        </div>
-      </div>
-      {change && (
-        <div className="flex items-center text-xs">
-          <span className={`font-medium px-2 py-0.5 rounded ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
-            {change}
-          </span>
-          <span className="text-gray-500 ml-2">за период</span>
-        </div>
-      )}
+// ── Pagination ────────────────────────────────────────────
+const PaginationBar: React.FC<{
+  page: number; totalPages: number; total: number; loading?: boolean;
+  onPrev: () => void; onNext: () => void; totalLabel?: string;
+}> = ({ page, totalPages, total, loading, onPrev, onNext, totalLabel = 'Всего в базе' }) => (
+  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1">
+    <div className="flex items-center gap-2 sub">
+      {loading && <Spinner size={14} />}
+      <span>{totalLabel}: <span style={{ color: 'var(--text)', fontWeight: 600 }}>{total.toLocaleString('ru-RU')}</span></span>
     </div>
-  );
-}
+    <div className="flex items-center gap-2">
+      <button className="btn sm" onClick={onPrev} disabled={page <= 1 || loading}>Назад</button>
+      <span className="sub tabular-nums" style={{ minWidth: 64, textAlign: 'center' }}>{page} / {totalPages}</span>
+      <button className="btn sm" onClick={onNext} disabled={page >= totalPages || loading}>Вперёд</button>
+    </div>
+  </div>
+);
 
-// ==========================================
-// 5. MODALS
-// ==========================================
+// ── Toasts ────────────────────────────────────────────────
+const ToastContainer: React.FC<{ toasts: Toast[]; removeToast: (id: number) => void }> = ({ toasts, removeToast }) => (
+  <div className="toasts">
+    {toasts.map((t) => (
+      <div key={t.id} className={`toast ${t.type === 'error' ? 'error' : ''}`} role="alert">
+        {t.type === 'error' ? <AlertCircle size={18} className="faint" style={{ marginTop: 1 }} />
+          : <CheckCircle size={18} style={{ marginTop: 1 }} />}
+        <div className="flex-1">
+          <div className="toast-title">{t.title}</div>
+          {t.message && <div className="toast-msg">{t.message}</div>}
+        </div>
+        <button className="icon-btn" style={{ width: 24, height: 24, border: 0 }} onClick={() => removeToast(t.id)}><X size={14} /></button>
+      </div>
+    ))}
+  </div>
+);
 
-interface UserActionModalProps {
-    type: string;
-    onClose: () => void;
-    onConfirm: (value: string, notify: boolean) => void;
-    initialValue?: string;
-}
+// status → badge class
+const userStatusBadge = (s: UserStatus, blacklist?: boolean) => {
+  if (blacklist || s === 'Banned') return { cls: 'danger', label: 'Заблокирован' };
+  if (s === 'Active') return { cls: 'solid', label: 'Активен' };
+  if (s === 'Trial') return { cls: 'mute', label: 'Триал' };
+  return { cls: 'line', label: 'Истёк' };
+};
+const keyStatusBadge = (s: KeyStatus) => {
+  if (s === 'Active') return { cls: 'solid', label: 'Активен' };
+  if (s === 'Banned' || s === 'Blocked') return { cls: 'danger', label: 'Заблокирован' };
+  return { cls: 'line', label: 'Истёк' };
+};
+
+// ==========================================================
+// 3. MODALS
+// ==========================================================
 
 const DEVICE_LIMIT_PRESETS = [1, 2, 3, 5, 10, 15, 20];
 
@@ -591,549 +392,337 @@ const clampNumber = (raw: string, min: number, max: number, fallback: number) =>
   return Math.max(min, Math.min(max, n));
 };
 
-const UserActionModal: React.FC<UserActionModalProps> = ({ type, onClose, onConfirm, initialValue = '' }) => {
+type ActionConfig = { title: string; label: string; icon: React.ElementType; type: string; min?: number; max?: number; presets?: number[]; };
+
+const ACTION_MAP: Record<string, ActionConfig> = {
+  ADD_BALANCE:        { title: 'Начислить баланс', label: 'Сумма, ₽', icon: ArrowUpRight, type: 'number' },
+  SUB_BALANCE:        { title: 'Списать баланс', label: 'Сумма, ₽', icon: ArrowDownLeft, type: 'number' },
+  EXTEND_SUB:         { title: 'Продлить подписку', label: 'Дней', icon: Clock, type: 'number' },
+  REDUCE_SUB:         { title: 'Уменьшить срок', label: 'Дней', icon: Clock, type: 'number' },
+  SET_TRAFFIC:        { title: 'Лимит трафика', label: 'Макс. трафик, ГБ', icon: Database, type: 'number' },
+  SET_DEVICES:        { title: 'Лимит устройств', label: 'Устройств (1–20)', icon: Smartphone, type: 'number', min: 1, max: 20, presets: DEVICE_LIMIT_PRESETS },
+  BAN:                { title: 'Заблокировать', label: 'Причина', icon: Ban, type: 'text' },
+  UNBAN:              { title: 'Разблокировать', label: '', icon: CheckCircle, type: 'text' },
+  MASS_ADD_DAYS:      { title: 'Всем добавить дни', label: 'Дней', icon: Calendar, type: 'number' },
+  MASS_ADD_BALANCE:   { title: 'Всем начислить', label: 'Сумма, ₽', icon: DollarSign, type: 'number' },
+  MASS_BAN:           { title: 'Заблокировать всех', label: 'Причина', icon: Ban, type: 'text' },
+  MASS_UNBAN:         { title: 'Разблокировать всех', label: '', icon: CheckCircle, type: 'text' },
+  MASS_RESET_TRIAL:   { title: 'Сбросить пробный период', label: '', icon: RefreshCw, type: 'text' },
+  MASS_DELETE_KEYS:   { title: 'Удалить все ключи', label: '', icon: Trash2, type: 'text' },
+  MASS_SET_PARTNER:   { title: 'Сделать партнёрами', label: 'Процент реферала', icon: UserPlus, type: 'number' },
+  MASS_REMOVE_PARTNER:{ title: 'Убрать партнёрство', label: '', icon: UserMinus, type: 'text' },
+};
+
+const UserActionModal: React.FC<{
+  type: string; onClose: () => void; onConfirm: (value: string, notify: boolean) => void; initialValue?: string;
+}> = ({ type, onClose, onConfirm, initialValue = '' }) => {
   const [value, setValue] = useState(initialValue);
   const [notify, setNotify] = useState(true);
-
-  type ActionConfig = {
-      title: string;
-      label: string;
-      icon: React.ElementType;
-      color: string;
-      type: string;
-      min?: number;
-      max?: number;
-      presets?: number[];
-  };
-
-  const config: ActionConfig = ({
-      'ADD_BALANCE': { title: 'Начислить баланс', label: 'Сумма (₽)', icon: ArrowUpRight, color: 'text-green-400', type: 'number' },
-      'SUB_BALANCE': { title: 'Списать баланс', label: 'Сумма (₽)', icon: ArrowDownLeft, color: 'text-red-400', type: 'number' },
-      'EXTEND_SUB': { title: 'Продлить подписку', label: 'Количество дней', icon: Clock, color: 'text-gray-200', type: 'number' },
-      'REDUCE_SUB': { title: 'Уменьшить срок', label: 'Количество дней', icon: Clock, color: 'text-gray-200', type: 'number' },
-      'SET_TRAFFIC': { title: 'Лимит трафика', label: 'Макс. трафик (GB)', icon: Database, color: 'text-purple-400', type: 'number' },
-      'SET_DEVICES': { title: 'Лимит устройств', label: 'Кол-во устройств (1–20)', icon: Smartphone, color: 'text-indigo-400', type: 'number', min: 1, max: 20, presets: DEVICE_LIMIT_PRESETS },
-      'BAN': { title: 'Заблокировать', label: 'Причина бана', icon: Ban, color: 'text-red-400', type: 'text' },
-      'UNBAN': { title: 'Разблокировать', label: '', icon: CheckCircle, color: 'text-green-400', type: 'text' },
-      'MASS_ADD_DAYS': { title: 'Всем добавить дни', label: 'Количество дней', icon: Calendar, color: 'text-gray-300', type: 'number' },
-      'MASS_ADD_BALANCE': { title: 'Всем начислить', label: 'Сумма (₽)', icon: DollarSign, color: 'text-green-500', type: 'number' },
-      'MASS_BAN': { title: 'Забанить всех', label: 'Причина', icon: Ban, color: 'text-red-500', type: 'text' },
-      'MASS_UNBAN': { title: 'Разбанить всех', label: '', icon: CheckCircle, color: 'text-green-500', type: 'text' },
-      'MASS_RESET_TRIAL': { title: 'Сбросить пробный период', label: '', icon: RefreshCw, color: 'text-yellow-500', type: 'text' },
-      'MASS_DELETE_KEYS': { title: 'Удалить все ключи', label: '', icon: Trash2, color: 'text-red-500', type: 'text' },
-      'MASS_SET_PARTNER': { title: 'Сделать партнерами', label: 'Процент реферала', icon: UserPlus, color: 'text-indigo-500', type: 'number' },
-      'MASS_REMOVE_PARTNER': { title: 'Убрать партнерство', label: '', icon: UserMinus, color: 'text-gray-500', type: 'text' },
-  } as Record<string, ActionConfig>)[type] || { title: 'Действие', label: 'Значение', icon: Settings, color: 'text-white', type: 'text' };
-
+  const config = ACTION_MAP[type] || { title: 'Действие', label: 'Значение', icon: Settings, type: 'text' };
   const numMin = config.min ?? 0;
   const numMax = config.max ?? 999999;
   const numValue = config.type === 'number' ? clampNumber(value, numMin, numMax, numMin || 0) : 0;
-  const showNumberStepper = config.type === 'number' && (config.presets?.length || config.max !== undefined);
+  const showStepper = config.type === 'number' && (!!config.presets?.length || config.max !== undefined);
+  const setNum = (n: number) => setValue(String(Math.max(numMin, Math.min(numMax, n))));
+  const isDestructive = /BAN|DELETE|REMOVE|SUB_/.test(type);
 
-  const setNumberValue = (next: number) => {
-    const clamped = Math.max(numMin, Math.min(numMax, next));
-    setValue(String(clamped));
+  return (
+    <Modal
+      onClose={onClose} title={config.title} icon={config.icon} width={400} z={70}
+      footer={
+        <>
+          <button className="btn block" onClick={onClose}>Отмена</button>
+          <button
+            className={`btn block ${isDestructive ? 'danger' : 'solid'}`}
+            onClick={() => onConfirm(config.type === 'number' ? String(clampNumber(value, numMin, numMax, numMin || 0)) : value, notify)}
+          >Применить</button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        {config.label && (
+          <div>
+            <label className="field-label">{config.label}</label>
+            {showStepper ? (
+              <div className="flex flex-col gap-3">
+                <div className="stepper">
+                  <button className="step" onClick={() => setNum(numValue - 1)} disabled={numValue <= numMin}>−</button>
+                  <input className="input center mono" style={{ fontSize: 20 }} type="number" value={value}
+                    min={numMin} max={numMax} autoFocus onChange={(e) => setValue(e.target.value)} />
+                  <button className="step" onClick={() => setNum(numValue + 1)} disabled={numValue >= numMax}>+</button>
+                </div>
+                {config.presets && (
+                  <div className="flex flex-wrap gap-2">
+                    {config.presets.map((p) => (
+                      <button key={p} className={`chip mono ${numValue === p ? 'on' : ''}`} onClick={() => setNum(p)}>{p}</button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <input className="input mono" type={config.type} value={value} placeholder={config.type === 'number' ? '0' : ''}
+                autoFocus min={numMin} max={config.max} onChange={(e) => setValue(e.target.value)} />
+            )}
+          </div>
+        )}
+        <label className="inset flex items-center justify-between gap-3" style={{ padding: 12, cursor: 'pointer' }}>
+          <div>
+            <div style={{ fontWeight: 500 }}>Уведомить пользователя</div>
+            <div className="sub">Отправить сообщение в бот</div>
+          </div>
+          <Toggle on={notify} onChange={() => setNotify(!notify)} />
+        </label>
+      </div>
+    </Modal>
+  );
+};
+
+const KeyEditModal: React.FC<{
+  keyItem: KeyItem; onClose: () => void; onSave: (id: number, expiry: number) => void;
+  onDelete: (id: number) => void; onBlock?: (id: number, blocked: boolean) => void;
+}> = ({ keyItem, onClose, onSave, onDelete, onBlock }) => {
+  const [expiryDays, setExpiryDays] = useState(keyItem.expiry);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(keyItem.status === 'Blocked');
+  const [blockLoading, setBlockLoading] = useState(false);
+  const usedPct = keyItem.trafficLimit > 0 ? Math.min(100, (keyItem.trafficUsed / keyItem.trafficLimit) * 100) : 0;
+  const meterCls = usedPct > 90 ? 'crit' : usedPct > 70 ? 'warn' : '';
+
+  const toggleBlock = async () => {
+    setBlockLoading(true);
+    try {
+      const next = !isBlocked;
+      await apiFetch(`/panel/keys/${keyItem.id}/block`, { method: 'POST', body: JSON.stringify({ blocked: next }) });
+      setIsBlocked(next);
+      onBlock?.(keyItem.id, next);
+    } catch (e) { console.error(e); } finally { setBlockLoading(false); }
+  };
+
+  if (confirmDelete) {
+    return (
+      <Modal onClose={onClose} title="Удалить ключ?" icon={AlertTriangle} width={400} z={70}
+        footer={<>
+          <button className="btn block" onClick={() => setConfirmDelete(false)}>Отмена</button>
+          <button className="btn block danger" onClick={() => onDelete(keyItem.id)}>Удалить</button>
+        </>}>
+        <p className="muted" style={{ lineHeight: 1.5 }}>Действие необратимо. Пользователь потеряет доступ по этому ключу.</p>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal onClose={onClose} title="Редактирование ключа" icon={Key} width={480} z={70}
+      footer={<>
+        <button className="btn danger" onClick={() => setConfirmDelete(true)}><Trash2 size={16} /> Удалить</button>
+        <button className="btn solid block" onClick={() => onSave(keyItem.id, expiryDays)}><Save size={16} /> Сохранить</button>
+      </>}>
+      <div className="flex flex-col gap-4">
+        <div className="inset mono" style={{ padding: 12, fontSize: 12, color: 'var(--muted)', wordBreak: 'break-all', userSelect: 'all' }}>{keyItem.key}</div>
+
+        <div className="inset" style={{ padding: 14 }}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="sub">Использовано трафика</span>
+            <span className="mono" style={{ fontSize: 13 }}>
+              {gb(keyItem.trafficUsed).toFixed(2)} / {keyItem.trafficLimit > 0 ? gb(keyItem.trafficLimit).toFixed(0) : '∞'} ГБ
+            </span>
+          </div>
+          <div className="meter"><i className={meterCls} style={{ width: `${usedPct}%` }} /></div>
+          {usedPct > 90 && <div className="flex items-center gap-1 mt-2" style={{ color: 'var(--danger)', fontSize: 12 }}><AlertTriangle size={12} /> Трафик почти исчерпан</div>}
+        </div>
+
+        <div className="inset flex items-center justify-between gap-3" style={{ padding: 12 }}>
+          <div>
+            <div style={{ fontWeight: 500 }}>Блокировка ключа</div>
+            <div className="sub">{isBlocked ? 'Заблокирован вручную' : 'Ключ активен'}</div>
+          </div>
+          <button className={`btn sm ${isBlocked ? 'solid' : 'danger'}`} onClick={toggleBlock} disabled={blockLoading}>
+            {blockLoading ? '…' : isBlocked ? 'Разблокировать' : 'Заблокировать'}
+          </button>
+        </div>
+
+        <div>
+          <label className="field-label">Осталось дней</label>
+          <div className="stepper">
+            <button className="step" onClick={() => setExpiryDays(Math.max(0, Number(expiryDays) - 1))}>−</button>
+            <input className="input center mono" style={{ fontSize: 18 }} type="number" value={expiryDays}
+              onChange={(e) => setExpiryDays(parseInt(e.target.value) || 0)} />
+            <button className="step" onClick={() => setExpiryDays(Number(expiryDays) + 1)}>+</button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+const TransactionModal: React.FC<{ transaction: Transaction; onClose: () => void }> = ({ transaction, onClose }) => {
+  if (!transaction) return null;
+  const isIncome = transaction.type === 'income';
+  const Row = ({ icon: Icon, label, children }: { icon: React.ElementType; label: string; children: React.ReactNode }) => (
+    <div className="flex justify-between items-center" style={{ padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+      <span className="muted flex items-center gap-2"><Icon size={14} /> {label}</span>
+      <span>{children}</span>
+    </div>
+  );
+  return (
+    <Modal onClose={onClose} title={isIncome ? 'Пополнение баланса' : 'Списание средств'} icon={isIncome ? ArrowUpRight : ArrowDownLeft} width={440}
+      footer={<button className="btn block" onClick={onClose}>Закрыть</button>}>
+      <div className="sub mb-3">{transaction.date}</div>
+      <Row icon={Hash} label="ID"><span className="mono">#{transaction.id}</span></Row>
+      <Row icon={Users} label="Пользователь">{transaction.user}</Row>
+      <Row icon={DollarSign} label="Сумма"><span style={{ fontWeight: 600, color: isIncome ? 'var(--text)' : 'var(--muted)' }}>{isIncome ? '+' : ''}{transaction.amount} ₽</span></Row>
+      <Row icon={CreditCard} label="Метод">{transaction.method}</Row>
+      <Row icon={Hash} label="Hash"><span className="mono faint" style={{ fontSize: 12 }}>{transaction.hash || '—'}</span></Row>
+    </Modal>
+  );
+};
+
+const CreateKeyModal: React.FC<{ onClose: () => void; users: User[]; onToast: (t: string, m: string, ty: ToastType) => void }> =
+  ({ onClose, users = [], onToast }) => {
+  const [searchUser, setSearchUser] = useState('');
+  const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [isTrial, setIsTrial] = useState(false);
+  const [isForever, setIsForever] = useState(false);
+  const [params, setParams] = useState({ days: 30, traffic: 100, devices: 5 });
+  const [selectedSquads, setSelectedSquads] = useState<string[]>([]);
+  const [squads, setSquads] = useState<{ uuid: string; name: string }[]>([]);
+  const [loadingSquads, setLoadingSquads] = useState(false);
+
+  const debouncedUserSearch = useDebouncedValue(searchUser.trim(), 300);
+  const [remoteUsers, setRemoteUsers] = useState<User[]>([]);
+
+  useEffect(() => {
+    if (!debouncedUserSearch) { setRemoteUsers([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const qp = new URLSearchParams({ limit: '10', offset: '0', search: debouncedUserSearch, q: debouncedUserSearch });
+        const res = await apiFetch(`/panel/users?${qp.toString()}`);
+        if (cancelled) return;
+        let mapped = parseListResponse(res).items.map(mapApiUser);
+        if (mapped.length > 10) {
+          const q = debouncedUserSearch.toLowerCase();
+          mapped = mapped.filter((u: User) => u.username.toLowerCase().includes(q) || u.telegramId.toString().includes(q));
+        }
+        setRemoteUsers(mapped.slice(0, 8));
+      } catch { if (!cancelled) setRemoteUsers([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [debouncedUserSearch]);
+
+  const filteredUsers: User[] = (() => {
+    if (!searchUser) return [];
+    if (remoteUsers.length > 0) return remoteUsers;
+    const q = searchUser.toLowerCase();
+    return (users || []).filter((u) => u.username.toLowerCase().includes(q) || u.telegramId.toString().includes(q)).slice(0, 8);
+  })();
+
+  useEffect(() => {
+    (async () => {
+      setLoadingSquads(true);
+      try {
+        const data = await apiFetch('/panel/remnawave/squads');
+        if (Array.isArray(data)) setSquads(data);
+      } catch (e) { console.error(e); onToast('Ошибка', 'Не удалось загрузить сквады из Remnawave', 'error'); }
+      finally { setLoadingSquads(false); }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (isTrial) setParams({ days: 1, traffic: 5, devices: 1 });
+    else if (isForever) setParams((p) => ({ ...p, traffic: 0, devices: 10 }));
+    else setParams({ days: 30, traffic: 100, devices: 5 });
+  }, [isTrial, isForever]);
+
+  const handleCreate = async () => {
+    if (!selectedUser) { onToast('Ошибка', 'Выберите пользователя', 'error'); return; }
+    try {
+      const finalDays = isForever ? 27394 : params.days;
+      await apiFetch('/panel/keys', {
+        method: 'POST',
+        body: JSON.stringify({ user_id: selectedUser.id, days: finalDays, traffic: params.traffic, devices: params.devices, is_trial: isTrial, is_forever: isForever, squads: selectedSquads }),
+      });
+      onToast('Готово', isForever ? 'Бесконечный ключ создан' : 'Ключ создан и отправлен пользователю', 'success');
+      onClose();
+    } catch (e: any) { onToast('Ошибка', e.message || 'Не удалось создать ключ', 'error'); }
   };
 
   return (
-      <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200" onClick={onClose}>
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-sm p-6 shadow-2xl relative animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
-              <div className="flex items-center gap-3 mb-6"><div className={`p-2 bg-gray-800 rounded-lg ${config.color}`}><config.icon size={24} /></div><h3 className="text-xl font-bold text-white">{config.title}</h3></div>
-              <div className="space-y-4">
-                  <div>
-                      <label className="text-xs text-gray-500 block mb-1.5">{config.label}</label>
-                      {showNumberStepper ? (
-                        <div className="space-y-3">
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setNumberValue(numValue - 1)}
-                              disabled={numValue <= numMin}
-                              className="w-12 h-12 rounded-xl bg-gray-800 border border-gray-700 text-white text-xl font-bold hover:bg-gray-700 disabled:opacity-40"
-                            >−</button>
-                            <input
-                              type="number"
-                              value={value}
-                              onChange={e => setValue(e.target.value)}
-                              className="flex-1 bg-gray-950 border border-gray-700 text-white text-2xl rounded-xl px-4 py-3 focus:ring-2 focus:ring-gray-500 outline-none font-mono text-center"
-                              autoFocus
-                              min={numMin}
-                              max={numMax}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setNumberValue(numValue + 1)}
-                              disabled={numValue >= numMax}
-                              className="w-12 h-12 rounded-xl bg-gray-800 border border-gray-700 text-white text-xl font-bold hover:bg-gray-700 disabled:opacity-40"
-                            >+</button>
-                          </div>
-                          {config.presets && config.presets.length > 0 && (
-                            <div className="flex flex-wrap gap-2">
-                              {config.presets.map((preset) => (
-                                <button
-                                  key={preset}
-                                  type="button"
-                                  onClick={() => setNumberValue(preset)}
-                                  className={`px-3 py-1.5 rounded-lg text-sm font-mono border transition-colors ${
-                                    numValue === preset
-                                      ? 'bg-gray-700/20 border-gray-600 text-gray-200'
-                                      : 'bg-gray-950 border-gray-800 text-gray-400 hover:border-gray-600'
-                                  }`}
-                                >
-                                  {preset}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <input 
-                          type={config.type} 
-                          value={value} 
-                          onChange={e => setValue(e.target.value)} 
-                          className="w-full bg-gray-950 border border-gray-700 text-white text-lg rounded-xl px-4 py-3 focus:ring-2 focus:ring-gray-500 outline-none font-mono" 
-                          placeholder="0" 
-                          autoFocus 
-                          min={numMin}
-                          max={config.max}
-                        />
-                      )}
-                  </div>
-                  <label className="flex items-center cursor-pointer group bg-gray-950/50 p-3 rounded-xl border border-gray-800 hover:border-gray-700 transition-colors">
-                      <div className="relative"><input type="checkbox" checked={notify} onChange={() => setNotify(!notify)} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full shadow-inner transition-colors ${notify ? 'bg-gray-700' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${notify ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="text-sm text-gray-200 font-medium">Уведомить пользователя</div><div className="text-xs text-gray-500">Отправить сообщение в бот</div></div>
-                  </label>
-                  <div className="flex gap-3 pt-2">
-                      <button onClick={onClose} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl font-medium transition-colors">Отмена</button>
-                      <button
-                        onClick={() => onConfirm(
-                          config.type === 'number' ? String(clampNumber(value, numMin, numMax, numMin || 0)) : value,
-                          notify,
-                        )}
-                        className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-bold shadow-lg shadow-black/40 transition-colors"
-                      >Применить</button>
-                  </div>
-              </div>
+    <Modal onClose={onClose} title="Создание ключа" icon={Plus} width={560} z={70}
+      footer={<button className="btn solid block" onClick={handleCreate}>Создать ключ</button>}>
+      <div className="flex flex-col gap-5">
+        <div style={{ position: 'relative' }}>
+          <label className="field-label">Пользователь</label>
+          <div style={{ position: 'relative' }}>
+            <input className="input" value={selectedUser ? selectedUser.username : searchUser}
+              placeholder="ID или username"
+              onChange={(e) => { setSearchUser(e.target.value); setSelectedUser(null); }}
+              style={selectedUser ? { borderColor: 'var(--border-strong)' } : undefined} />
+            {selectedUser && <CheckCircle size={16} style={{ position: 'absolute', right: 12, top: 12, color: 'var(--text)' }} />}
           </div>
-      </div>
-  );
-};
-
-interface KeyEditModalProps {
-    keyItem: KeyItem;
-    onClose: () => void;
-    onSave: (id: number, expiry: number) => void;
-    onDelete: (id: number) => void;
-    onBlock?: (id: number, blocked: boolean) => void;
-}
-
-const KeyEditModal: React.FC<KeyEditModalProps> = ({ keyItem, onClose, onSave, onDelete, onBlock }) => {
-    const [expiryDays, setExpiryDays] = useState(keyItem.expiry);
-    const [confirmDelete, setConfirmDelete] = useState(false);
-    const [isBlocked, setIsBlocked] = useState(keyItem.status === 'Blocked' || keyItem.status === 'blocked');
-    const [blockLoading, setBlockLoading] = useState(false);
-
-    const handleToggleBlock = async () => {
-        setBlockLoading(true);
-        try {
-            const newStatus = !isBlocked;
-            await fetch(`/api/panel/keys/${keyItem.id}/block`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('panel_token') || ''}` },
-                body: JSON.stringify({ blocked: newStatus })
-            });
-            setIsBlocked(newStatus);
-            if (onBlock) onBlock(keyItem.id, newStatus);
-        } catch (e) {
-            console.error('Failed to toggle block', e);
-        } finally {
-            setBlockLoading(false);
-        }
-    };
-
-    return (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200" onClick={onClose}>
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-md p-6 shadow-2xl relative animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
-                <div className="flex justify-between items-start mb-6">
-                    <h3 className="text-xl font-bold text-white flex items-center"><Key size={22} className="mr-2 text-gray-300"/> Редактирование ключа</h3>
-                    <button onClick={onClose} className="text-gray-400 hover:text-white"><X size={20}/></button>
-                </div>
-
-                {!confirmDelete ? (
-                    <div className="space-y-6">
-                        <div className="p-3 bg-gray-950 rounded-xl border border-gray-800 font-mono text-xs text-gray-400 break-all select-all">
-                            {keyItem.key}
-                        </div>
-                        
-                        {/* Информация о трафике */}
-                        <div className="p-4 bg-gray-950 rounded-xl border border-gray-800">
-                            <div className="flex items-center justify-between mb-2">
-                                <span className="text-sm text-gray-400">Использовано трафика</span>
-                                <span className="text-sm font-mono text-white">
-                                    {(keyItem.trafficUsed / (1024**3)).toFixed(2)} / {keyItem.trafficLimit > 0 ? (keyItem.trafficLimit / (1024**3)).toFixed(0) : '∞'} ГБ
-                                </span>
-                            </div>
-                            <div className="w-full bg-gray-800 rounded-full h-2">
-                                <div 
-                                    className={`h-2 rounded-full transition-all ${
-                                        keyItem.trafficLimit > 0 && keyItem.trafficUsed/keyItem.trafficLimit > 0.9 ? 'bg-red-500' : 
-                                        keyItem.trafficLimit > 0 && keyItem.trafficUsed/keyItem.trafficLimit > 0.7 ? 'bg-yellow-500' : 'bg-gray-700'
-                                    }`}
-                                    style={{ width: `${keyItem.trafficLimit > 0 ? Math.min(100, (keyItem.trafficUsed/keyItem.trafficLimit)*100) : 0}%` }}
-                                ></div>
-                            </div>
-                            {keyItem.trafficLimit > 0 && keyItem.trafficUsed/keyItem.trafficLimit > 0.9 && (
-                                <div className="text-xs text-red-400 mt-2 flex items-center">
-                                    <AlertTriangle size={12} className="mr-1" />
-                                    Трафик почти исчерпан
-                                </div>
-                            )}
-                        </div>
-                        
-                        {/* Статус блокировки */}
-                        <div className="flex items-center justify-between p-3 bg-gray-950 rounded-xl border border-gray-800">
-                            <div>
-                                <div className="text-sm text-white font-medium">Блокировка ключа</div>
-                                <div className="text-xs text-gray-500">
-                                    {isBlocked ? 'Ключ заблокирован вручную' : 'Ключ активен'}
-                                </div>
-                            </div>
-                            <button 
-                                onClick={handleToggleBlock}
-                                disabled={blockLoading}
-                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                                    isBlocked 
-                                        ? 'bg-green-600/10 hover:bg-green-600/20 text-green-400 border border-green-600/20' 
-                                        : 'bg-red-600/10 hover:bg-red-600/20 text-red-400 border border-red-600/20'
-                                } ${blockLoading ? 'opacity-50' : ''}`}
-                            >
-                                {blockLoading ? '...' : (isBlocked ? 'Разблокировать' : 'Заблокировать')}
-                            </button>
-                        </div>
-                        
-                        <div>
-                            <label className="text-sm text-gray-400 block mb-2">Осталось дней</label>
-                            <div className="flex gap-2">
-                                <button onClick={() => setExpiryDays(Math.max(0, Number(expiryDays) - 1))} className="p-3 bg-gray-800 rounded-xl hover:bg-gray-700 transition-colors"><ArrowDownLeft size={18}/></button>
-                                <input 
-                                    type="number" 
-                                    value={expiryDays} 
-                                    onChange={(e) => setExpiryDays(parseInt(e.target.value) || 0)}
-                                    className="flex-1 bg-gray-950 border border-gray-700 text-center text-white text-lg rounded-xl focus:border-gray-500 outline-none font-mono"
-                                />
-                                <button onClick={() => setExpiryDays(Number(expiryDays) + 1)} className="p-3 bg-gray-800 rounded-xl hover:bg-gray-700 transition-colors"><ArrowUpRight size={18}/></button>
-                            </div>
-                        </div>
-
-                        <div className="flex gap-3 pt-4">
-                            <button onClick={() => setConfirmDelete(true)} className="flex-1 py-3 bg-red-600/10 hover:bg-red-600/20 text-red-500 border border-red-600/20 rounded-xl font-medium transition-colors flex items-center justify-center">
-                                <Trash2 size={18} className="mr-2"/> Удалить
-                            </button>
-                            <button onClick={() => onSave(keyItem.id, expiryDays)} className="flex-[2] py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-bold shadow-lg shadow-black/40 transition-colors flex items-center justify-center">
-                                <Save size={18} className="mr-2"/> Сохранить
-                            </button>
-                        </div>
-                    </div>
-                ) : (
-                    <div className="space-y-4 text-center py-4">
-                        <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mx-auto text-red-500 mb-2">
-                            <AlertTriangle size={32} />
-                        </div>
-                        <h4 className="text-lg font-bold text-white">Удалить этот ключ?</h4>
-                        <p className="text-gray-400 text-sm">Это действие необратимо. Пользователь потеряет доступ.</p>
-                        <div className="flex gap-3 pt-4">
-                             <button onClick={() => setConfirmDelete(false)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-medium">Отмена</button>
-                             <button onClick={() => onDelete(keyItem.id)} className="flex-1 py-3 bg-red-600 hover:bg-red-500 text-white rounded-xl font-bold shadow-lg shadow-red-900/20">Да, удалить</button>
-                        </div>
-                    </div>
-                )}
+          {searchUser && !selectedUser && filteredUsers.length > 0 && (
+            <div className="menu" style={{ left: 0, right: 0 }}>
+              {filteredUsers.map((u) => (
+                <button key={u.id} className="menu-item" onClick={() => { setSelectedUser(u); setSearchUser(''); }}>
+                  <span className="flex-1">{u.username}</span>
+                  <span className="faint mono" style={{ fontSize: 12 }}>ID {u.telegramId}</span>
+                </button>
+              ))}
             </div>
-        </div>
-    );
-};
-
-interface TransactionModalProps {
-    transaction: Transaction;
-    onClose: () => void;
-}
-
-const TransactionModal: React.FC<TransactionModalProps> = ({ transaction, onClose }) => {
-  if (!transaction) return null;
-  const isIncome = transaction.type === 'income';
-
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-md p-6 shadow-2xl relative animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
-        <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white transition-colors"><X size={20} /></button>
-        
-        <div className="text-center mb-6">
-            <div className={`w-16 h-16 rounded-full mx-auto flex items-center justify-center mb-4 ${isIncome ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
-                {isIncome ? <ArrowUpRight size={32} /> : <ArrowDownLeft size={32} />}
-            </div>
-            <h3 className="text-xl font-bold text-white">{isIncome ? 'Пополнение баланса' : 'Списание средств'}</h3>
-            <p className="text-gray-400 text-sm mt-1">{transaction.date}</p>
+          )}
         </div>
 
-        <div className="space-y-4 mb-8">
-            <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><Hash size={14} className="mr-2"/> ID</span><span className="text-white font-mono">#{transaction.id}</span></div>
-            <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><Users size={14} className="mr-2"/> Пользователь</span><span className="text-gray-200">{transaction.user}</span></div>
-            <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><DollarSign size={14} className="mr-2"/> Сумма</span><span className={`font-bold ${isIncome ? 'text-green-400' : 'text-red-400'}`}>{transaction.amount} ₽</span></div>
-            <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><CreditCard size={14} className="mr-2"/> Метод</span><span className="text-white">{transaction.method}</span></div>
-            <div className="flex justify-between items-center py-2 border-b border-gray-800"><span className="text-gray-400 flex items-center"><FileText size={14} className="mr-2"/> Hash</span><span className="text-xs text-gray-500 font-mono">{transaction.hash}</span></div>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="chip" style={{ padding: 14, justifyContent: 'space-between' }} onClick={() => { setIsTrial(!isTrial); setIsForever(false); }}>
+            <div><div style={{ fontWeight: 500, color: 'var(--text)' }}>Пробный</div><div className="sub">1 день · 5 ГБ · 1 устр.</div></div>
+            <Toggle on={isTrial} onChange={() => { setIsTrial(!isTrial); setIsForever(false); }} />
+          </label>
+          <label className="chip" style={{ padding: 14, justifyContent: 'space-between' }} onClick={() => { setIsForever(!isForever); setIsTrial(false); }}>
+            <div><div style={{ fontWeight: 500, color: 'var(--text)' }}>∞ Навсегда</div><div className="sub">До 2099 года</div></div>
+            <Toggle on={isForever} onChange={() => { setIsForever(!isForever); setIsTrial(false); }} />
+          </label>
         </div>
 
-        <div className="flex gap-3">
-            <button onClick={onClose} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl transition-colors font-medium">Закрыть</button>
+        <div className="grid grid-cols-3 gap-3">
+          <div><label className="field-label">Дней</label><input className="input center mono" type="number" min={1} value={isForever ? 27394 : params.days} disabled={isForever} onChange={(e) => setParams({ ...params, days: parseInt(e.target.value) || 0 })} /></div>
+          <div><label className="field-label">Трафик, ГБ</label><input className="input center mono" type="number" min={0} value={params.traffic} onChange={(e) => setParams({ ...params, traffic: parseInt(e.target.value) || 0 })} /></div>
+          <div><label className="field-label">Устройств</label><input className="input center mono" type="number" min={1} max={20} value={params.devices} onChange={(e) => setParams({ ...params, devices: Math.max(1, Math.min(20, parseInt(e.target.value) || 1)) })} /></div>
+        </div>
+
+        {!isTrial && (
+          <div className="flex flex-wrap gap-2">
+            {DEVICE_LIMIT_PRESETS.map((p) => (
+              <button key={p} className={`chip mono ${params.devices === p ? 'on' : ''}`} onClick={() => setParams((s) => ({ ...s, devices: p }))}>{p} устр.</button>
+            ))}
+          </div>
+        )}
+
+        <div>
+          <label className="field-label">Сквады</label>
+          {loadingSquads ? <div className="sub">Загрузка…</div>
+            : squads.length === 0 ? <div className="sub">Нет доступных сквадов</div>
+            : <div className="flex flex-wrap gap-2">
+                {squads.map((sq) => (
+                  <button key={sq.uuid} className={`chip ${selectedSquads.includes(sq.uuid) ? 'on' : ''}`}
+                    onClick={() => setSelectedSquads((prev) => prev.includes(sq.uuid) ? prev.filter((s) => s !== sq.uuid) : [...prev, sq.uuid])}>
+                    {sq.name}
+                  </button>
+                ))}
+              </div>}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 };
-
-interface CreateKeyModalProps {
-    onClose: () => void;
-    users: User[];
-    onToast: (title: string, msg: string, type: ToastType) => void;
-}
-
-const CreateKeyModal: React.FC<CreateKeyModalProps> = ({ onClose, users = [], onToast }) => {
-    const [searchUser, setSearchUser] = useState('');
-    const [selectedUser, setSelectedUser] = useState<User | null>(null);
-    const [isTrial, setIsTrial] = useState(false);
-    const [isForever, setIsForever] = useState(false);
-    const [params, setParams] = useState({ days: 30, traffic: 100, devices: 5 });
-    const [selectedSquads, setSelectedSquads] = useState<string[]>([]);
-    const [squads, setSquads] = useState<{uuid: string; name: string}[]>([]);
-    const [loadingSquads, setLoadingSquads] = useState(false);
-
-    // Серверный поиск пользователя (чтобы находить любого, а не только из загруженной пачки)
-    const debouncedUserSearch = useDebouncedValue(searchUser.trim(), 300);
-    const [remoteUsers, setRemoteUsers] = useState<User[]>([]);
-    const [searchingUsers, setSearchingUsers] = useState(false);
-
-    useEffect(() => {
-        if (!debouncedUserSearch) {
-            setRemoteUsers([]);
-            return;
-        }
-        let cancelled = false;
-        (async () => {
-            setSearchingUsers(true);
-            try {
-                const qp = new URLSearchParams();
-                qp.set('limit', '10');
-                qp.set('offset', '0');
-                qp.set('search', debouncedUserSearch);
-                qp.set('q', debouncedUserSearch);
-                const res = await apiFetch(`/panel/users?${qp.toString()}`);
-                if (cancelled) return;
-                const { items } = parseListResponse(res);
-                let mapped = items.map(mapApiUser);
-                // Если backend проигнорировал поиск и вернул всё — фильтруем на клиенте
-                if (mapped.length > 10) {
-                    const q = debouncedUserSearch.toLowerCase();
-                    mapped = mapped.filter((u: User) =>
-                        u.username.toLowerCase().includes(q) || u.telegramId.toString().includes(q)
-                    );
-                }
-                setRemoteUsers(mapped.slice(0, 8));
-            } catch (e) {
-                if (!cancelled) setRemoteUsers([]);
-            } finally {
-                if (!cancelled) setSearchingUsers(false);
-            }
-        })();
-        return () => { cancelled = true; };
-    }, [debouncedUserSearch]);
-
-    // Объединяем: серверный результат + локальный fallback (на случай оффлайна)
-    const filteredUsers: User[] = (() => {
-        if (!searchUser) return [];
-        if (remoteUsers.length > 0) return remoteUsers;
-        const q = searchUser.toLowerCase();
-        return (users || [])
-            .filter((u: User) => u.username.toLowerCase().includes(q) || u.telegramId.toString().includes(q))
-            .slice(0, 8);
-    })();
-    
-    useEffect(() => {
-        (async () => {
-            setLoadingSquads(true);
-            try {
-                const data = await apiFetch('/panel/remnawave/squads');
-                if (Array.isArray(data)) {
-                    setSquads(data);
-                }
-            } catch (e) {
-                console.error('Failed to load squads', e);
-                onToast('Ошибка', 'Не удалось загрузить сквады из Remnawave', 'error');
-            } finally {
-                setLoadingSquads(false);
-            }
-        })();
-    }, []);
-
-    const handleCreate = async () => { 
-        if(!selectedUser) {
-            onToast('Ошибка', 'Выберите пользователя', 'error');
-            return;
-        }
-        try {
-            // 27394 дня ≈ 75 лет (до ~2099 года)
-            const finalDays = isForever ? 27394 : params.days;
-            const response = await apiFetch('/panel/keys', {
-                method: 'POST',
-                body: JSON.stringify({
-                    user_id: selectedUser.id,
-                    days: finalDays,
-                    traffic: params.traffic,
-                    devices: params.devices,
-                    is_trial: isTrial,
-                    is_forever: isForever,
-                    squads: selectedSquads
-                })
-            });
-            onToast('Успех', isForever ? 'Бесконечный ключ создан!' : 'Ключ успешно создан и отправлен пользователю', 'success');
-            onClose(); 
-        } catch (e: any) {
-            onToast('Ошибка', e.message || 'Не удалось создать ключ', 'error');
-        }
-    };
-
-    useEffect(() => { 
-        if(isTrial) { 
-            setParams({ days: 1, traffic: 5, devices: 1 }); 
-        } else if (isForever) {
-            setParams(prev => ({ ...prev, traffic: 0, devices: 10 })); // 0 = безлимит
-        } else { 
-            setParams({ days: 30, traffic: 100, devices: 5 }); 
-        } 
-    }, [isTrial, isForever]);
-
-    return (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-200" onClick={onClose}>
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-lg shadow-2xl relative animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
-                <div className="p-5 border-b border-gray-800 flex justify-between items-center"><h3 className="text-xl font-bold text-white flex items-center"><Plus size={24} className="mr-2 text-gray-300"/> Создание ключа</h3><button onClick={onClose} className="text-gray-400 hover:text-white"><X size={24} /></button></div>
-                <div className="p-6 overflow-y-auto space-y-6">
-                    <div className="relative">
-                        <label className="text-sm font-medium text-gray-400 mb-1.5 block">Пользователь</label>
-                        <div className="relative">
-                            <input
-                                type="text"
-                                value={selectedUser ? selectedUser.username : searchUser}
-                                onChange={e => {
-                                    setSearchUser(e.target.value);
-                                    setSelectedUser(null);
-                                }}
-                                className={`w-full bg-gray-950 border ${
-                                    selectedUser ? 'border-green-500/50 text-green-400' : 'border-gray-700 text-white'
-                                } rounded-xl px-4 py-3 focus:outline-none focus:border-gray-500`}
-                                placeholder="Введите ID или Username"
-                            />
-                            {selectedUser && (
-                                <CheckCircle size={18} className="absolute right-4 top-3.5 text-green-500" />
-                            )}
-                        </div>
-                        {searchUser && !selectedUser && filteredUsers.length > 0 && (
-                            <div className="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-10 overflow-hidden">
-                                {filteredUsers.map((u: User) => (
-                                    <div
-                                        key={u.id}
-                                        onClick={() => {
-                                            setSelectedUser(u);
-                                            setSearchUser('');
-                                        }}
-                                        className="px-4 py-3 hover:bg-gray-700 cursor-pointer flex justify-between items-center"
-                                    >
-                                        <span className="text-white">{u.username}</span>
-                                        <span className="text-xs text-gray-500">ID: {u.telegramId}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <label className="flex items-center cursor-pointer p-4 bg-gray-800/50 border border-gray-800 rounded-xl hover:border-gray-700 transition-colors"><div className="relative"><input type="checkbox" checked={isTrial} onChange={() => { setIsTrial(!isTrial); setIsForever(false); }} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full transition-colors ${isTrial ? 'bg-purple-600' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform ${isTrial ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="font-medium text-white">Пробный период</div><div className="text-xs text-gray-500">1 день, 5 ГБ, 1 устройство</div></div></label>
-                        <label className="flex items-center cursor-pointer p-4 bg-gray-800/50 border border-gray-800 rounded-xl hover:border-gray-700 transition-colors"><div className="relative"><input type="checkbox" checked={isForever} onChange={() => { setIsForever(!isForever); setIsTrial(false); }} className="sr-only" /><div className={`w-10 h-6 bg-gray-700 rounded-full transition-colors ${isForever ? 'bg-yellow-500' : ''}`}></div><div className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform ${isForever ? 'translate-x-4' : ''}`}></div></div><div className="ml-3"><div className="font-medium text-white">∞ Навсегда</div><div className="text-xs text-gray-500">До 2099 года</div></div></label>
-                    </div>
-                    <div className="grid grid-cols-3 gap-4"><div><label className="text-xs text-gray-500 mb-1.5 block">Длительность (дней)</label><input type="number" min="1" value={isForever ? 27394 : params.days} disabled={isForever} onChange={e => setParams({...params, days: parseInt(e.target.value) || 0})} className={`w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono ${isForever ? 'opacity-50' : ''}`}/></div><div><label className="text-xs text-gray-500 mb-1.5 block">Трафик (GB)</label><input type="number" min="1" value={params.traffic} onChange={e => setParams({...params, traffic: parseInt(e.target.value) || 0})} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3 py-2 text-white text-center font-mono"/></div><div><label className="text-xs text-gray-500 mb-1.5 block">Устройства (1–20)</label><div className="flex items-center gap-1"><button type="button" disabled={params.devices <= 1} onClick={() => setParams(p => ({...p, devices: Math.max(1, p.devices - 1)}))} className="w-8 h-9 rounded-lg bg-gray-800 border border-gray-700 text-white disabled:opacity-40">−</button><input type="number" min="1" max="20" value={params.devices} onChange={e => setParams({...params, devices: Math.max(1, Math.min(20, parseInt(e.target.value) || 1))})} className="w-full bg-gray-950 border border-gray-700 rounded-xl px-2 py-2 text-white text-center font-mono"/><button type="button" disabled={params.devices >= 20} onClick={() => setParams(p => ({...p, devices: Math.min(20, p.devices + 1)}))} className="w-8 h-9 rounded-lg bg-gray-800 border border-gray-700 text-white disabled:opacity-40">+</button></div></div></div>
-                    {!isTrial && (
-                      <div className="flex flex-wrap gap-2">
-                        {DEVICE_LIMIT_PRESETS.map((preset) => (
-                          <button
-                            key={preset}
-                            type="button"
-                            onClick={() => setParams((p) => ({ ...p, devices: preset }))}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-mono border transition-colors ${
-                              params.devices === preset
-                                ? 'bg-gray-700/20 border-gray-600 text-gray-200'
-                                : 'bg-gray-950 border-gray-800 text-gray-500 hover:border-gray-600'
-                            }`}
-                          >
-                            {preset} устр.
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    <div>
-                        <label className="text-sm font-medium text-gray-400 mb-2 block">Доступные сквады</label>
-                        {loadingSquads ? (
-                            <div className="text-gray-500 text-sm">Загрузка сквадов...</div>
-                        ) : squads.length === 0 ? (
-                            <div className="text-gray-500 text-sm">Нет доступных сквадов</div>
-                        ) : (
-                            <div className="flex flex-wrap gap-2">
-                                {squads.map(sq => { 
-                                    const isSelected = selectedSquads.includes(sq.uuid); 
-                                    return (
-                                        <button 
-                                            key={sq.uuid} 
-                                            onClick={() => setSelectedSquads(prev => isSelected ? prev.filter(s => s !== sq.uuid) : [...prev, sq.uuid])} 
-                                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${isSelected ? 'bg-gray-700/20 border-gray-600 text-gray-200' : 'bg-gray-950 border-gray-800 text-gray-500 hover:border-gray-600'}`}
-                                        >
-                                            {sq.name}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        )}
-                    </div>
-                </div>
-                <div className="p-5 border-t border-gray-800"><button onClick={handleCreate} className="w-full py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-bold shadow-lg shadow-black/40 transition-colors">Создать ключ</button></div>
-            </div>
-        </div>
-    );
-};
-
-interface UserDetailModalProps {
-    user: User;
-    onClose: () => void;
-    onToast: (title: string, msg: string, type: ToastType) => void;
-    onOpenUser: (u: User) => void;
-}
 
 interface UserSubscription {
-  id: number;
-  key_uuid: string;
-  short_uuid: string;
-  status: string;
-  expiry_date: string;
-  days_left: number;
-  traffic_used: number;
-  traffic_limit: number;
-  devices_limit: number;
-  type: string;
+  id: number; key_uuid: string; short_uuid: string; status: string; expiry_date: string;
+  days_left: number; traffic_used: number; traffic_limit: number; devices_limit: number; type: string;
 }
+interface ReferralItem { id: number; telegram_id: number; username: string; full_name?: string; is_partner: number; partner_rate: number; }
 
-interface ReferralItem {
-  id: number;
-  telegram_id: number;
-  username: string;
-  full_name?: string;
-  is_partner: number;
-  partner_rate: number;
-}
-
-const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToast, onOpenUser }) => {
+const UserDetailModal: React.FC<{
+  user: User; onClose: () => void; onToast: (t: string, m: string, ty: ToastType) => void; onOpenUser: (u: User) => void;
+}> = ({ user, onClose, onToast, onOpenUser }) => {
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [subAction, setSubAction] = useState<{ subId: number; action: string; initialValue: string } | null>(null);
   const [subscriptions, setSubscriptions] = useState<UserSubscription[]>([]);
@@ -1142,31 +731,16 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
   const [secondLevelRateDraft, setSecondLevelRateDraft] = useState<number>(user?.secondLevelRate ?? 5);
   const [referrals, setReferrals] = useState<ReferralItem[]>([]);
   const [loadingRefs, setLoadingRefs] = useState(true);
-  
+
   const refreshSubscriptions = async () => {
     setLoadingSubs(true);
-    try {
-      const data = await apiFetch(`/panel/users/${user.id}/subscriptions`);
-      if (Array.isArray(data)) setSubscriptions(data);
-      else setSubscriptions([]);
-    } catch (e) {
-      onToast('Ошибка', 'Не удалось загрузить подписки', 'error');
-    } finally {
-      setLoadingSubs(false);
-    }
+    try { const data = await apiFetch(`/panel/users/${user.id}/subscriptions`); setSubscriptions(Array.isArray(data) ? data : []); }
+    catch { onToast('Ошибка', 'Не удалось загрузить подписки', 'error'); } finally { setLoadingSubs(false); }
   };
-
   const refreshReferrals = async () => {
     setLoadingRefs(true);
-    try {
-      const data = await apiFetch(`/panel/users/${user.id}/referrals`);
-      if (Array.isArray(data)) setReferrals(data);
-      else setReferrals([]);
-    } catch (e) {
-      onToast('Ошибка', 'Не удалось загрузить рефералов', 'error');
-    } finally {
-      setLoadingRefs(false);
-    }
+    try { const data = await apiFetch(`/panel/users/${user.id}/referrals`); setReferrals(Array.isArray(data) ? data : []); }
+    catch { onToast('Ошибка', 'Не удалось загрузить рефералов', 'error'); } finally { setLoadingRefs(false); }
   };
 
   useEffect(() => {
@@ -1176,1052 +750,225 @@ const UserDetailModal: React.FC<UserDetailModalProps> = ({ user, onClose, onToas
     refreshSubscriptions();
     refreshReferrals();
   }, [user]);
-  
-  if (!user) return null;
-  const trafficPercent = (user.traffic / user.maxTraffic) * 100;
-  const devicesPercent = (user.devices / user.maxDevices) * 100;
 
-  const handleAction = (type: string) => setActiveAction(type);
+  if (!user) return null;
+
   const confirmAction = async (value: string, notify: boolean) => {
-      try {
-        await apiFetch(`/panel/users/${user.id}/action`, {
-          method: 'POST',
-          body: JSON.stringify({ action: activeAction, value, notify })
-        });
-        onToast('Успешно', `Действие выполнено`, 'success');
-        await refreshSubscriptions();
-      } catch (e) {
-        onToast('Ошибка', 'Не удалось выполнить действие', 'error');
-      }
-      setActiveAction(null); 
+    try {
+      await apiFetch(`/panel/users/${user.id}/action`, { method: 'POST', body: JSON.stringify({ action: activeAction, value, notify }) });
+      onToast('Готово', 'Действие выполнено', 'success');
+      await refreshSubscriptions();
+    } catch { onToast('Ошибка', 'Не удалось выполнить действие', 'error'); }
+    setActiveAction(null);
   };
-  
+
   const handleNotify = async () => {
-    const message = prompt('Введите сообщение для отправки пользователю:');
+    const message = prompt('Сообщение пользователю:');
     if (!message) return;
     try {
-      await apiFetch(`/panel/users/${user.id}/action`, {
-        method: 'POST',
-        body: JSON.stringify({ action: 'NOTIFY', value: message, notify: true })
-      });
-      onToast('Успешно', 'Уведомление отправлено', 'success');
-    } catch (e) {
-      onToast('Ошибка', 'Не удалось отправить уведомление', 'error');
-    }
+      await apiFetch(`/panel/users/${user.id}/action`, { method: 'POST', body: JSON.stringify({ action: 'NOTIFY', value: message, notify: true }) });
+      onToast('Готово', 'Уведомление отправлено', 'success');
+    } catch { onToast('Ошибка', 'Не удалось отправить', 'error'); }
   };
-  
+
   const handleSubAction = (subId: number, action: 'EXTEND_SUB' | 'REDUCE_SUB' | 'SET_TRAFFIC' | 'SET_DEVICES') => {
     const sub = subscriptions.find((s) => s.id === subId);
-    const initialByAction: Record<string, string> = {
-      EXTEND_SUB: '30',
-      REDUCE_SUB: '7',
-      SET_TRAFFIC: String(sub?.traffic_limit ? Math.round(sub.traffic_limit / (1024 ** 3)) : 100),
+    const initial: Record<string, string> = {
+      EXTEND_SUB: '30', REDUCE_SUB: '7',
+      SET_TRAFFIC: String(sub?.traffic_limit ? Math.round(gb(sub.traffic_limit)) : 100),
       SET_DEVICES: String(sub?.devices_limit ?? 1),
     };
-    setSubAction({ subId, action, initialValue: initialByAction[action] || '' });
+    setSubAction({ subId, action, initialValue: initial[action] || '' });
   };
 
   const confirmSubAction = async (value: string, notify: boolean) => {
     if (!subAction) return;
     try {
-      await apiFetch(`/panel/users/${user.id}/action`, {
-        method: 'POST',
-        body: JSON.stringify({
-          action: subAction.action,
-          value,
-          notify,
-          subscription_id: subAction.subId,
-        }),
-      });
-      onToast('Успешно', 'Изменения применены', 'success');
+      await apiFetch(`/panel/users/${user.id}/action`, { method: 'POST', body: JSON.stringify({ action: subAction.action, value, notify, subscription_id: subAction.subId }) });
+      onToast('Готово', 'Изменения применены', 'success');
       await refreshSubscriptions();
-    } catch (e) {
-      onToast('Ошибка', 'Не удалось применить действие', 'error');
-    } finally {
-      setSubAction(null);
-    }
+    } catch { onToast('Ошибка', 'Не удалось применить', 'error'); } finally { setSubAction(null); }
   };
 
   const handleBlockSubscription = async (subId: number, block: boolean) => {
     try {
-      await apiFetch(`/panel/keys/${subId}/block`, {
-        method: 'POST',
-        body: JSON.stringify({ blocked: block })
-      });
-      onToast('Успешно', block ? 'Подписка заблокирована' : 'Подписка разблокирована', 'success');
+      await apiFetch(`/panel/keys/${subId}/block`, { method: 'POST', body: JSON.stringify({ blocked: block }) });
+      onToast('Готово', block ? 'Подписка заблокирована' : 'Подписка разблокирована', 'success');
       await refreshSubscriptions();
-    } catch (e) {
-      onToast('Ошибка', 'Не удалось изменить статус подписки', 'error');
-    }
+    } catch { onToast('Ошибка', 'Не удалось изменить статус', 'error'); }
   };
 
   const saveReferralRates = async () => {
     try {
-      await apiFetch(`/panel/users/${user.id}/action`, {
-        method: 'POST',
-        body: JSON.stringify({ action: 'SET_PARTNER_RATE', value: String(partnerRateDraft), notify: true }),
-      });
-      await apiFetch(`/panel/users/${user.id}/action`, {
-        method: 'POST',
-        body: JSON.stringify({ action: 'SET_SECOND_LEVEL_RATE', value: String(secondLevelRateDraft), notify: false }),
-      });
-      onToast('Успех', 'Реферальные ставки обновлены', 'success');
-    } catch (e: any) {
-      onToast('Ошибка', e?.message || 'Не удалось сохранить ставки', 'error');
-    }
+      await apiFetch(`/panel/users/${user.id}/action`, { method: 'POST', body: JSON.stringify({ action: 'SET_PARTNER_RATE', value: String(partnerRateDraft), notify: true }) });
+      await apiFetch(`/panel/users/${user.id}/action`, { method: 'POST', body: JSON.stringify({ action: 'SET_SECOND_LEVEL_RATE', value: String(secondLevelRateDraft), notify: false }) });
+      onToast('Готово', 'Реферальные ставки обновлены', 'success');
+    } catch (e: any) { onToast('Ошибка', e?.message || 'Не удалось сохранить', 'error'); }
   };
 
   const openReferralProfile = async (refId: number) => {
     try {
       const u = await apiFetch(`/panel/users/${refId}`);
       if (!u) return;
-      const mapped: User = {
-        id: u.id,
-        telegramId: u.telegram_id,
-        username: u.username ? (String(u.username).startsWith('@') ? String(u.username) : `@${u.username}`) : `@user_${u.telegram_id}`,
-        name: u.full_name || u.username || '',
-        balance: u.balance ?? 0,
-        status: u.is_banned ? 'Banned' : 'Active',
-        traffic: 0,
-        maxTraffic: 0,
-        devices: 0,
-        maxDevices: 0,
-        regDate: u.registration_date ? new Date(u.registration_date).toLocaleDateString('ru-RU') : '',
-        paidUntil: u.paid_until ? new Date(u.paid_until).toLocaleDateString('ru-RU') : '—',
-        autoPayDetails: { sbp: false, card: false, crypto: false },
-        refLink: `https://t.me/${BOT_USERNAME}?start=ref=${u.telegram_id}`,
-        refCode: u.referral_code || '',
-        squads: [],
-        firstDeposit: false,
-        wasPaid: false,
-        isPartner: !!u.is_partner,
-        partnerBalance: u.partner_balance ?? 0,
-        partnerRate: u.partner_rate ?? 25,
-        secondLevelRate: u.second_level_rate ?? 5,
-        thirdLevelRate: u.third_level_rate ?? 2,
-        referrals: 0,
-        totalEarned: u.total_earned ?? 0,
-        inBlacklist: !!u.in_blacklist,
-      };
-      onOpenUser(mapped);
-    } catch (e) {
-      onToast('Ошибка', 'Не удалось открыть профиль реферала', 'error');
-    }
+      onOpenUser(mapApiUser(u));
+    } catch { onToast('Ошибка', 'Не удалось открыть профиль', 'error'); }
   };
 
   const unlinkReferral = async (refId: number) => {
     if (!confirm('Отвязать этого реферала?')) return;
     try {
       await apiFetch(`/panel/users/${user.id}/referrals/${refId}/unlink`, { method: 'POST' });
-      onToast('Успех', 'Реферал отвязан', 'success');
+      onToast('Готово', 'Реферал отвязан', 'success');
       await refreshReferrals();
-    } catch (e) {
-      onToast('Ошибка', 'Не удалось отвязать реферала', 'error');
-    }
+    } catch { onToast('Ошибка', 'Не удалось отвязать', 'error'); }
   };
+
+  const st = userStatusBadge(user.status, user.inBlacklist);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto" onClick={onClose}>
-        {activeAction && <UserActionModal type={activeAction} onClose={() => setActiveAction(null)} onConfirm={confirmAction} />}
-        {subAction && (
-          <UserActionModal
-            type={subAction.action}
-            initialValue={subAction.initialValue}
-            onClose={() => setSubAction(null)}
-            onConfirm={confirmSubAction}
-          />
-        )}
-        <div className="bg-gray-950 border border-gray-800 rounded-2xl w-full max-w-4xl shadow-2xl relative animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
-            <div className="p-6 border-b border-gray-800 flex justify-between items-start bg-gray-900 rounded-t-2xl">
-                <div className="flex items-center gap-4"><div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center text-2xl font-bold text-gray-500 border border-gray-700">{user.username.charAt(1).toUpperCase()}</div><div><h2 className="text-2xl font-bold text-white flex items-center">{user.username} {user.status === 'Active' && <CheckCircle size={18} className="text-green-500 ml-2" />}{user.status === 'Banned' && <Ban size={18} className="text-red-500 ml-2" />}{user.inBlacklist && <span className="ml-2 text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full border border-red-500/30">Чёрный список</span>}</h2><div className="flex items-center gap-3 text-sm text-gray-400 mt-1"><span className="flex items-center bg-gray-800 px-2 py-0.5 rounded"><Hash size={12} className="mr-1"/> ID: {user.telegramId}</span><span className="flex items-center"><Calendar size={12} className="mr-1"/> Рег: {user.regDate}</span></div></div></div>
-                <button onClick={onClose} className="text-gray-400 hover:text-white"><X size={24} /></button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="space-y-6">
-                    {/* Finance */}
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                        <div className="flex justify-between items-start mb-4"><h3 className="text-lg font-bold text-gray-200 flex items-center"><DollarSign size={18} className="mr-2 text-green-400"/> Баланс</h3></div>
-                        <div className="text-3xl font-bold text-white mb-4">{user.balance} ₽</div>
-                        <div className="grid grid-cols-2 gap-3"><button onClick={() => handleAction('ADD_BALANCE')} className="bg-green-600/10 hover:bg-green-600/20 text-green-400 border border-green-600/20 py-2 rounded-lg text-sm font-medium transition-colors flex justify-center items-center"><ArrowUpRight size={14} className="mr-2"/> Начислить</button><button onClick={() => handleAction('SUB_BALANCE')} className="bg-red-600/10 hover:bg-red-600/20 text-red-400 border border-red-600/20 py-2 rounded-lg text-sm font-medium transition-colors flex justify-center items-center"><ArrowDownLeft size={14} className="mr-2"/> Списать</button></div>
-                    </div>
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                         <h3 className="text-lg font-bold text-gray-200 flex items-center mb-4">
-                           <Zap size={18} className="mr-2 text-gray-200"/> Подписки ({subscriptions.length})
-                         </h3>
-                         {loadingSubs ? (
-                           <div className="text-center py-4 text-gray-500">Загрузка...</div>
-                         ) : subscriptions.length === 0 ? (
-                           <div className="text-center py-4 text-gray-500">Нет активных подписок</div>
-                         ) : (
-                           <div className="space-y-3 max-h-[420px] overflow-y-auto">
-                             {subscriptions.map((sub) => (
-                               <div key={sub.id} className="p-3 rounded-lg border bg-gray-950 border-gray-800">
-                                 <div className="flex justify-between items-start mb-2">
-                                   <div>
-                                     <div className="font-mono text-xs text-gray-200">#{sub.short_uuid || sub.key_uuid?.slice(0,8)}</div>
-                                     <div className="text-xs text-gray-500 mt-0.5">Подписка</div>
-                                   </div>
-                                   <span className={`text-xs px-2 py-0.5 rounded ${
-                                     sub.status === 'Active' ? 'bg-green-500/20 text-green-400' : 
-                                     sub.status === 'Blocked' ? 'bg-red-500/20 text-red-400' : 
-                                     'bg-gray-500/20 text-gray-400'
-                                   }`}>{sub.status}</span>
-                                 </div>
-                                 <div className="flex justify-between text-xs gap-2">
-                                   <span className={sub.days_left <= 3 ? 'text-red-400' : 'text-gray-400'}>
-                                     {sub.days_left <= 0 ? 'Истекла' : `Осталось ${sub.days_left} дн.`}
-                                   </span>
-                                   <span className="text-indigo-400/90 shrink-0">
-                                     {sub.devices_limit ?? 1} устр.
-                                   </span>
-                                   <span className="text-gray-500 text-right">
-                                     {sub.traffic_limit > 0 
-                                       ? `${(sub.traffic_used / (1024**3)).toFixed(1)} / ${(sub.traffic_limit / (1024**3)).toFixed(0)} ГБ`
-                                       : 'Безлимит'
-                                     }
-                                   </span>
-                                 </div>
-                                 <div className="mt-3 pt-3 border-t border-gray-800 grid grid-cols-2 gap-2">
-                                   <button onClick={() => handleSubAction(sub.id, 'EXTEND_SUB')} className="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 py-2 rounded-lg text-xs font-medium transition-colors">Продлить</button>
-                                   <button onClick={() => handleSubAction(sub.id, 'REDUCE_SUB')} className="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 py-2 rounded-lg text-xs font-medium transition-colors">Уменьшить срок</button>
-                                   <button onClick={() => handleSubAction(sub.id, 'SET_TRAFFIC')} className="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 py-2 rounded-lg text-xs font-medium transition-colors">Изм. трафик</button>
-                                   <button onClick={() => handleSubAction(sub.id, 'SET_DEVICES')} className="bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 py-2 rounded-lg text-xs font-medium transition-colors">Изм. устройства</button>
-                                   <button
-                                     onClick={() => handleBlockSubscription(sub.id, sub.status !== 'Blocked')}
-                                     className={`col-span-2 py-2 rounded-lg text-xs font-medium ${
-                                       sub.status === 'Blocked'
-                                         ? 'bg-green-600/10 text-green-400 border border-green-600/20 hover:bg-green-600/20'
-                                         : 'bg-red-600/10 text-red-400 border border-red-600/20 hover:bg-red-600/20'
-                                     }`}
-                                   >
-                                     {sub.status === 'Blocked' ? 'Разблокировать (Remnawave + БД)' : 'Заблокировать (Remnawave + БД)'}
-                                   </button>
-                                 </div>
-                               </div>
-                             ))}
-                           </div>
-                         )}
-                    </div>
-                    {/* PARTNER SECTION */}
-                    {user.isPartner && (
-                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                            <h3 className="text-lg font-bold text-gray-200 flex items-center mb-4"><Users size={18} className="mr-2 text-indigo-400"/> Партнёрская программа</h3>
-                            <div className="grid grid-cols-2 gap-4 mb-4">
-                                <div className="bg-gray-950 p-3 rounded-xl border border-gray-800">
-                                    <div className="text-xs text-gray-500">Баланс</div>
-                                    <div className="text-xl font-bold text-white">{user.partnerBalance} ₽</div>
-                                </div>
-                                <div className="bg-gray-950 p-3 rounded-xl border border-gray-800">
-                                    <div className="text-xs text-gray-500">Рефералов</div>
-                                    <div className="text-xl font-bold text-white">{user.referrals}</div>
-                                </div>
-                            </div>
-                            <div className="space-y-3">
-                                <div><label className="text-xs text-gray-500 block mb-1">Реф. код</label><input type="text" readOnly value={user.refCode} className="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 font-mono"/></div>
-                                <div><label className="text-xs text-gray-500 block mb-1">1-я линия (%)</label><input type="number" value={partnerRateDraft} onChange={e => setPartnerRateDraft(Number(e.target.value) || 0)} className="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2"/></div>
-                                <div><label className="text-xs text-gray-500 block mb-1">2-я линия (%)</label><input type="number" value={secondLevelRateDraft} onChange={e => setSecondLevelRateDraft(Number(e.target.value) || 0)} className="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-lg px-3 py-2"/></div>
-                                <button onClick={saveReferralRates} className="w-full mt-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-600/20 py-2 rounded-lg text-sm font-bold transition-colors">Сохранить реферальные ставки</button>
-                            </div>
-                        </div>
-                    )}
-                </div>
-                <div className="space-y-6">
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                         <h3 className="text-lg font-bold text-gray-200 flex items-center mb-4"><Users size={18} className="mr-2 text-cyan-400"/> Рефералы</h3>
-                         {loadingRefs ? (
-                           <div className="text-center py-4 text-gray-500">Загрузка...</div>
-                         ) : referrals.length === 0 ? (
-                           <div className="text-center py-4 text-gray-500">Нет привязанных рефералов</div>
-                         ) : (
-                           <div className="space-y-2 max-h-[360px] overflow-y-auto">
-                             {referrals.map((r) => (
-                               <div key={r.id} className="bg-gray-950 border border-gray-800 rounded-lg p-3 flex items-center justify-between">
-                                 <div>
-                                   <div className="text-white text-sm font-medium">{r.username ? (String(r.username).startsWith('@') ? r.username : `@${r.username}`) : `id${r.id}`}</div>
-                                   <div className="text-xs text-gray-500">ID: {r.telegram_id} {r.is_partner ? `· Партнер ${r.partner_rate}%` : ''}</div>
-                                 </div>
-                                 <div className="flex gap-2">
-                                   <button onClick={() => openReferralProfile(r.id)} className="px-2.5 py-1.5 bg-white/5 hover:bg-gray-600/20 border border-gray-600/20 text-gray-200 rounded text-xs">Открыть</button>
-                                   <button onClick={() => unlinkReferral(r.id)} className="px-2.5 py-1.5 bg-red-600/10 hover:bg-red-600/20 border border-red-600/20 text-red-400 rounded text-xs">Отвязать</button>
-                                 </div>
-                               </div>
-                             ))}
-                           </div>
-                         )}
-                    </div>
-                    {/* Действия с пользователем */}
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                         <h3 className="text-lg font-bold text-gray-200 flex items-center mb-4"><Bell size={18} className="mr-2 text-yellow-400"/> Действия</h3>
-                         <div className="grid grid-cols-1 gap-3">
-                           <button onClick={handleNotify} className="bg-yellow-600/10 hover:bg-yellow-600/20 text-yellow-400 border border-yellow-600/20 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-center">
-                             <Bell size={16} className="mr-2" /> Уведомить пользователя
-                           </button>
-                           {user.status !== 'Banned' && !user.inBlacklist ? (
-                             <button onClick={() => handleAction('BAN')} className="bg-red-600/10 hover:bg-red-600/20 text-red-400 border border-red-600/20 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-center">
-                               <Ban size={16} className="mr-2" /> Заблокировать
-                             </button>
-                           ) : (
-                             <button onClick={() => handleAction('UNBAN')} className="bg-green-600/10 hover:bg-green-600/20 text-green-400 border border-green-600/20 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-center">
-                               <CheckCircle size={16} className="mr-2" /> Разблокировать{user.inBlacklist ? ' (из ЧС)' : ''}
-                             </button>
-                           )}
-                         </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-  );
-};
-
-// ==========================================
-// 5. LOGIN FORM COMPONENT
-// ==========================================
-
-function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [tempToken, setTempToken] = useState('');
-  const [verifyCode, setVerifyCode] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [initInfo, setInitInfo] = useState<{
-    username?: string;
-    password?: string;
-    newAdmin?: boolean;
-    passwordRegenerated?: boolean;
-    message?: string;
-  } | null>(null);
-
-  // Показываем логин/пароль до первой успешной авторизации (только с PANEL_SETUP_TOKEN)
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const setupToken = params.get('setup_token') || '';
-    const headers: Record<string, string> = {};
-    if (setupToken) {
-      headers['X-Panel-Setup-Token'] = setupToken;
-    }
-    const qs = setupToken ? `?setup_token=${encodeURIComponent(setupToken)}` : '';
-    fetch(`/api/panel/auth/init${qs}`, { headers })
-      .then(res => res.json())
-      .then(data => {
-        if (data.show_credentials && data.password && data.username) {
-          setInitInfo({
-            username: data.username,
-            password: data.password,
-            newAdmin: Boolean(data.new_admin),
-            passwordRegenerated: Boolean(data.password_regenerated),
-            message: data.message,
-          });
-          setUsername(data.username);
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  const handleCredentialsSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-
-    try {
-      const res = await fetch('/api/panel/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
-
-      const data = await res.json();
-
-      if (res.ok && data.requires_2fa && data.temp_token) {
-        setTempToken(data.temp_token);
-      } else if (res.ok && data.session_token) {
-        setPanelToken(data.session_token);
-        onLogin(data.session_token);
-      } else {
-        setError(data.error || 'Неверные учетные данные');
-      }
-    } catch (err) {
-      setError('Ошибка подключения к серверу');
-    }
-    setLoading(false);
-  };
-
-  const handleVerifyCodeSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-    try {
-      const res = await fetch('/api/panel/auth/verify-code', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ temp_token: tempToken, code: verifyCode })
-      });
-      const data = await res.json();
-      if (res.ok && data.session_token) {
-        setPanelToken(data.session_token);
-        onLogin(data.session_token);
-      } else {
-        setError(data.error || 'Неверный код подтверждения');
-      }
-    } catch {
-      setError('Ошибка подключения к серверу');
-    }
-    setLoading(false);
-  };
-
-  return (
-    <div className="min-h-screen bg-black flex items-center justify-center p-4">
-      <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 w-full max-w-md shadow-2xl">
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mx-auto mb-4 overflow-hidden">
-            <img
-              src="https://blinvpn.cc/assets/logo.png"
-              alt="BlinVPN"
-              className="w-full h-full object-contain p-2"
-              onError={(e) => {
-                const img = e.currentTarget;
-                img.style.display = 'none';
-                const fb = img.nextElementSibling as HTMLElement | null;
-                if (fb) fb.style.display = 'block';
-              }}
-            />
-            <Lock size={32} className="text-white" style={{ display: 'none' }} />
-          </div>
-          <h1 className="text-2xl font-bold text-white">BlinVPN Panel</h1>
-          <p className="text-gray-400 mt-2">Войдите для доступа к панели</p>
-        </div>
-
-        {initInfo?.password && (
-          <div className="bg-green-500/10 border border-green-500/30 text-green-400 px-4 py-3 rounded-lg text-sm mb-6">
-            <p className="font-bold mb-2">
-              {initInfo.newAdmin
-                ? 'Создан администратор'
-                : initInfo.passwordRegenerated
-                  ? 'Пароль сброшен — первый вход ещё не был'
-                  : 'Данные для первого входа'}
-            </p>
-            <p>Логин: <code className="bg-green-900/30 px-1 rounded select-all">{initInfo.username}</code></p>
-            <p>Пароль: <code className="bg-green-900/30 px-1 rounded select-all break-all">{initInfo.password}</code></p>
-            <p className="mt-2 text-xs text-green-500">
-              {initInfo.message || 'Сохраните эти данные. Пароль показывается до первой успешной авторизации.'}
-            </p>
-          </div>
-        )}
-
-        {!tempToken ? (
-          <form onSubmit={handleCredentialsSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-400 mb-2">Логин</label>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-gray-500 focus:border-transparent outline-none transition-all"
-                placeholder="admin"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-400 mb-2">Пароль</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-gray-500 focus:border-transparent outline-none transition-all"
-                placeholder="••••••••"
-                required
-              />
-            </div>
-
-            {error && (
-              <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg text-sm">
-                {error}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={loading || !username || !password}
-              className="w-full bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-black/40"
-            >
-              {loading ? (
-                <span className="flex items-center justify-center">
-                  <Loader size={20} className="animate-spin mr-2" />
-                  Вход...
-                </span>
-              ) : (
-                'Войти'
-              )}
-            </button>
-          </form>
-        ) : (
-          <form onSubmit={handleVerifyCodeSubmit} className="space-y-4">
-            <div className="bg-white/5 border border-white/10 text-gray-300 px-4 py-3 rounded-lg text-sm">
-              Код подтверждения отправлен администраторам в Telegram.
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-400 mb-2">Код подтверждения</label>
-              <input
-                type="text"
-                value={verifyCode}
-                onChange={(e) => setVerifyCode(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-gray-500 focus:border-transparent outline-none transition-all"
-                placeholder="123456"
-                required
-              />
-            </div>
-            {error && <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg text-sm">{error}</div>}
-            <button type="submit" disabled={loading || !verifyCode} className="w-full bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-black/40">
-              {loading ? 'Проверка...' : 'Подтвердить вход'}
-            </button>
-          </form>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ==========================================
-// 6. MAIN COMPONENT APP
-// ==========================================
-
-export default function App() {
-  // Auth State
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
-
-  // Check auth on mount
-  useEffect(() => {
-    const token = getPanelToken();
-    if (!token) {
-      setIsAuthenticated(false);
-      return;
-    }
-
-    // Verify the secret
-    fetch('/api/panel/stats/summary', {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      }
-    }).then(res => {
-      if (res.ok) {
-        setIsAuthenticated(true);
-      } else {
-        clearPanelToken();
-        setIsAuthenticated(false);
-      }
-    }).catch(() => {
-      setIsAuthenticated(false);
-    });
-  }, []);
-
-  const handleLogin = (_token: string) => {
-    setIsAuthenticated(true);
-  };
-
-  const handleLogout = () => {
-    clearPanelToken();
-    setIsAuthenticated(false);
-  };
-
-  // Show loading while checking auth
-  if (isAuthenticated === null) {
-    return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <Loader size={40} className="animate-spin text-gray-300" />
-      </div>
-    );
-  }
-
-  // Show login form if not authenticated
-  if (!isAuthenticated) {
-    return <LoginForm onLogin={handleLogin} />;
-  }
-
-  // Authenticated - show main app
-  return <AuthenticatedApp onLogout={handleLogout} />;
-}
-
-function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [activePage, setActivePage] = useState("Главная страница");
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  
-  // Data States
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
-  const [keys, setKeys] = useState<KeyItem[]>([]);
-  const [promos, setPromos] = useState<Promo[]>([]);
-  
-  // UI States
-  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
-  const [selectedUser, setSelectedUser] = useState<User | null>(null);
-  const [userSearch, setUserSearch] = useState('');
-  const [massActionType, setMassActionType] = useState<string | null>(null);
-  const [keySearch, setKeySearch] = useState('');
-  const [isCreateKeyOpen, setIsCreateKeyOpen] = useState(false);
-  
-  // New States for Key Editing
-  const [editingKey, setEditingKey] = useState<KeyItem | null>(null);
-
-  // Toast Handler
-  const addToast = (title: string, message: string, type: ToastType = 'success') => {
-      const id = Date.now();
-      setToasts(prev => [...prev, { id, title, message, type }]);
-      setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
-  };
-
-  // Инициализация данных — всё тянем из backend API
-  useEffect(() => {
-    let cancelled = false;
-
-    const load = async () => {
-      try {
-        // Транзакции
-        try {
-          const transactionsFromApi = await apiFetch('/panel/transactions?limit=100');
-          if (!cancelled && Array.isArray(transactionsFromApi)) {
-            const mapped: Transaction[] = transactionsFromApi.map((t: any) => ({
-              id: t.id,
-              user: t.user || `@user_${t.user_id}`,
-              amount: t.amount ?? 0,
-              type: t.amount > 0 ? 'income' : 'expense',
-              status: t.status || 'Pending',
-              method: t.payment_method || 'Unknown',
-              date: t.created_at
-                ? new Date(t.created_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-                : '',
-              hash: t.hash || t.payment_id || '',
-            }));
-            setTransactions(mapped);
-          }
-        } catch (e) {
-          console.error('Failed to load transactions from API', e);
-          if (!cancelled) {
-            addToast('Ошибка', 'Не удалось загрузить транзакции', 'error');
-            setTransactions([]);
-          }
-        }
-
-        // Пользователи (нужны только как офлайн-фоллбэк для CreateKeyModal;
-        // страницы "Пользователи"/"Подписки" грузят данные постранично сами)
-        try {
-          const usersFromApi = await apiFetch('/panel/users?limit=500&offset=0');
-          if (!cancelled) {
-            const { items } = parseListResponse(usersFromApi);
-            setUsers(items.map(mapApiUser));
-          }
-        } catch (e) {
-          console.error('Failed to load users from API', e);
-          if (!cancelled) {
-            setUsers([]);
-          }
-        }
-
-        // Промокоды
-        try {
-          const promosFromApi = await apiFetch('/panel/promocodes');
-          if (!cancelled && Array.isArray(promosFromApi)) {
-            const mappedPromos: Promo[] = promosFromApi.map((p: any) => ({
-              id: p.id,
-              code: p.code,
-              type: p.type,
-              value: String(p.value),
-              uses: p.uses_count ?? 0,
-              limit: p.uses_limit ?? 0,
-              expires: p.expires_at
-                ? new Date(p.expires_at).toLocaleDateString('ru-RU')
-                : 'Бессрочно',
-            }));
-            setPromos(mappedPromos);
-          }
-        } catch (e) {
-          console.error('Failed to load promocodes from API', e);
-          if (!cancelled) {
-            addToast('Ошибка', 'Не удалось загрузить промокоды', 'error');
-            setPromos([]);
-          }
-        }
-
-        // Ключи VPN больше не грузим целиком на старте —
-        // страница "Подписки" грузит их постранично (по 100) сама.
-
-      } catch (e) {
-        console.error('Initial panel data load failed', e);
-        if (!cancelled) {
-          addToast('Ошибка', 'Не удалось загрузить данные панели', 'error');
-        }
-      }
-    };
-
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handleUpdateKey = (id: number, newExpiry: number) => {
-      setKeys(prev => prev.map(k => k.id === id ? { ...k, expiry: newExpiry, status: newExpiry > 0 ? 'Active' : 'Expired' } : k));
-      setEditingKey(null);
-      addToast('Успешно', `Срок действия ключа #${id} обновлен`, 'success');
-  };
-
-  const handleDeleteKey = (id: number) => {
-      setKeys(prev => prev.filter(k => k.id !== id));
-      setEditingKey(null);
-      addToast('Удалено', `Ключ #${id} успешно удален`, 'success');
-  };
-
-  return (
-    <div className="min-h-screen bg-black text-gray-100 font-sans selection:bg-gray-700 selection:text-white">
-      <ToastContainer toasts={toasts} removeToast={(id) => setToasts(prev => prev.filter(t => t.id !== id))} />
-      
-      {selectedTransaction && (<TransactionModal transaction={selectedTransaction} onClose={() => setSelectedTransaction(null)} />)}
-      {selectedUser && (<UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} onToast={addToast} onOpenUser={setSelectedUser} />)}
-      {isCreateKeyOpen && (<CreateKeyModal onClose={() => setIsCreateKeyOpen(false)} users={users} onToast={addToast} />)}
-      {editingKey && (<KeyEditModal keyItem={editingKey} onClose={() => setEditingKey(null)} onSave={handleUpdateKey} onDelete={handleDeleteKey} />)}
-      {massActionType && <UserActionModal type={massActionType} onClose={() => setMassActionType(null)} onConfirm={async (val, notify) => { 
-        try {
-          await apiFetch('/panel/users/mass-action', {
-            method: 'POST',
-            body: JSON.stringify({ action: massActionType, value: val, notify })
-          });
-          addToast('Массовое действие', 'Задача успешно выполнена', 'success'); 
-        } catch (e) {
-          addToast('Ошибка', 'Не удалось выполнить действие', 'error');
-        }
-        setMassActionType(null); 
-      }} />}
-
-      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-black border-r border-gray-800 transform transition-transform duration-300 ease-in-out ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 overflow-y-auto custom-scrollbar`}>
-        <div className="p-6 border-b border-gray-800 hidden md:flex items-center gap-3">
-          <img
-            src="https://blinvpn.cc/assets/logo.png"
-            alt="BlinVPN"
-            className="w-9 h-9 rounded-lg object-contain"
-            onError={(e) => { e.currentTarget.style.display = 'none'; }}
-          />
-          <div>
-            <h1 className="text-lg font-semibold text-white tracking-wide">BlinVPN</h1>
-            <p className="text-xs text-gray-500">Панель управления</p>
-          </div>
-        </div>
-        <nav className="p-4 space-y-6">
-            {[
-                { category: "Главное", items: [{ name: "Главная страница", icon: Home }, { name: "Финансы", icon: DollarSign }] },
-                { category: "Пользователи", items: [{ name: "Пользователи", icon: Users }, { name: "Подписки", icon: Key }] },
-                { category: "Маркетинг", items: [{ name: "Рассылка", icon: Mail }, { name: "Промокоды", icon: Gift }, { name: "Акции", icon: Percent }, { name: "Специальные ссылки", icon: Link }] },
-                { category: "Другое", items: [{ name: "Настройки", icon: Settings }] }
-            ].map((section, idx) => (
-                <div key={idx}>
-                    <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 px-2">{section.category}</h3>
-                    <ul className="space-y-1">{section.items.map((item, itemIdx) => (<li key={itemIdx}><button onClick={() => { setActivePage(item.name); setIsMobileMenuOpen(false); }} className={`w-full flex items-center px-2 py-2 text-sm font-medium rounded-lg transition-colors ${activePage === item.name ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800/60 hover:text-white'}`}><item.icon size={18} className={`mr-3 ${activePage === item.name ? 'text-white' : 'text-gray-500'}`} />{item.name}</button></li>))}</ul>
-                </div>
-            ))}
-        </nav>
-      </aside>
-
-      <main className="md:ml-64 min-h-screen transition-all duration-300">
-        <div className="bg-black/50 backdrop-blur-md border-b border-gray-800 sticky top-0 z-30 px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3 md:gap-4"><button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="md:hidden text-gray-300 hover:text-white p-1">{isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}</button></div>
+    <div className="modal-backdrop" style={{ zIndex: 60, alignItems: 'flex-start', overflowY: 'auto' }} onClick={onClose}>
+      {activeAction && <UserActionModal type={activeAction} onClose={() => setActiveAction(null)} onConfirm={confirmAction} />}
+      {subAction && <UserActionModal type={subAction.action} initialValue={subAction.initialValue} onClose={() => setSubAction(null)} onConfirm={confirmSubAction} />}
+      <div className="modal" style={{ maxWidth: 860, margin: '32px 0' }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
           <div className="flex items-center gap-3">
-            <button onClick={onLogout} title="Выход" className="flex items-center justify-center w-9 h-9 bg-red-600/10 border border-red-500/20 rounded-lg hover:bg-red-600/20 transition-colors text-red-400"><Lock size={16} /></button>
+            <span className="avatar" style={{ width: 44, height: 44, fontSize: 16 }}>{user.username.replace('@', '').charAt(0).toUpperCase()}</span>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="h-sec" style={{ fontSize: 18 }}>{user.username}</span>
+                <span className={`badge ${st.cls}`}>{st.label}</span>
+              </div>
+              <div className="flex items-center gap-3 sub mt-1">
+                <span className="mono">ID {user.telegramId}</span>
+                <span className="flex items-center gap-1"><Calendar size={12} /> {user.regDate}</span>
+              </div>
+            </div>
+          </div>
+          <button className="icon-btn" onClick={onClose}><X size={18} /></button>
+        </div>
+
+        <div className="modal-body">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* left column */}
+            <div className="flex flex-col gap-4">
+              <div className="card" style={{ padding: 18 }}>
+                <div className="flex items-center gap-2 mb-3"><DollarSign size={16} className="faint" /><span className="h-sec">Баланс</span></div>
+                <div className="stat-value" style={{ fontSize: 28, marginBottom: 14 }}>{user.balance} ₽</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button className="btn sm" onClick={() => setActiveAction('ADD_BALANCE')}><ArrowUpRight size={14} /> Начислить</button>
+                  <button className="btn sm danger" onClick={() => setActiveAction('SUB_BALANCE')}><ArrowDownLeft size={14} /> Списать</button>
+                </div>
+              </div>
+
+              <div className="card" style={{ padding: 18 }}>
+                <div className="flex items-center gap-2 mb-3"><Zap size={16} className="faint" /><span className="h-sec">Подписки ({subscriptions.length})</span></div>
+                {loadingSubs ? <div className="sub" style={{ textAlign: 'center', padding: 16 }}>Загрузка…</div>
+                  : subscriptions.length === 0 ? <div className="sub" style={{ textAlign: 'center', padding: 16 }}>Нет активных подписок</div>
+                  : <div className="flex flex-col gap-3" style={{ maxHeight: 420, overflowY: 'auto' }}>
+                      {subscriptions.map((sub) => {
+                        const sb = keyStatusBadge(sub.status as KeyStatus);
+                        return (
+                          <div key={sub.id} className="inset" style={{ padding: 12 }}>
+                            <div className="flex justify-between items-start mb-2">
+                              <div className="mono" style={{ fontSize: 12 }}>#{sub.short_uuid || sub.key_uuid?.slice(0, 8)}</div>
+                              <span className={`badge ${sb.cls}`}>{sb.label}</span>
+                            </div>
+                            <div className="flex justify-between gap-2 sub" style={{ fontSize: 12 }}>
+                              <span style={sub.days_left <= 3 ? { color: 'var(--danger)' } : undefined}>{sub.days_left <= 0 ? 'Истекла' : `${sub.days_left} дн.`}</span>
+                              <span>{sub.devices_limit ?? 1} устр.</span>
+                              <span>{sub.traffic_limit > 0 ? `${gb(sub.traffic_used).toFixed(1)} / ${gb(sub.traffic_limit).toFixed(0)} ГБ` : 'Безлимит'}</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 mt-3" style={{ paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                              <button className="btn sm" onClick={() => handleSubAction(sub.id, 'EXTEND_SUB')}>Продлить</button>
+                              <button className="btn sm" onClick={() => handleSubAction(sub.id, 'REDUCE_SUB')}>Уменьшить</button>
+                              <button className="btn sm" onClick={() => handleSubAction(sub.id, 'SET_TRAFFIC')}>Трафик</button>
+                              <button className="btn sm" onClick={() => handleSubAction(sub.id, 'SET_DEVICES')}>Устройства</button>
+                              <button className={`btn sm ${sub.status === 'Blocked' ? 'solid' : 'danger'}`} style={{ gridColumn: 'span 2' }}
+                                onClick={() => handleBlockSubscription(sub.id, sub.status !== 'Blocked')}>
+                                {sub.status === 'Blocked' ? 'Разблокировать' : 'Заблокировать'}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>}
+              </div>
+
+              {user.isPartner && (
+                <div className="card" style={{ padding: 18 }}>
+                  <div className="flex items-center gap-2 mb-3"><Users size={16} className="faint" /><span className="h-sec">Партнёрская программа</span></div>
+                  <div className="grid grid-cols-2 gap-2 mb-3">
+                    <div className="inset" style={{ padding: 12 }}><div className="sub">Баланс</div><div className="stat-value" style={{ fontSize: 20 }}>{user.partnerBalance} ₽</div></div>
+                    <div className="inset" style={{ padding: 12 }}><div className="sub">Рефералов</div><div className="stat-value" style={{ fontSize: 20 }}>{user.referrals}</div></div>
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    <div><label className="field-label">Реф-код</label><input className="input mono" readOnly value={user.refCode} /></div>
+                    <div><label className="field-label">1-я линия, %</label><input className="input" type="number" value={partnerRateDraft} onChange={(e) => setPartnerRateDraft(Number(e.target.value) || 0)} /></div>
+                    <div><label className="field-label">2-я линия, %</label><input className="input" type="number" value={secondLevelRateDraft} onChange={(e) => setSecondLevelRateDraft(Number(e.target.value) || 0)} /></div>
+                    <button className="btn solid block" onClick={saveReferralRates}>Сохранить ставки</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* right column */}
+            <div className="flex flex-col gap-4">
+              <div className="card" style={{ padding: 18 }}>
+                <div className="flex items-center gap-2 mb-3"><Users size={16} className="faint" /><span className="h-sec">Рефералы</span></div>
+                {loadingRefs ? <div className="sub" style={{ textAlign: 'center', padding: 16 }}>Загрузка…</div>
+                  : referrals.length === 0 ? <div className="sub" style={{ textAlign: 'center', padding: 16 }}>Нет привязанных рефералов</div>
+                  : <div className="flex flex-col gap-2" style={{ maxHeight: 360, overflowY: 'auto' }}>
+                      {referrals.map((r) => (
+                        <div key={r.id} className="inset flex items-center justify-between" style={{ padding: 12 }}>
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 500 }}>{r.username ? (String(r.username).startsWith('@') ? r.username : `@${r.username}`) : `id${r.id}`}</div>
+                            <div className="sub mono">{r.telegram_id}{r.is_partner ? ` · партнёр ${r.partner_rate}%` : ''}</div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button className="btn sm" onClick={() => openReferralProfile(r.id)}>Открыть</button>
+                            <button className="btn sm danger" onClick={() => unlinkReferral(r.id)}>Отвязать</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>}
+              </div>
+
+              <div className="card" style={{ padding: 18 }}>
+                <div className="flex items-center gap-2 mb-3"><Bell size={16} className="faint" /><span className="h-sec">Действия</span></div>
+                <div className="flex flex-col gap-2">
+                  <button className="btn block" onClick={handleNotify}><Bell size={16} /> Уведомить пользователя</button>
+                  {user.status !== 'Banned' && !user.inBlacklist
+                    ? <button className="btn block danger" onClick={() => setActiveAction('BAN')}><Ban size={16} /> Заблокировать</button>
+                    : <button className="btn block" onClick={() => setActiveAction('UNBAN')}><CheckCircle size={16} /> Разблокировать{user.inBlacklist ? ' (из ЧС)' : ''}</button>}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-
-        <div className="p-4 md:p-6">
-            {activePage === 'Главная страница' && <Dashboard />}
-            {activePage === 'Финансы' && <FinancePage transactions={transactions} onSelectTransaction={setSelectedTransaction} />}
-            {activePage === 'Пользователи' && <UsersPage userSearch={userSearch} setUserSearch={setUserSearch} setSelectedUser={setSelectedUser} setMassActionType={setMassActionType} />}
-            {activePage === 'Подписки' && <KeysPage keySearch={keySearch} setKeySearch={setKeySearch} setIsCreateKeyOpen={setIsCreateKeyOpen} setEditingKey={setEditingKey} />}
-            {activePage === 'Рассылка' && <MailingPage onToast={addToast} />}
-            {activePage === 'Промокоды' && <PromocodesPage promos={promos} onToast={addToast} />}
-            {activePage === 'Акции' && <PromotionsPage onToast={addToast} />}
-            {activePage === 'Специальные ссылки' && <TrackingLinksPage onToast={addToast} />}
-            {activePage === 'Настройки' && <SettingsPage onToast={addToast} />}
-        </div>
-      </main>
+      </div>
     </div>
   );
-}
-
-// --- SUB-COMPONENTS FOR PAGES ---
-
-// Простой горизонтальный список «метка — значение — доля» вместо круговой диаграммы
-const DistributionList: React.FC<{ data: { label: string; value: number }[] }> = ({ data }) => {
-    const total = (data || []).reduce((acc, it) => acc + (it.value || 0), 0) || 1;
-    if (!data || data.length === 0) {
-        return <p className="text-sm text-gray-600">Нет данных</p>;
-    }
-    return (
-        <div className="space-y-3">
-            {data.map((it, i) => {
-                const pct = Math.round((it.value / total) * 100);
-                return (
-                    <div key={i}>
-                        <div className="flex justify-between text-sm mb-1">
-                            <span className="text-gray-300">{it.label}</span>
-                            <span className="text-gray-500">{pct}%</span>
-                        </div>
-                        <div className="w-full bg-gray-800 h-1.5 rounded-full">
-                            <div className="bg-gray-500 h-1.5 rounded-full" style={{ width: `${pct}%` }} />
-                        </div>
-                    </div>
-                );
-            })}
-        </div>
-    );
 };
 
-const Dashboard = () => {
-    const [summary, setSummary] = useState<{
-        total_users: number;
-        active_keys: number;
-        monthly_revenue: number;
-    } | null>(null);
-
-    const [stats, setStats] = useState<any>(null);
-    const [period, setPeriod] = useState<'week' | 'month' | 'year'>('month');
-
-    useEffect(() => {
-        (async () => {
-            try {
-                const data = await apiFetch('/panel/stats/summary');
-                if (data) {
-                    setSummary(data);
-                }
-            } catch (e) {
-                console.error('Failed to load dashboard summary', e);
-            }
-        })();
-    }, []);
-
-    useEffect(() => {
-        (async () => {
-            try {
-                const data = await apiFetch(`/panel/statistics/full?period=${period}`);
-                if (data) {
-                    setStats(data);
-                }
-            } catch (e) {
-                console.error('Failed to load statistics', e);
-            }
-        })();
-    }, [period]);
-
-    const fmtNumber = (v: number) =>
-        (v ?? 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 });
-
-    const fmtMoneyStat = (v: number) =>
-        v >= 1000000
-            ? `${(v / 1000000).toFixed(1)}M ₽`
-            : `${(v ?? 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽`;
-
-    // Единый источник для карточек: сперва детальная статистика, иначе краткая сводка
-    const totalUsers = stats?.totalUsers ?? summary?.total_users;
-    const activeSubs = stats?.activeSubscriptions ?? summary?.active_keys;
-    const monthlyRevenue = summary?.monthly_revenue;
-
-    return (
-        <div className="space-y-6">
-            <div>
-                <h2 className="text-xl font-semibold text-white">Панель управления</h2>
-                <p className="text-gray-500 mt-1 text-sm">Обзор BlinVPN</p>
-            </div>
-
-            {/* Ключевые метрики — без повторов */}
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-                <StatCard title="Пользователи" value={totalUsers != null ? fmtNumber(totalUsers) : '—'} icon={Users} color="gray" />
-                <StatCard title="Активные подписки" value={activeSubs != null ? fmtNumber(activeSubs) : '—'} icon={Key} color="gray" />
-                <StatCard title="Доход за месяц" value={monthlyRevenue != null ? fmtMoneyStat(monthlyRevenue) : '—'} icon={DollarSign} color="gray" />
-                <StatCard title="Платежей сегодня" value={stats ? fmtNumber(stats.paymentsToday) : '—'} icon={CreditCard} color="gray" />
-                <StatCard title="Баланс клиентов" value={stats ? fmtMoneyStat(stats.clientsBalance) : '—'} icon={Wallet} color="gray" />
-            </div>
-
-            {!stats ? (
-                <div className="flex items-center justify-center h-48"><Loader className="animate-spin text-gray-500" size={28} /></div>
-            ) : (
-                <>
-                    {/* Выручка (сводка вместо графика) */}
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                        <div className="flex justify-between items-center mb-5">
-                            <h3 className="text-base font-semibold text-white">Выручка</h3>
-                            <select
-                                value={period}
-                                onChange={(e) => setPeriod(e.target.value as 'week' | 'month' | 'year')}
-                                className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-3 py-1.5 focus:ring-gray-500 focus:border-gray-500 outline-none"
-                            >
-                                <option value="month">За 30 дней</option>
-                                <option value="week">За неделю</option>
-                                <option value="year">За год</option>
-                            </select>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                            <div className="rounded-lg bg-gray-800/40 p-4">
-                                <p className="text-gray-500 text-sm">В среднем в день</p>
-                                <div className="text-2xl font-semibold text-white mt-1">{fmtMoneyStat(stats.avgDaily || 0)}</div>
-                            </div>
-                            <div className="rounded-lg bg-gray-800/40 p-4">
-                                <p className="text-gray-500 text-sm">Лучший день</p>
-                                <div className="text-2xl font-semibold text-white mt-1">{fmtMoneyStat(stats.bestDayValue || 0)}</div>
-                                <div className="text-gray-500 text-xs mt-1">{stats.bestDayDate || ''}</div>
-                            </div>
-                            <div className="rounded-lg bg-gray-800/40 p-4">
-                                <p className="text-gray-500 text-sm">Куплено за неделю</p>
-                                <div className="text-2xl font-semibold text-white mt-1">+{fmtNumber(stats.boughtThisWeek)}</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Распределения — простые полосы вместо круговых диаграмм */}
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                            <h3 className="text-base font-semibold text-white mb-5">Распределение пользователей</h3>
-                            <DistributionList data={stats.userDistData || []} />
-                        </div>
-                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                            <h3 className="text-base font-semibold text-white mb-5">Способы оплаты</h3>
-                            <DistributionList data={stats.paymentMethodsData || []} />
-                        </div>
-                    </div>
-
-                    {/* Подписки / Конверсия / Рефералы */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                            <h3 className="text-base font-semibold text-white mb-4">Подписки</h3>
-                            <div className="space-y-3 text-sm">
-                                <div className="flex justify-between"><span className="text-gray-500">Всего подписок</span><span className="text-white font-medium">{fmtNumber(stats.totalSubscriptions)}</span></div>
-                                <div className="flex justify-between"><span className="text-gray-500">Платные</span><span className="text-green-400 font-medium">{fmtNumber(stats.paidSubscriptions)}</span></div>
-                                <div className="flex justify-between"><span className="text-gray-500">Куплено за неделю</span><span className="text-white font-medium">+{fmtNumber(stats.boughtThisWeek)}</span></div>
-                            </div>
-                        </div>
-                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                            <h3 className="text-base font-semibold text-white mb-4">Конверсия Trial {'>'} Paid</h3>
-                            <span className="text-4xl font-semibold text-white">{stats.conversionRate?.toFixed(1) || 0}%</span>
-                            <p className="text-xs text-gray-500 mt-2">Переходят на платный тариф после пробного периода.</p>
-                            <div className="w-full bg-gray-800 h-1.5 rounded-full mt-4"><div className="bg-gray-400 h-1.5 rounded-full" style={{ width: `${Math.min(stats.conversionRate || 0, 100)}%` }} /></div>
-                        </div>
-                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                            <h3 className="text-base font-semibold text-white mb-4">Рефералы</h3>
-                            <div className="space-y-3 text-sm">
-                                <div className="flex justify-between"><span className="text-gray-500">Всего приглашено</span><span className="text-white font-medium">{fmtNumber(stats.totalInvited)}</span></div>
-                                <div className="flex justify-between"><span className="text-gray-500">Партнеров</span><span className="text-white font-medium">{fmtNumber(stats.partners)}</span></div>
-                                <div className="flex justify-between"><span className="text-gray-500">Выплачено</span><span className="text-white font-medium">{fmtMoneyStat(stats.totalPaid)}</span></div>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Топ рефералов */}
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-                        <div className="p-5 border-b border-gray-800"><h3 className="text-base font-semibold text-white">Топ рефералов</h3></div>
-                        <table className="w-full text-left">
-                            <thead><tr className="text-gray-500 text-xs uppercase border-b border-gray-800"><th className="px-6 py-3 font-medium">Пользователь</th><th className="px-6 py-3 font-medium">Пригласил</th><th className="px-6 py-3 font-medium">Заработал</th></tr></thead>
-                            <tbody className="divide-y divide-gray-800">
-                                {(stats.topReferrers || []).map((r: any) => (
-                                    <tr key={r.id}>
-                                        <td className="px-6 py-3 text-white flex items-center"><Trophy size={15} className="mr-2 text-gray-500" /> {r.name}</td>
-                                        <td className="px-6 py-3 text-gray-400">{r.count} чел.</td>
-                                        <td className="px-6 py-3 text-gray-200 font-medium">{r.earned.toLocaleString('ru-RU')} ₽</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                </>
-            )}
-        </div>
-    );
-};
-
-interface FinancePageProps {
-  transactions: Transaction[];
-  onSelectTransaction: (t: Transaction) => void;
-}
-
-const FinancePage: React.FC<FinancePageProps> = ({ transactions, onSelectTransaction }) => {
-    const [stats, setStats] = useState<{
-        deposits: number;
-        depositsChange: string;
-        withdrawals: number;
-        withdrawalsChange: string;
-        successfulOps: number;
-    } | null>(null);
-
-    useEffect(() => {
-        (async () => {
-            try {
-                const data = await apiFetch('/panel/finance/stats');
-                if (data) {
-                    setStats(data);
-                }
-            } catch (e) {
-                console.error('Failed to load finance stats', e);
-            }
-        })();
-    }, []);
-
-    const fmtMoney = (v: number) =>
-        `${v.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ₽`;
-
-    return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4"><div><h2 className="text-2xl font-bold text-white">Финансы</h2><p className="text-gray-400 mt-1">Управление доходами</p></div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <StatCard 
-                    title="Пополнения" 
-                    value={stats ? fmtMoney(stats.deposits) : '—'} 
-                    change={stats?.depositsChange} 
-                    icon={ArrowUpRight} 
-                    color="green" 
-                />
-                <StatCard 
-                    title="Успешные операции" 
-                    value={stats ? stats.successfulOps.toLocaleString('ru-RU') : '—'} 
-                    subValue="операций" 
-                    icon={Activity} 
-                    color="blue" 
-                />
-            </div>
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-sm"><div className="overflow-x-auto"><table className="w-full text-left border-collapse"><thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase tracking-wider"><th className="px-6 py-4">ID</th><th className="px-6 py-4">Пользователь</th><th className="px-6 py-4">Сумма</th><th className="px-6 py-4">Статус</th><th className="px-6 py-4">Дата</th></tr></thead><tbody className="divide-y divide-gray-800">{transactions.map((tx) => (<tr key={tx.id} onClick={() => onSelectTransaction(tx)} className="hover:bg-gray-800/30 cursor-pointer"><td className="px-6 py-4 text-sm text-gray-500">#{tx.id}</td><td className="px-6 py-4 text-sm text-gray-300">{tx.user}</td><td className={`px-6 py-4 text-sm font-bold ${tx.amount > 0 ? 'text-green-400' : 'text-white'}`}>{tx.amount > 0 ? '+' : ''}{tx.amount} ₽</td><td className="px-6 py-4 text-sm text-gray-400">{tx.status}</td><td className="px-6 py-4 text-sm text-gray-500">{tx.date}</td></tr>))}</tbody></table></div></div>
-        </div>
-    );
-};
-
-// ==========================================
-// SHARED API -> UI MAPPERS (используются и при первичной загрузке,
-// и в постраничной загрузке через usePaginatedList)
-// ==========================================
+// ==========================================================
+// 4. MAPPERS
+// ==========================================================
 
 function mapApiUser(u: any): User {
   return {
     id: u.id,
     telegramId: u.telegram_id,
-    username: u.username ? (u.username.startsWith('@') ? u.username : `@${u.username}`) : `id${u.telegram_id}`,
-    name: u.full_name || '',
+    username: u.username ? (String(u.username).startsWith('@') ? u.username : `@${u.username}`) : `id${u.telegram_id}`,
     balance: u.balance ?? 0,
-    // Приоритет: in_blacklist -> Banned, is_banned -> Banned, иначе статус из БД или Trial
     status: (u.in_blacklist || u.is_banned) ? 'Banned' : ((u.status as UserStatus) || 'Trial'),
-    traffic: 0,
-    maxTraffic: 100,
-    devices: 0,
-    maxDevices: 1,
     regDate: u.registration_date ? new Date(u.registration_date).toLocaleDateString('ru-RU') : '',
     paidUntil: u.paid_until ? new Date(u.paid_until).toLocaleDateString('ru-RU') : '—',
-    autoPayDetails: { sbp: false, card: false, crypto: false },
-    refLink: `https://t.me/${BOT_USERNAME}?start=ref=${u.telegram_id}`,
     refCode: u.referral_code || '',
-    squads: [],
-    firstDeposit: false,
-    wasPaid: false,
     isPartner: !!u.is_partner,
     partnerBalance: u.partner_balance ?? 0,
     partnerRate: u.partner_rate ?? 25,
     secondLevelRate: u.second_level_rate ?? 5,
-    thirdLevelRate: u.third_level_rate ?? 2,
-    referrals: 0,
-    totalEarned: u.total_earned ?? 0,
+    referrals: u.referrals ?? 0,
     inBlacklist: !!u.in_blacklist,
   };
 }
@@ -2232,2692 +979,1291 @@ function mapApiKey(k: any): KeyItem {
     key: k.key_config || k.key_uuid || `key_${k.id}`,
     user: k.username || `@user_${k.user_id}`,
     status: (k.status as KeyStatus) || 'Active',
-    expiry: k.expiry_date
-      ? Math.ceil((new Date(k.expiry_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-      : 0,
+    expiry: k.expiry_date ? Math.ceil((new Date(k.expiry_date).getTime() - Date.now()) / 86_400_000) : 0,
     trafficUsed: k.traffic_used ?? 0,
     trafficLimit: k.traffic_limit ?? 0,
     devicesUsed: k.devices_used ?? 0,
     devicesLimit: k.devices_limit ?? 1,
-    server: k.server_location || 'Unknown',
   };
 }
 
-interface UsersPageProps {
-  userSearch: string;
-  setUserSearch: (s: string) => void;
-  setSelectedUser: (u: User) => void;
-  setMassActionType: (t: string | null) => void;
+// ==========================================================
+// 5. LOGIN
+// ==========================================================
+
+function LoginForm({ onLogin }: { onLogin: (token: string) => void }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [tempToken, setTempToken] = useState('');
+  const [verifyCode, setVerifyCode] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [initInfo, setInitInfo] = useState<{ username?: string; password?: string; newAdmin?: boolean; passwordRegenerated?: boolean; message?: string } | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const setupToken = params.get('setup_token') || '';
+    const headers: Record<string, string> = {};
+    if (setupToken) headers['X-Panel-Setup-Token'] = setupToken;
+    const qs = setupToken ? `?setup_token=${encodeURIComponent(setupToken)}` : '';
+    fetch(`/api/panel/auth/init${qs}`, { headers })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.show_credentials && data.password && data.username) {
+          setInitInfo({ username: data.username, password: data.password, newAdmin: !!data.new_admin, passwordRegenerated: !!data.password_regenerated, message: data.message });
+          setUsername(data.username);
+        }
+      }).catch(() => {});
+  }, []);
+
+  const submitCreds = async (e: React.FormEvent) => {
+    e.preventDefault(); setError(''); setLoading(true);
+    try {
+      const res = await fetch('/api/panel/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+      const data = await res.json();
+      if (res.ok && data.requires_2fa && data.temp_token) setTempToken(data.temp_token);
+      else if (res.ok && data.session_token) { setPanelToken(data.session_token); onLogin(data.session_token); }
+      else setError(data.error || 'Неверные учётные данные');
+    } catch { setError('Ошибка подключения к серверу'); }
+    setLoading(false);
+  };
+
+  const submitCode = async (e: React.FormEvent) => {
+    e.preventDefault(); setError(''); setLoading(true);
+    try {
+      const res = await fetch('/api/panel/auth/verify-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ temp_token: tempToken, code: verifyCode }) });
+      const data = await res.json();
+      if (res.ok && data.session_token) { setPanelToken(data.session_token); onLogin(data.session_token); }
+      else setError(data.error || 'Неверный код');
+    } catch { setError('Ошибка подключения к серверу'); }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div className="card-lg rise" style={{ padding: 32, width: '100%', maxWidth: 400, background: 'var(--surface)', border: '1px solid var(--border-strong)' }}>
+        <div style={{ textAlign: 'center', marginBottom: 28 }}>
+          <div className="avatar" style={{ width: 56, height: 56, borderRadius: 14, margin: '0 auto 14px' }}>
+            <img src="https://blinvpn.cc/assets/logo.png" alt="BlinVPN" style={{ width: '100%', height: '100%', objectFit: 'contain', padding: 8 }}
+              onError={(e) => { const img = e.currentTarget; img.style.display = 'none'; (img.nextElementSibling as HTMLElement | null)?.style.setProperty('display', 'block'); }} />
+            <Lock size={26} style={{ display: 'none' }} />
+          </div>
+          <h1 className="h-page" style={{ fontSize: 22 }}>BlinVPN Panel</h1>
+          <p className="sub mt-1">Вход в панель управления</p>
+        </div>
+
+        {initInfo?.password && (
+          <div className="inset" style={{ padding: 14, marginBottom: 20 }}>
+            <div style={{ fontWeight: 600, marginBottom: 8 }}>
+              {initInfo.newAdmin ? 'Создан администратор' : initInfo.passwordRegenerated ? 'Пароль сброшен' : 'Данные для входа'}
+            </div>
+            <div className="sub">Логин: <code className="mono" style={{ color: 'var(--text)', userSelect: 'all' }}>{initInfo.username}</code></div>
+            <div className="sub">Пароль: <code className="mono" style={{ color: 'var(--text)', userSelect: 'all', wordBreak: 'break-all' }}>{initInfo.password}</code></div>
+            <div className="faint mt-2" style={{ fontSize: 12 }}>{initInfo.message || 'Показывается до первого входа. Сохраните.'}</div>
+          </div>
+        )}
+
+        {!tempToken ? (
+          <form onSubmit={submitCreds} className="flex flex-col gap-4">
+            <div><label className="field-label">Логин</label><input className="input" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="admin" required /></div>
+            <div><label className="field-label">Пароль</label><input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required /></div>
+            {error && <div className="badge danger" style={{ width: '100%', padding: '10px 12px', justifyContent: 'flex-start' }}>{error}</div>}
+            <button className="btn solid block" type="submit" disabled={loading || !username || !password} style={{ padding: 12 }}>
+              {loading ? <><Spinner size={18} /> Вход…</> : 'Войти'}
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={submitCode} className="flex flex-col gap-4">
+            <div className="inset sub" style={{ padding: 12 }}>Код подтверждения отправлен администраторам в Telegram.</div>
+            <div><label className="field-label">Код</label><input className="input mono center" value={verifyCode} onChange={(e) => setVerifyCode(e.target.value)} placeholder="123456" required /></div>
+            {error && <div className="badge danger" style={{ width: '100%', padding: '10px 12px', justifyContent: 'flex-start' }}>{error}</div>}
+            <button className="btn solid block" type="submit" disabled={loading || !verifyCode} style={{ padding: 12 }}>{loading ? 'Проверка…' : 'Подтвердить'}</button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
 }
 
-const UsersPage: React.FC<UsersPageProps> = ({ userSearch, setUserSearch, setSelectedUser, setMassActionType }) => {
-    const [statusFilter, setStatusFilter] = useState<'all' | 'Trial' | 'Active' | 'Banned'>('all');
-    const [showFilterMenu, setShowFilterMenu] = useState(false);
+// ==========================================================
+// 6. ROOT
+// ==========================================================
 
-    // Серверная пагинация + поиск (100 строк на страницу) с fallback на клиент
-    const {
-        items: pageUsers,
-        total,
-        page,
-        totalPages,
-        loading,
-        error,
-        nextPage,
-        prevPage,
-    } = usePaginatedList({
-        basePath: '/panel/users',
-        search: userSearch,
-        extraParams: { status: statusFilter === 'all' ? undefined : statusFilter },
-        mapItem: mapApiUser,
-        // клиентский фильтр статуса — на случай, если backend отдаёт всё разом
-        clientFilter: (u: User) =>
-            statusFilter === 'all' ? true :
-            statusFilter === 'Banned' ? u.status === 'Banned' : u.status === statusFilter,
-    });
+export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
 
-    const filteredUsers: User[] = pageUsers;
+  useEffect(() => {
+    const token = getPanelToken();
+    if (!token) { setIsAuthenticated(false); return; }
+    fetch('/api/panel/stats/summary', { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } })
+      .then((res) => { if (res.ok) setIsAuthenticated(true); else { clearPanelToken(); setIsAuthenticated(false); } })
+      .catch(() => setIsAuthenticated(false));
+  }, []);
 
-    const [showMassMenu, setShowMassMenu] = useState(false);
-    const menuRef = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-                setShowMassMenu(false);
-            }
-        };
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
-
-    return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div><h2 className="text-2xl font-bold text-white">Пользователи</h2><p className="text-gray-400 mt-1">Управление базой клиентов</p></div>
-                
-                {/* REPLACED BUTTONS WITH MASS ACTION DROPDOWN */}
-                <div className="relative" ref={menuRef}>
-                    <button onClick={() => setShowMassMenu(!showMassMenu)} className="flex items-center px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-black/40 transition-all">
-                        <Layers size={18} className="mr-2" /> Массовые действия <ChevronDown size={16} className={`ml-2 transition-transform ${showMassMenu ? 'rotate-180' : ''}`} />
-                    </button>
-                    {showMassMenu && (
-                        <div className="absolute right-0 mt-2 w-56 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-20 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
-                            <button onClick={() => { setMassActionType('MASS_ADD_DAYS'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
-                                <Calendar size={16} className="mr-2 text-gray-200" /> Добавить дни всем
-                            </button>
-                            <button onClick={() => { setMassActionType('MASS_ADD_BALANCE'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
-                                <DollarSign size={16} className="mr-2 text-green-400" /> Начислить баланс всем
-                            </button>
-                            <button onClick={() => { setMassActionType('MASS_BAN'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
-                                <Ban size={16} className="mr-2 text-red-400" /> Забанить всех
-                            </button>
-                            <button onClick={() => { setMassActionType('MASS_UNBAN'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
-                                <CheckCircle size={16} className="mr-2 text-green-400" /> Разбанить всех
-                            </button>
-                            <button onClick={() => { setMassActionType('MASS_RESET_TRIAL'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
-                                <RefreshCw size={16} className="mr-2 text-yellow-400" /> Сбросить пробный период
-                            </button>
-                            <button onClick={() => { setMassActionType('MASS_DELETE_KEYS'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
-                                <Trash2 size={16} className="mr-2 text-red-400" /> Удалить все ключи
-                            </button>
-                            <button onClick={() => { setMassActionType('MASS_SET_PARTNER'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center border-b border-gray-800">
-                                <UserPlus size={16} className="mr-2 text-indigo-400" /> Сделать партнерами
-                            </button>
-                            <button onClick={() => { setMassActionType('MASS_REMOVE_PARTNER'); setShowMassMenu(false); }} className="w-full text-left px-4 py-3 text-sm text-gray-200 hover:bg-gray-800 flex items-center">
-                                <UserMinus size={16} className="mr-2 text-gray-400" /> Убрать партнерство
-                            </button>
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            <div className="flex space-x-4">
-                <div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-500" placeholder="Поиск по имени, username или ID..." /></div>
-                <div className="relative">
-                    <button onClick={() => setShowFilterMenu(!showFilterMenu)} className={`px-4 py-3 bg-gray-900 border rounded-xl text-gray-300 hover:bg-gray-800 transition-colors flex items-center ${statusFilter !== 'all' ? 'border-gray-600 text-gray-200' : 'border-gray-700'}`}>
-                        <Filter size={18} className="mr-2" /> 
-                        {statusFilter === 'all' ? 'Фильтр' : statusFilter === 'Trial' ? 'Триал' : statusFilter === 'Active' ? 'Активные' : 'Забаненные'}
-                    </button>
-                    {showFilterMenu && (
-                        <div className="absolute top-full right-0 mt-2 bg-gray-900 border border-gray-700 rounded-xl shadow-xl z-20 overflow-hidden min-w-[150px]">
-                            {[{v: 'all', l: 'Все'}, {v: 'Trial', l: 'Триал'}, {v: 'Active', l: 'Активные'}, {v: 'Banned', l: 'Забаненные'}].map(opt => (
-                                <button key={opt.v} onClick={() => { setStatusFilter(opt.v as any); setShowFilterMenu(false); }} className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-800 transition-colors ${statusFilter === opt.v ? 'text-gray-200 bg-white/5' : 'text-gray-300'}`}>{opt.l}</button>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            </div>
-            {error && (
-                <div className="bg-red-600/10 border border-red-500/30 rounded-xl px-4 py-3 text-sm text-red-300">{error}</div>
-            )}
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-sm">
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                        <thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase tracking-wider"><th className="px-6 py-4">Пользователь</th><th className="px-6 py-4">Баланс</th><th className="px-6 py-4">Подписка</th><th className="px-6 py-4">Партнер</th><th className="px-6 py-4 text-right">Действие</th></tr></thead>
-                        <tbody className="divide-y divide-gray-800">
-                            {loading && filteredUsers.length === 0 ? (
-                                <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-500"><Loader size={20} className="animate-spin inline-block mr-2 text-gray-200" />Загрузка...</td></tr>
-                            ) : filteredUsers.length === 0 ? (
-                                <tr><td colSpan={5} className="px-6 py-12 text-center text-gray-500">Ничего не найдено</td></tr>
-                            ) : filteredUsers.map((user) => (
-                                <tr key={user.id} onClick={() => setSelectedUser(user)} className="hover:bg-gray-800/30 cursor-pointer group">
-                                    <td className="px-6 py-4 text-sm font-medium text-white flex items-center"><div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center mr-3 text-xs font-bold text-gray-300">{user.username.substring(0, 2).toUpperCase()}</div>{user.username}</td>
-                                    <td className="px-6 py-4 text-sm text-white font-bold">{user.balance} ₽</td>
-                                    <td className="px-6 py-4 text-sm text-gray-400">{user.paidUntil}</td>
-                                    <td className="px-6 py-4 text-sm">{user.isPartner ? <span className="text-indigo-400 bg-indigo-400/10 px-2 py-0.5 rounded text-xs border border-indigo-400/20">Да</span> : <span className="text-gray-600">-</span>}</td>
-                                    <td className="px-6 py-4 text-right"><button className="text-gray-500 hover:text-white p-2 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors"><Settings size={16} /></button></td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            <PaginationBar
-                page={page}
-                totalPages={totalPages}
-                total={total}
-                loading={loading}
-                onPrev={prevPage}
-                onNext={nextPage}
-            />
-        </div>
-    );
-};
-
-interface KeysPageProps {
-  keySearch: string;
-  setKeySearch: (s: string) => void;
-  setIsCreateKeyOpen: (b: boolean) => void;
-  setEditingKey: (k: KeyItem | null) => void;
+  if (isAuthenticated === null) return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spinner size={36} /></div>;
+  if (!isAuthenticated) return <LoginForm onLogin={() => setIsAuthenticated(true)} />;
+  return <AuthenticatedApp onLogout={() => { clearPanelToken(); setIsAuthenticated(false); }} />;
 }
 
-const KeysPage: React.FC<KeysPageProps> = ({ keySearch, setKeySearch, setIsCreateKeyOpen, setEditingKey }) => {
-    const [statusFilter, setStatusFilter] = useState<'all' | 'Active' | 'Expired' | 'Banned'>('all');
-    const [showFilterMenu, setShowFilterMenu] = useState(false);
+const NAV = [
+  { group: 'Главное', items: [{ name: 'Главная', icon: Home }, { name: 'Финансы', icon: DollarSign }] },
+  { group: 'Пользователи', items: [{ name: 'Пользователи', icon: Users }, { name: 'Подписки', icon: Key }] },
+  { group: 'Маркетинг', items: [{ name: 'Рассылка', icon: Mail }, { name: 'Промокоды', icon: Gift }, { name: 'Акции', icon: Percent }, { name: 'Ссылки', icon: Link }] },
+  { group: 'Другое', items: [{ name: 'Настройки', icon: Settings }] },
+];
 
-    // Серверная пагинация + поиск (100 строк на страницу) с fallback на клиент
-    const {
-        items: pageKeys,
-        total,
-        page,
-        totalPages,
-        loading,
-        error,
-        nextPage,
-        prevPage,
-    } = usePaginatedList({
-        basePath: '/panel/keys',
-        search: keySearch,
-        extraParams: { status: statusFilter === 'all' ? undefined : statusFilter },
-        mapItem: mapApiKey,
-        clientFilter: (k: KeyItem) => statusFilter === 'all' ? true : k.status === statusFilter,
-    });
+function AuthenticatedApp({ onLogout }: { onLogout: () => void }) {
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [activePage, setActivePage] = useState('Главная');
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+  const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [userSearch, setUserSearch] = useState('');
+  const [massActionType, setMassActionType] = useState<string | null>(null);
+  const [keySearch, setKeySearch] = useState('');
+  const [isCreateKeyOpen, setIsCreateKeyOpen] = useState(false);
+  const [editingKey, setEditingKey] = useState<KeyItem | null>(null);
 
-    const filteredKeys: KeyItem[] = pageKeys;
+  const addToast = (title: string, message: string, type: ToastType = 'success') => {
+    const id = Date.now() + Math.random();
+    setToasts((p) => [...p, { id, title, message, type }]);
+    setTimeout(() => setToasts((p) => p.filter((t) => t.id !== id)), 4000);
+  };
 
-    return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4"><div><h2 className="text-2xl font-bold text-white">Подписки</h2><p className="text-gray-400 mt-1">Управление подписками VLESS/Vmess</p></div><button onClick={() => setIsCreateKeyOpen(true)} className="flex items-center px-5 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-black/40 transition-all"><Plus size={18} className="mr-2" />Создать</button></div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6"><StatCard title="Всего ключей" value={total} icon={Key} color="blue" /><StatCard title="Истёкшие (стр.)" value={filteredKeys.filter(k => k.status === 'Expired').length} icon={Clock} color="orange" /><StatCard title="Заблок. (стр.)" value={filteredKeys.filter(k => k.status === 'Banned').length} icon={Ban} color="red" /></div>
-            <div className="flex space-x-4">
-                <div className="relative flex-grow"><div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Search className="h-4 w-4 text-gray-500" /></div><input type="text" value={keySearch} onChange={e => setKeySearch(e.target.value)} className="block w-full pl-10 pr-3 py-3 bg-gray-900 border border-gray-700 rounded-xl leading-5 text-gray-300 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-500" placeholder="Поиск по ключу, пользователю..." /></div>
-                <div className="relative">
-                    <button onClick={() => setShowFilterMenu(!showFilterMenu)} className={`px-4 py-3 bg-gray-900 border rounded-xl text-gray-300 hover:bg-gray-800 transition-colors flex items-center ${statusFilter !== 'all' ? 'border-gray-600 text-gray-200' : 'border-gray-700'}`}>
-                        <Filter size={18} className="mr-2" /> 
-                        {statusFilter === 'all' ? 'Фильтр' : statusFilter === 'Active' ? 'Активные' : statusFilter === 'Expired' ? 'Истёкшие' : 'Забаненные'}
-                    </button>
-                    {showFilterMenu && (
-                        <div className="absolute top-full right-0 mt-2 bg-gray-900 border border-gray-700 rounded-xl shadow-xl z-20 overflow-hidden min-w-[150px]">
-                            {[{v: 'all', l: 'Все'}, {v: 'Active', l: 'Активные'}, {v: 'Expired', l: 'Истёкшие'}, {v: 'Banned', l: 'Забаненные'}].map(opt => (
-                                <button key={opt.v} onClick={() => { setStatusFilter(opt.v as any); setShowFilterMenu(false); }} className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-800 transition-colors ${statusFilter === opt.v ? 'text-gray-200 bg-white/5' : 'text-gray-300'}`}>{opt.l}</button>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            </div>
-            {error && (
-                <div className="bg-red-600/10 border border-red-500/30 rounded-xl px-4 py-3 text-sm text-red-300">{error}</div>
-            )}
-             <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-sm">
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                        <thead><tr className="bg-gray-800/50 text-gray-400 text-xs uppercase tracking-wider"><th className="px-6 py-4">ID / Ключ</th><th className="px-6 py-4">Пользователь</th><th className="px-6 py-4">Статус</th><th className="px-6 py-4">Осталось</th><th className="px-6 py-4">Трафик</th><th className="px-6 py-4">Устр.</th><th className="px-6 py-4 text-right"></th></tr></thead>
-                        <tbody className="divide-y divide-gray-800">
-                            {loading && filteredKeys.length === 0 ? (
-                                <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-500"><Loader size={20} className="animate-spin inline-block mr-2 text-gray-200" />Загрузка...</td></tr>
-                            ) : filteredKeys.length === 0 ? (
-                                <tr><td colSpan={7} className="px-6 py-12 text-center text-gray-500">Ничего не найдено</td></tr>
-                            ) : filteredKeys.map((k) => (
-                                <tr key={k.id} onClick={() => setEditingKey(k)} className="hover:bg-gray-800/30 transition-colors group cursor-pointer relative">
-                                    <td className="px-6 py-4"><div className="text-sm font-mono text-white">#{k.id}</div><div className="text-xs text-gray-500 truncate w-32 font-mono mt-0.5 opacity-70">{k.key}</div></td>
-                                    <td className="px-6 py-4 text-sm text-gray-200 font-medium">{k.user}</td><td className="px-6 py-4"><span className={`px-2 py-1 rounded text-xs font-medium border ${k.status === 'Active' ? 'bg-green-500/10 text-green-400 border-green-500/20' : k.status === 'Expired' ? 'bg-white/5 text-gray-200 border-white/10' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>{k.status}</span></td>
-                                    <td className="px-6 py-4 text-sm text-gray-300">{k.expiry > 0 ? `${k.expiry} дн.` : 'Истёк'}</td>
-                                    <td className="px-6 py-4"><div className="text-xs text-gray-400 mb-1">{(k.trafficUsed / (1024**3)).toFixed(1)} / {k.trafficLimit > 0 ? (k.trafficLimit / (1024**3)).toFixed(0) : '∞'} GB</div><div className="w-24 bg-gray-800 rounded-full h-1.5"><div className={`h-1.5 rounded-full ${k.trafficLimit > 0 && k.trafficUsed/k.trafficLimit > 0.9 ? 'bg-red-500' : k.trafficLimit > 0 && k.trafficUsed/k.trafficLimit > 0.7 ? 'bg-yellow-500' : 'bg-gray-700'}`} style={{ width: `${k.trafficLimit > 0 ? Math.min(100, (k.trafficUsed/k.trafficLimit)*100) : 0}%` }}></div></div></td><td className="px-6 py-4 text-sm text-gray-400 text-center">{k.devicesUsed}/{k.devicesLimit}</td>
-                                    <td className="px-6 py-4 text-right"><div className="p-2 bg-gray-800 rounded-lg text-gray-500 group-hover:bg-gray-600 group-hover:text-white transition-colors inline-block"><Edit2 size={16} /></div></td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            <PaginationBar
-                page={page}
-                totalPages={totalPages}
-                total={total}
-                loading={loading}
-                onPrev={prevPage}
-                onNext={nextPage}
-                totalLabel="Всего подписок"
-            />
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const tx = await apiFetch('/panel/transactions?limit=100');
+        if (!cancelled && Array.isArray(tx)) {
+          setTransactions(tx.map((t: any) => ({
+            id: t.id, user: t.user || `@user_${t.user_id}`, amount: t.amount ?? 0,
+            type: t.amount > 0 ? 'income' : 'expense', status: t.status || 'Pending', method: t.payment_method || 'Unknown',
+            date: t.created_at ? new Date(t.created_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '',
+            hash: t.hash || t.payment_id || '',
+          })));
+        }
+      } catch (e) { console.error(e); if (!cancelled) addToast('Ошибка', 'Не удалось загрузить транзакции', 'error'); }
+
+      try {
+        const usersApi = await apiFetch('/panel/users?limit=500&offset=0');
+        if (!cancelled) setUsers(parseListResponse(usersApi).items.map(mapApiUser));
+      } catch (e) { console.error(e); }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleUpdateKey = (id: number, newExpiry: number) => { setEditingKey(null); addToast('Готово', `Срок ключа #${id} обновлён`, 'success'); void newExpiry; };
+  const handleDeleteKey = (id: number) => { setEditingKey(null); addToast('Готово', `Ключ #${id} удалён`, 'success'); };
+
+  return (
+    <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
+      <ToastContainer toasts={toasts} removeToast={(id) => setToasts((p) => p.filter((t) => t.id !== id))} />
+
+      {selectedTransaction && <TransactionModal transaction={selectedTransaction} onClose={() => setSelectedTransaction(null)} />}
+      {selectedUser && <UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} onToast={addToast} onOpenUser={setSelectedUser} />}
+      {isCreateKeyOpen && <CreateKeyModal onClose={() => setIsCreateKeyOpen(false)} users={users} onToast={addToast} />}
+      {editingKey && <KeyEditModal keyItem={editingKey} onClose={() => setEditingKey(null)} onSave={handleUpdateKey} onDelete={handleDeleteKey} />}
+      {massActionType && (
+        <UserActionModal type={massActionType} onClose={() => setMassActionType(null)} onConfirm={async (val, notify) => {
+          try {
+            await apiFetch('/panel/users/mass-action', { method: 'POST', body: JSON.stringify({ action: massActionType, value: val, notify }) });
+            addToast('Готово', 'Массовое действие выполнено', 'success');
+          } catch { addToast('Ошибка', 'Не удалось выполнить действие', 'error'); }
+          setMassActionType(null);
+        }} />
+      )}
+
+      {/* Sidebar */}
+      <aside style={{
+        position: 'fixed', insetBlock: 0, left: 0, zIndex: 50, width: 250,
+        background: 'var(--surface)', borderRight: '1px solid var(--border)',
+        transform: isMobileMenuOpen ? 'none' : 'translateX(-100%)', transition: 'transform var(--t)', overflowY: 'auto',
+      }} className="md:!translate-x-0">
+        <div className="flex items-center gap-3" style={{ padding: 20, borderBottom: '1px solid var(--border)' }}>
+          <img src="https://blinvpn.cc/assets/logo.png" alt="" style={{ width: 34, height: 34, borderRadius: 8, objectFit: 'contain' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+          <div><div className="h-sec">BlinVPN</div><div className="faint" style={{ fontSize: 12 }}>Панель управления</div></div>
         </div>
-    );
-};
+        <nav style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {NAV.map((section) => (
+            <div key={section.group}>
+              <div className="nav-group">{section.group}</div>
+              <div className="flex flex-col gap-1">
+                {section.items.map((item) => (
+                  <button key={item.name} className={`nav-item ${activePage === item.name ? 'on' : ''}`}
+                    onClick={() => { setActivePage(item.name); setIsMobileMenuOpen(false); }}>
+                    <item.icon size={17} className={activePage === item.name ? '' : 'faint'} /> {item.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </nav>
+      </aside>
 
-interface MailingPageProps {
-  onToast: (title: string, msg: string, type: ToastType) => void;
+      {/* Main */}
+      <main className="md:!ml-[250px]" style={{ minHeight: '100vh' }}>
+        <div style={{ position: 'sticky', top: 0, zIndex: 30, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(10px)', borderBottom: '1px solid var(--border)' }}>
+          <button className="icon-btn md:!hidden" onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}>{isMobileMenuOpen ? <X size={20} /> : <Menu size={20} />}</button>
+          <div className="flex-1" />
+          <button className="icon-btn danger" onClick={onLogout} title="Выход"><Lock size={16} /></button>
+        </div>
+
+        <div style={{ padding: 20 }} className="rise">
+          {activePage === 'Главная' && <Dashboard />}
+          {activePage === 'Финансы' && <FinancePage transactions={transactions} onSelectTransaction={setSelectedTransaction} />}
+          {activePage === 'Пользователи' && <UsersPage userSearch={userSearch} setUserSearch={setUserSearch} setSelectedUser={setSelectedUser} setMassActionType={setMassActionType} />}
+          {activePage === 'Подписки' && <KeysPage keySearch={keySearch} setKeySearch={setKeySearch} setIsCreateKeyOpen={setIsCreateKeyOpen} setEditingKey={setEditingKey} />}
+          {activePage === 'Рассылка' && <MailingPage onToast={addToast} />}
+          {activePage === 'Промокоды' && <PromocodesPage onToast={addToast} />}
+          {activePage === 'Акции' && <PromotionsPage onToast={addToast} />}
+          {activePage === 'Ссылки' && <TrackingLinksPage onToast={addToast} />}
+          {activePage === 'Настройки' && <SettingsPage onToast={addToast} />}
+        </div>
+      </main>
+
+      {isMobileMenuOpen && <div onClick={() => setIsMobileMenuOpen(false)} className="md:!hidden" style={{ position: 'fixed', inset: 0, zIndex: 40, background: 'rgba(0,0,0,0.5)' }} />}
+    </div>
+  );
 }
 
-const MailingPage: React.FC<MailingPageProps> = ({ onToast }) => {
-    const [stats, setStats] = useState<{
-        totalSent: number;
-    } | null>(null);
-    const [history, setHistory] = useState<any[]>([]);
-    const [selectedHistoryItem, setSelectedHistoryItem] = useState<any | null>(null);
-    const [message, setMessage] = useState('');
-    const [buttonType, setButtonType] = useState<string>('');
-    const [buttonLabel, setButtonLabel] = useState('');
-    const [buttonUrl, setButtonUrl] = useState('');
-    const [promoCode, setPromoCode] = useState('');
-    const [imageUrl, setImageUrl] = useState('');
-    const [targetUsers, setTargetUsers] = useState('all');
+// ── page header helper ────────────────────────────────────
+const PageHead: React.FC<{ title: string; sub?: string; children?: React.ReactNode }> = ({ title, sub, children }) => (
+  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div><h2 className="h-page">{title}</h2>{sub && <p className="sub mt-1">{sub}</p>}</div>
+    {children}
+  </div>
+);
 
-    useEffect(() => {
-        (async () => {
-            try {
-                const data = await apiFetch('/panel/mailing/stats');
-                if (data) {
-                    setStats(data);
-                }
-            } catch (e) {
-                console.error('Failed to load mailing stats', e);
-            }
-        })();
+// ==========================================================
+// 7. DASHBOARD
+// ==========================================================
 
-        (async () => {
-            try {
-                const data = await apiFetch('/panel/mailing/history');
-                if (Array.isArray(data)) {
-                    setHistory(data);
-                }
-            } catch (e) {
-                console.error('Failed to load mailing history', e);
-            }
-        })();
-    }, []);
+const Dashboard = () => {
+  const [summary, setSummary] = useState<{ total_users: number; active_keys: number; monthly_revenue: number } | null>(null);
+  const [stats, setStats] = useState<any>(null);
+  const [period, setPeriod] = useState<'week' | 'month' | 'year'>('month');
 
-    // Автообновление истории пока есть рассылки в статусе "Sending"
-    useEffect(() => {
-        const hasSending = history.some((item: any) => item.status === 'Sending');
-        if (!hasSending) return;
-        const timer = setInterval(async () => {
-            try {
-                const data = await apiFetch('/panel/mailing/history');
-                if (Array.isArray(data)) setHistory(data);
-                const statsData = await apiFetch('/panel/mailing/stats');
-                if (statsData) setStats(statsData);
-            } catch {}
-        }, 4000);
-        return () => clearInterval(timer);
-    }, [history]);
+  useEffect(() => { (async () => { try { const d = await apiFetch('/panel/stats/summary'); if (d) setSummary(d); } catch (e) { console.error(e); } })(); }, []);
+  useEffect(() => { (async () => { try { const d = await apiFetch(`/panel/statistics/full?period=${period}`); if (d) setStats(d); } catch (e) { console.error(e); } })(); }, [period]);
 
-    const [isSending, setIsSending] = useState(false);
+  const totalUsers = stats?.totalUsers ?? summary?.total_users;
+  const activeSubs = stats?.activeSubscriptions ?? summary?.active_keys;
+  const monthlyRevenue = summary?.monthly_revenue;
 
-    const handleSend = async () => {
-        if (!message.trim()) {
-            onToast('Ошибка', 'Введите текст сообщения', 'error');
-            return;
-        }
-        if (buttonType === 'external_link' || buttonType === 'open_miniapp') {
-            if (!buttonLabel.trim() || !buttonUrl.trim()) {
-                onToast('Ошибка', 'Укажите текст кнопки и ссылку', 'error');
-                return;
-            }
-        } else if (buttonType === 'activate_promo' && !promoCode.trim()) {
-            onToast('Ошибка', 'Укажите промокод', 'error');
-            return;
-        }
-        if (!confirm('Подтвердить отправку рассылки?')) return;
-        setIsSending(true);
-        try {
-            const payload: any = {
-                message,
-                target_users: targetUsers,
-                title: message.substring(0, 50)
-            };
-            if (buttonType === 'external_link' || buttonType === 'open_miniapp') {
-                payload.button_type = buttonType;
-                payload.button_value = `${buttonLabel.trim()}|${buttonUrl.trim()}`;
-            } else if (buttonType === 'activate_promo') {
-                payload.button_type = buttonType;
-                payload.button_value = promoCode.trim();
-            }
-            if (imageUrl.trim()) {
-                payload.image_url = imageUrl.trim();
-            }
-            await apiFetch('/panel/mailing', {
-                method: 'POST',
-                body: JSON.stringify(payload),
-            });
-            onToast('Рассылка', 'Рассылка запущена и отправляется в фоне', 'success');
-            setMessage('');
-            setButtonType('');
-            setButtonLabel('');
-            setButtonUrl('');
-            setPromoCode('');
-            setImageUrl('');
-            // Обновляем статистику и историю
-            const statsData = await apiFetch('/panel/mailing/stats');
-            if (statsData) setStats(statsData);
-            const historyData = await apiFetch('/panel/mailing/history');
-            if (Array.isArray(historyData)) setHistory(historyData);
-        } catch (e: any) {
-            onToast('Ошибка', 'Не удалось отправить рассылку', 'error');
-        } finally {
-            setIsSending(false);
-        }
-    };
+  const revenueSeries = toSeries(stats?.revenueByDay ?? stats?.dailyRevenue ?? stats?.revenueChart ?? stats?.revenue_by_day ?? stats?.chart);
 
-    const buttonTypes = [
-        { value: '', label: 'Без кнопки' },
-        { value: 'external_link', label: 'Сторонняя ссылка' },
-        { value: 'open_miniapp', label: 'Открыть мини-приложение' },
-        { value: 'activate_promo', label: 'Активировать промокод' },
-    ];
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHead title="Панель управления" sub="Обзор BlinVPN" />
 
-    const handleButtonTypeChange = (value: string) => {
-        setButtonType(value);
-        setButtonLabel('');
-        setButtonUrl('');
-        setPromoCode('');
-    };
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <Stat title="Пользователи" value={totalUsers != null ? fmtInt(totalUsers) : '—'} icon={Users} />
+        <Stat title="Активные подписки" value={activeSubs != null ? fmtInt(activeSubs) : '—'} icon={Key} />
+        <Stat title="Доход за месяц" value={monthlyRevenue != null ? fmtMoneyShort(monthlyRevenue) : '—'} icon={DollarSign} />
+        <Stat title="Платежей сегодня" value={stats ? fmtInt(stats.paymentsToday) : '—'} icon={CreditCard} />
+        <Stat title="Баланс клиентов" value={stats ? fmtMoneyShort(stats.clientsBalance) : '—'} icon={Wallet} />
+      </div>
 
-    return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4"><div><h2 className="text-2xl font-bold text-white">Рассылка</h2><p className="text-gray-400 mt-1">Массовая отправка сообщений пользователям</p></div></div>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                <StatCard 
-                    title="Отправлено сообщений" 
-                    value={stats ? stats.totalSent.toLocaleString('ru-RU') : '—'} 
-                    icon={Send} 
-                    color="blue" 
-                />
+      {!stats ? (
+        <div className="flex items-center justify-center" style={{ height: 200 }}><Spinner size={28} /></div>
+      ) : (
+        <>
+          <div className="card" style={{ padding: 24 }}>
+            <div className="flex justify-between items-center mb-5">
+              <h3 className="h-sec">Выручка</h3>
+              <Segmented value={period} onChange={setPeriod} options={[{ value: 'week', label: 'Неделя' }, { value: 'month', label: '30 дней' }, { value: 'year', label: 'Год' }]} />
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2 space-y-6">
-                    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                        <h3 className="text-lg font-bold text-gray-200 mb-4 flex items-center"><Plus size={20} className="mr-2 text-gray-300"/> Новая рассылка</h3>
-                        <div className="space-y-4">
-                            <div>
-                                <label className="text-sm text-gray-400 mb-1.5 block">Текст сообщения</label>
-                                <textarea 
-                                    value={message}
-                                    onChange={(e) => setMessage(e.target.value)}
-                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl p-4 text-white focus:outline-none focus:border-gray-500 h-32 resize-none" 
-                                    placeholder="Введите текст рассылки... Поддерживается Markdown"
-                                />
-                            </div>
-                            <div>
-                                <label className="text-sm text-gray-400 mb-1.5 block">Тип кнопки</label>
-                                <select 
-                                    value={buttonType}
-                                    onChange={(e) => handleButtonTypeChange(e.target.value)}
-                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-gray-500"
-                                >
-                                    {buttonTypes.map(bt => (
-                                        <option key={bt.value} value={bt.value}>{bt.label}</option>
-                                    ))}
-                                </select>
-                            </div>
-                            {(buttonType === 'external_link' || buttonType === 'open_miniapp') && (
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="text-sm text-gray-400 mb-1.5 block">Текст на кнопке</label>
-                                        <input 
-                                            type="text" 
-                                            value={buttonLabel}
-                                            onChange={(e) => setButtonLabel(e.target.value)}
-                                            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-gray-500" 
-                                            placeholder={buttonType === 'open_miniapp' ? 'Открыть приложение' : 'Перейти'}
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="text-sm text-gray-400 mb-1.5 block">
-                                            {buttonType === 'open_miniapp' ? 'Ссылка мини-приложения' : 'Ссылка'}
-                                        </label>
-                                        <input 
-                                            type="text" 
-                                            value={buttonUrl}
-                                            onChange={(e) => setButtonUrl(e.target.value)}
-                                            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-gray-500" 
-                                            placeholder={buttonType === 'open_miniapp' ? 'https://app.example.com' : 'https://example.com'}
-                                        />
-                                    </div>
-                                </div>
-                            )}
-                            {buttonType === 'activate_promo' && (
-                                <div>
-                                    <label className="text-sm text-gray-400 mb-1.5 block">Промокод</label>
-                                    <input 
-                                        type="text" 
-                                        value={promoCode}
-                                        onChange={(e) => setPromoCode(e.target.value)}
-                                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-gray-500" 
-                                        placeholder="PROMOCODE"
-                                    />
-                                </div>
-                            )}
-                            <div>
-                                <label className="text-sm text-gray-400 mb-1.5 block">Картинка (URL, опционально)</label>
-                                <input
-                                    type="text"
-                                    value={imageUrl}
-                                    onChange={(e) => setImageUrl(e.target.value)}
-                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-gray-500"
-                                    placeholder="https://.../image.jpg"
-                                />
-                                <div className="text-xs text-gray-500 mt-1">
-                                    Форматирование: &lt;b&gt;, &lt;i&gt;, &lt;code&gt;, а также **жирный**, *курсив*, `моно`; premium-emoji: ![ID_эмодзи]
-                                </div>
-                            </div>
-                            <div>
-                                <label className="text-sm text-gray-400 mb-2 block">Получатели</label>
-                                <div className="flex flex-wrap gap-2">
-                                    {['all', 'active', 'expired', 'no_subscription'].map(filter => (
-                                        <button 
-                                            key={filter}
-                                            onClick={() => setTargetUsers(filter)}
-                                            className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
-                                                targetUsers === filter 
-                                                    ? 'bg-gray-700 text-white border-gray-600' 
-                                                    : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700'
-                                            }`}
-                                        >
-                                            {filter === 'all' ? 'Все пользователи' : 
-                                             filter === 'active' ? 'Активные' :
-                                             filter === 'expired' ? 'Истекшие' : 'Без подписки'}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                            <div className="pt-2 flex gap-4">
-                                <button 
-                                    onClick={handleSend}
-                                    disabled={isSending}
-                                    className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-bold shadow-lg shadow-black/40 transition-colors flex justify-center items-center"
-                                >
-                                    {isSending ? <><Loader size={18} className="animate-spin mr-2" /> Запуск...</> : <><Send size={18} className="mr-2" /> Отправить</>}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden flex flex-col max-h-[600px]">
-                    <div className="p-5 border-b border-gray-800"><h3 className="text-lg font-bold text-gray-200">История</h3></div>
-                    <div className="overflow-y-auto custom-scrollbar flex-1">
-                        {history.length === 0 ? (
-                            <div className="p-4 text-center text-gray-500">Нет рассылок</div>
-                        ) : (
-                            history.map((item) => (
-                                <div key={item.id} className="p-4 border-b border-gray-800 hover:bg-gray-800/30 transition-colors">
-                                    <div className="flex justify-between items-start mb-1">
-                                        <span className="font-medium text-white line-clamp-1">{item.title || 'Без названия'}</span>
-                                        <span className="text-xs text-gray-500 whitespace-nowrap ml-2">{item.date}</span>
-                                    </div>
-                                    <div className="flex justify-between items-center mt-2">
-                                        <span className={`text-xs px-2 py-0.5 rounded border ${
-                                            item.status === 'Completed' 
-                                                ? 'bg-green-500/10 text-green-400 border-green-500/20' 
-                                                : item.status === 'Sending'
-                                                ? 'bg-white/5 text-gray-200 border-white/10'
-                                                : item.status === 'Cancelled'
-                                                ? 'bg-red-500/10 text-red-400 border-red-500/20'
-                                                : 'bg-gray-500/10 text-gray-400 border-gray-500/20'
-                                        }`}>
-                                            {item.status === 'Completed' ? 'Отправлено' : item.status === 'Sending' ? '⏳ Отправляется...' : item.status === 'Cancelled' ? 'Отменено' : item.status}
-                                        </span>
-                                        <span className="text-xs text-gray-400 flex items-center">
-                                            <Users size={12} className="mr-1"/> {item.sent_count || 0}
-                                        </span>
-                                    </div>
-                                    <div className="flex gap-2 mt-3">
-                                        <button onClick={() => setSelectedHistoryItem(item)} className="text-xs px-2 py-1 rounded bg-gray-700/20 text-gray-300 hover:bg-gray-600/30">Открыть</button>
-                                        <button onClick={async () => {
-                                            if (!confirm('Удалить рассылку и попытаться удалить сообщения у пользователей?')) return;
-                                            try {
-                                                await apiFetch(`/panel/mailing/${item.id}`, { method: 'DELETE' });
-                                                onToast('Успех', 'Рассылка удалена', 'success');
-                                                const historyData = await apiFetch('/panel/mailing/history');
-                                                if (Array.isArray(historyData)) setHistory(historyData);
-                                            } catch {
-                                                onToast('Ошибка', 'Не удалось удалить рассылку', 'error');
-                                            }
-                                        }} className="text-xs px-2 py-1 rounded bg-red-600/20 text-red-300 hover:bg-red-600/30">Удалить</button>
-                                    </div>
-                                </div>
-                            ))
-                        )}
-                    </div>
-                </div>
-            </div>
-            {selectedHistoryItem && (
-                <div className="fixed inset-0 bg-black/70 z-[70] flex items-center justify-center p-4" onClick={() => setSelectedHistoryItem(null)}>
-                    <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-2xl p-6" onClick={e => e.stopPropagation()}>
-                        <div className="flex justify-between items-center mb-4">
-                            <h3 className="text-xl font-bold text-white">{selectedHistoryItem.title || 'Текст рассылки'}</h3>
-                            <button onClick={() => setSelectedHistoryItem(null)} className="text-gray-400 hover:text-white"><X size={20} /></button>
-                        </div>
-                        <div className="text-gray-200 whitespace-pre-wrap bg-gray-950 border border-gray-800 rounded-xl p-4 max-h-[60vh] overflow-auto">
-                            {selectedHistoryItem.message_text || 'Пустое сообщение'}
-                        </div>
-                    </div>
-                </div>
+            {revenueSeries.length > 0 && (
+              <div className="mb-6"><BarChart data={revenueSeries} format={(v) => fmtMoneyShort(v)} height={180} /></div>
             )}
-        </div>
-    );
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="inset" style={{ padding: 16 }}><div className="sub">В среднем в день</div><div className="stat-value mt-1">{fmtMoneyShort(stats.avgDaily || 0)}</div></div>
+              <div className="inset" style={{ padding: 16 }}><div className="sub">Лучший день</div><div className="stat-value mt-1">{fmtMoneyShort(stats.bestDayValue || 0)}</div><div className="faint" style={{ fontSize: 12, marginTop: 2 }}>{stats.bestDayDate || ''}</div></div>
+              <div className="inset" style={{ padding: 16 }}><div className="sub">Куплено за неделю</div><div className="stat-value mt-1">+{fmtInt(stats.boughtThisWeek)}</div></div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="card" style={{ padding: 24 }}>
+              <h3 className="h-sec mb-5">Распределение пользователей</h3>
+              <BarChart data={toSeries(stats.userDistData)} format={fmtInt} />
+            </div>
+            <div className="card" style={{ padding: 24 }}>
+              <h3 className="h-sec mb-5">Способы оплаты</h3>
+              <BarChart data={toSeries(stats.paymentMethodsData)} format={fmtInt} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="card" style={{ padding: 24 }}>
+              <h3 className="h-sec mb-4">Подписки</h3>
+              <div className="flex flex-col gap-3" style={{ fontSize: 14 }}>
+                <div className="flex justify-between"><span className="muted">Всего</span><span style={{ fontWeight: 500 }}>{fmtInt(stats.totalSubscriptions)}</span></div>
+                <div className="flex justify-between"><span className="muted">Платные</span><span style={{ fontWeight: 500 }}>{fmtInt(stats.paidSubscriptions)}</span></div>
+                <div className="flex justify-between"><span className="muted">За неделю</span><span style={{ fontWeight: 500 }}>+{fmtInt(stats.boughtThisWeek)}</span></div>
+              </div>
+            </div>
+            <div className="card" style={{ padding: 24 }}>
+              <h3 className="h-sec mb-4">Конверсия trial → paid</h3>
+              <div className="stat-value" style={{ fontSize: 36 }}>{stats.conversionRate?.toFixed(1) || 0}%</div>
+              <p className="sub mt-2">Переход на платный тариф после пробного периода.</p>
+              <div className="hbar mt-4"><i style={{ width: `${Math.min(stats.conversionRate || 0, 100)}%`, background: 'var(--text)' }} /></div>
+            </div>
+            <div className="card" style={{ padding: 24 }}>
+              <h3 className="h-sec mb-4">Рефералы</h3>
+              <div className="flex flex-col gap-3" style={{ fontSize: 14 }}>
+                <div className="flex justify-between"><span className="muted">Приглашено</span><span style={{ fontWeight: 500 }}>{fmtInt(stats.totalInvited)}</span></div>
+                <div className="flex justify-between"><span className="muted">Партнёров</span><span style={{ fontWeight: 500 }}>{fmtInt(stats.partners)}</span></div>
+                <div className="flex justify-between"><span className="muted">Выплачено</span><span style={{ fontWeight: 500 }}>{fmtMoneyShort(stats.totalPaid)}</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div className="tbl-wrap">
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}><h3 className="h-sec">Топ рефералов</h3></div>
+            <table className="tbl">
+              <thead><tr><th>Пользователь</th><th>Пригласил</th><th>Заработал</th></tr></thead>
+              <tbody>
+                {(stats.topReferrers || []).map((r: any) => (
+                  <tr key={r.id}>
+                    <td><span className="flex items-center gap-2"><Trophy size={14} className="faint" /> {r.name}</span></td>
+                    <td className="muted">{r.count} чел.</td>
+                    <td style={{ fontWeight: 500 }}>{fmtMoney(r.earned)}</td>
+                  </tr>
+                ))}
+                {(!stats.topReferrers || stats.topReferrers.length === 0) && <tr className="empty-row"><td colSpan={3}>Нет данных</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
 };
 
-const PromocodesPage: React.FC<{ promos: Promo[]; onToast: (title: string, msg: string, type: ToastType) => void }> = ({ promos: _promos, onToast }) => {
-    const [promos, setPromos] = useState<Promo[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [editingPromo, setEditingPromo] = useState<Promo | null>(null);
-    const [newPromo, setNewPromo] = useState<{ code: string; type: Promo['type']; value: string; limit: string; expires: string }>({
-        code: '',
-        type: 'balance',
-        value: '',
-        limit: '',
-        expires: '',
-    });
+// ==========================================================
+// 8. FINANCE
+// ==========================================================
 
-    const loadPromos = async () => {
-        setLoading(true);
-        try {
-            const data = await apiFetch('/panel/promocodes');
-            if (Array.isArray(data)) {
-                setPromos(
-                    data.map((p: any) => ({
-                        id: p.id,
-                        code: p.code,
-                        type: p.type,
-                        value: String(p.value ?? ''),
-                        uses: Number(p.uses_count || 0),
-                        limit: Number(p.uses_limit || 0),
-                        expires: String(p.expires_at || ''),
-                    }))
-                );
-            } else {
-                setPromos([]);
-            }
-        } catch {
-            onToast('Ошибка', 'Не удалось загрузить промокоды', 'error');
-        } finally {
-            setLoading(false);
-        }
-    };
+const FinancePage: React.FC<{ transactions: Transaction[]; onSelectTransaction: (t: Transaction) => void }> = ({ transactions, onSelectTransaction }) => {
+  const [stats, setStats] = useState<{ deposits: number; withdrawals: number; successfulOps: number } | null>(null);
+  useEffect(() => { (async () => { try { const d = await apiFetch('/panel/finance/stats'); if (d) setStats(d); } catch (e) { console.error(e); } })(); }, []);
 
-    useEffect(() => {
-        loadPromos();
-    }, []);
-
-    const handleCreatePromo = async () => {
-        if (!newPromo.code || !newPromo.value) {
-            onToast('Ошибка', 'Заполните код и значение промокода', 'error');
-            return;
-        }
-        try {
-            await apiFetch('/panel/promocodes', {
-                method: 'POST',
-                body: JSON.stringify({
-                    code: newPromo.code.toUpperCase(),
-                    type: newPromo.type,
-                    value: newPromo.value,
-                    uses_limit: newPromo.limit ? Number(newPromo.limit) : null,
-                    expires_at: newPromo.expires || null,
-                    is_active: 1,
-                }),
-            });
-            onToast('Успех', 'Промокод создан', 'success');
-            setNewPromo({ code: '', type: 'balance', value: '', limit: '', expires: '' });
-            await loadPromos();
-        } catch {
-            onToast('Ошибка', 'Не удалось создать промокод', 'error');
-        }
-    };
-
-    const handleDeletePromo = async (id: number) => {
-        if (!confirm('Удалить промокод?')) return;
-        try {
-            await apiFetch(`/panel/promocodes/${id}`, { method: 'DELETE' });
-            onToast('Успех', 'Промокод удален', 'success');
-            await loadPromos();
-        } catch {
-            onToast('Ошибка', 'Не удалось удалить промокод', 'error');
-        }
-    };
-
-    const handleSavePromo = async () => {
-        if (!editingPromo) return;
-        try {
-            await apiFetch(`/panel/promocodes/${editingPromo.id}`, {
-                method: 'PUT',
-                body: JSON.stringify({
-                    code: editingPromo.code,
-                    type: editingPromo.type,
-                    value: editingPromo.value,
-                    uses_limit: editingPromo.limit || null,
-                    expires_at: editingPromo.expires || null,
-                }),
-            });
-            onToast('Успех', 'Промокод обновлен', 'success');
-            setEditingPromo(null);
-            await loadPromos();
-        } catch {
-            onToast('Ошибка', 'Не удалось обновить промокод', 'error');
-        }
-    };
-
-    return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div><h2 className="text-2xl font-bold text-white">Промокоды</h2></div>
-            <PromocodesStats promos={promos} />
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <h3 className="text-lg font-bold text-gray-200 mb-4">Новый промокод</h3>
-                <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-                    <input type="text" value={newPromo.code} onChange={e => setNewPromo({ ...newPromo, code: e.target.value.toUpperCase() })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Код" />
-                    <select value={newPromo.type} onChange={e => setNewPromo({ ...newPromo, type: e.target.value as Promo['type'] })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"><option value="balance">Баланс</option><option value="discount">Скидка</option><option value="subscription">Подписка</option></select>
-                    <input type="text" value={newPromo.value} onChange={e => setNewPromo({ ...newPromo, value: e.target.value })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Значение" />
-                    <input type="number" value={newPromo.limit} onChange={e => setNewPromo({ ...newPromo, limit: e.target.value })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Лимит" />
-                    <input type="text" value={newPromo.expires} onChange={e => setNewPromo({ ...newPromo, expires: e.target.value })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="2026-12-31" />
-                </div>
-                <button onClick={handleCreatePromo} className="mt-4 px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Создать</button>
-            </div>
-
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-                <div className="p-4 border-b border-gray-800">
-                    <h3 className="text-lg font-bold text-gray-200">Список промокодов</h3>
-                </div>
-                {loading ? (
-                    <div className="p-8 text-center text-gray-500">Загрузка...</div>
-                ) : promos.length === 0 ? (
-                    <div className="p-8 text-center text-gray-500">Промокодов пока нет</div>
-                ) : (
-                    <table className="w-full text-left">
-                        <thead>
-                            <tr className="bg-gray-800/50 text-gray-400 text-xs uppercase">
-                                <th className="px-6 py-4">Код</th>
-                                <th className="px-6 py-4">Тип</th>
-                                <th className="px-6 py-4">Значение</th>
-                                <th className="px-6 py-4">Исп.</th>
-                                <th className="px-6 py-4">Лимит</th>
-                                <th className="px-6 py-4">Срок</th>
-                                <th className="px-6 py-4 text-right">Действия</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-800">
-                            {promos.map((p) => (
-                                <tr key={p.id}>
-                                    <td className="px-6 py-4 text-white font-mono">{p.code}</td>
-                                    <td className="px-6 py-4 text-gray-300">{p.type}</td>
-                                    <td className="px-6 py-4 text-gray-300">{p.value}</td>
-                                    <td className="px-6 py-4 text-gray-400">{p.uses}</td>
-                                    <td className="px-6 py-4 text-gray-400">{p.limit || '∞'}</td>
-                                    <td className="px-6 py-4 text-gray-400">{p.expires || 'Без срока'}</td>
-                                    <td className="px-6 py-4 text-right">
-                                        <div className="inline-flex gap-2">
-                                            <button onClick={() => setEditingPromo({ ...p })} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg">
-                                                <Edit2 size={14} className="text-gray-200" />
-                                            </button>
-                                            <button onClick={() => handleDeletePromo(p.id)} className="p-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg">
-                                                <Trash2 size={14} className="text-red-400" />
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                )}
-            </div>
-
-            {editingPromo && (
-                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setEditingPromo(null)}>
-                    <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-                        <h3 className="text-xl font-bold text-white mb-4">Редактировать промокод</h3>
-                        <div className="space-y-3">
-                            <input type="text" value={editingPromo.code} onChange={e => setEditingPromo({ ...editingPromo, code: e.target.value.toUpperCase() })} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Код" />
-                            <select value={editingPromo.type} onChange={e => setEditingPromo({ ...editingPromo, type: e.target.value as Promo['type'] })} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white">
-                                <option value="balance">Баланс</option><option value="discount">Скидка</option><option value="subscription">Подписка</option>
-                            </select>
-                            <input type="text" value={editingPromo.value} onChange={e => setEditingPromo({ ...editingPromo, value: e.target.value })} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Значение" />
-                            <input type="number" value={editingPromo.limit || ''} onChange={e => setEditingPromo({ ...editingPromo, limit: Number(e.target.value || 0) })} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Лимит" />
-                            <input type="text" value={editingPromo.expires || ''} onChange={e => setEditingPromo({ ...editingPromo, expires: e.target.value })} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="2026-12-31" />
-                        </div>
-                        <div className="flex gap-3 mt-5">
-                            <button onClick={() => setEditingPromo(null)} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Отмена</button>
-                            <button onClick={handleSavePromo} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Сохранить</button>
-                        </div>
-                    </div>
-                </div>
-            )}
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHead title="Финансы" sub="Доходы и операции" />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Stat title="Пополнения" value={stats ? fmtMoney(stats.deposits) : '—'} icon={ArrowUpRight} />
+        <Stat title="Успешные операции" value={stats ? fmtInt(stats.successfulOps) : '—'} sub="операций" icon={Activity} />
+      </div>
+      <div className="tbl-wrap">
+        <div style={{ overflowX: 'auto' }}>
+          <table className="tbl">
+            <thead><tr><th>ID</th><th>Пользователь</th><th>Сумма</th><th>Статус</th><th>Дата</th></tr></thead>
+            <tbody>
+              {transactions.length === 0 ? <tr className="empty-row"><td colSpan={5}>Пока нет операций</td></tr>
+                : transactions.map((tx) => (
+                  <tr key={tx.id} className="click" onClick={() => onSelectTransaction(tx)}>
+                    <td className="muted mono">#{tx.id}</td>
+                    <td className="muted">{tx.user}</td>
+                    <td style={{ fontWeight: 600, color: tx.amount > 0 ? 'var(--text)' : 'var(--muted)' }}>{tx.amount > 0 ? '+' : ''}{tx.amount} ₽</td>
+                    <td className="muted">{tx.status}</td>
+                    <td className="faint">{tx.date}</td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
         </div>
-    );
+      </div>
+    </div>
+  );
 };
+
+// ==========================================================
+// 9. USERS
+// ==========================================================
+
+// small hook: close menu on outside click
+function useOutside<T extends HTMLElement>(onOutside: () => void) {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onOutside(); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [onOutside]);
+  return ref;
+}
+
+const MASS_ACTIONS = [
+  { t: 'MASS_ADD_DAYS', icon: Calendar, label: 'Добавить дни всем' },
+  { t: 'MASS_ADD_BALANCE', icon: DollarSign, label: 'Начислить баланс всем' },
+  { t: 'MASS_BAN', icon: Ban, label: 'Заблокировать всех' },
+  { t: 'MASS_UNBAN', icon: CheckCircle, label: 'Разблокировать всех' },
+  { t: 'MASS_RESET_TRIAL', icon: RefreshCw, label: 'Сбросить пробный период' },
+  { t: 'MASS_DELETE_KEYS', icon: Trash2, label: 'Удалить все ключи' },
+  { t: 'MASS_SET_PARTNER', icon: UserPlus, label: 'Сделать партнёрами' },
+  { t: 'MASS_REMOVE_PARTNER', icon: UserMinus, label: 'Убрать партнёрство' },
+];
+
+const UsersPage: React.FC<{
+  userSearch: string; setUserSearch: (s: string) => void; setSelectedUser: (u: User) => void; setMassActionType: (t: string | null) => void;
+}> = ({ userSearch, setUserSearch, setSelectedUser, setMassActionType }) => {
+  const [statusFilter, setStatusFilter] = useState<'all' | 'Trial' | 'Active' | 'Banned'>('all');
+  const [showFilter, setShowFilter] = useState(false);
+  const [showMass, setShowMass] = useState(false);
+  const massRef = useOutside<HTMLDivElement>(() => setShowMass(false));
+  const filterRef = useOutside<HTMLDivElement>(() => setShowFilter(false));
+
+  const { items: users, total, page, totalPages, loading, error, nextPage, prevPage } = usePaginatedList({
+    basePath: '/panel/users', search: userSearch,
+    extraParams: { status: statusFilter === 'all' ? undefined : statusFilter },
+    mapItem: mapApiUser,
+    clientFilter: (u: User) => statusFilter === 'all' ? true : statusFilter === 'Banned' ? u.status === 'Banned' : u.status === statusFilter,
+  });
+
+  const filterLabels: Record<string, string> = { all: 'Все', Trial: 'Триал', Active: 'Активные', Banned: 'Заблок.' };
+
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHead title="Пользователи" sub="База клиентов">
+        <div style={{ position: 'relative' }} ref={massRef}>
+          <button className="btn solid" onClick={() => setShowMass(!showMass)}><Layers size={16} /> Массовые действия <ChevronDown size={15} style={{ transform: showMass ? 'rotate(180deg)' : 'none', transition: 'transform var(--t)' }} /></button>
+          {showMass && (
+            <div className="menu" style={{ right: 0 }}>
+              {MASS_ACTIONS.map((a) => (
+                <button key={a.t} className="menu-item" onClick={() => { setMassActionType(a.t); setShowMass(false); }}><a.icon size={15} className="faint" /> {a.label}</button>
+              ))}
+            </div>
+          )}
+        </div>
+      </PageHead>
+
+      <div className="flex gap-3">
+        <div className="search flex-1">
+          <Search className="ico" size={16} />
+          <input className="input" value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Имя, username или ID…" />
+        </div>
+        <div style={{ position: 'relative' }} ref={filterRef}>
+          <button className={`btn ${statusFilter !== 'all' ? 'solid' : ''}`} onClick={() => setShowFilter(!showFilter)}><Filter size={16} /> {filterLabels[statusFilter]}</button>
+          {showFilter && (
+            <div className="menu" style={{ right: 0, minWidth: 160 }}>
+              {(['all', 'Trial', 'Active', 'Banned'] as const).map((v) => (
+                <button key={v} className="menu-item" onClick={() => { setStatusFilter(v); setShowFilter(false); }}>{filterLabels[v]}</button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {error && <div className="badge danger" style={{ width: '100%', padding: '10px 14px', justifyContent: 'flex-start' }}>{error}</div>}
+
+      <div className="tbl-wrap">
+        <div style={{ overflowX: 'auto' }}>
+          <table className="tbl">
+            <thead><tr><th>Пользователь</th><th>Баланс</th><th>Подписка</th><th>Статус</th><th style={{ textAlign: 'right' }}></th></tr></thead>
+            <tbody>
+              {loading && users.length === 0 ? <tr className="empty-row"><td colSpan={5}><Spinner size={18} className="inline-block mr-2" />Загрузка…</td></tr>
+                : users.length === 0 ? <tr className="empty-row"><td colSpan={5}>Ничего не найдено</td></tr>
+                : users.map((user: User) => {
+                    const st = userStatusBadge(user.status, user.inBlacklist);
+                    return (
+                      <tr key={user.id} className="click" onClick={() => setSelectedUser(user)}>
+                        <td><span className="flex items-center gap-3"><span className="avatar" style={{ width: 32, height: 32, fontSize: 12 }}>{user.username.replace('@', '').slice(0, 2).toUpperCase()}</span><span style={{ fontWeight: 500 }}>{user.username}</span></span></td>
+                        <td style={{ fontWeight: 600 }}>{user.balance} ₽</td>
+                        <td className="muted">{user.paidUntil}</td>
+                        <td><span className={`badge ${st.cls}`}>{st.label}</span>{user.isPartner && <span className="badge mute" style={{ marginLeft: 6 }}>Партнёр</span>}</td>
+                        <td style={{ textAlign: 'right' }}><span className="icon-btn" style={{ display: 'inline-flex' }}><Settings size={15} /></span></td>
+                      </tr>
+                    );
+                  })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <PaginationBar page={page} totalPages={totalPages} total={total} loading={loading} onPrev={prevPage} onNext={nextPage} />
+    </div>
+  );
+};
+
+// ==========================================================
+// 10. KEYS / SUBSCRIPTIONS
+// ==========================================================
+
+const KeysPage: React.FC<{
+  keySearch: string; setKeySearch: (s: string) => void; setIsCreateKeyOpen: (b: boolean) => void; setEditingKey: (k: KeyItem | null) => void;
+}> = ({ keySearch, setKeySearch, setIsCreateKeyOpen, setEditingKey }) => {
+  const [statusFilter, setStatusFilter] = useState<'all' | 'Active' | 'Expired' | 'Banned'>('all');
+  const [showFilter, setShowFilter] = useState(false);
+  const filterRef = useOutside<HTMLDivElement>(() => setShowFilter(false));
+
+  const { items: keys, total, page, totalPages, loading, error, nextPage, prevPage } = usePaginatedList({
+    basePath: '/panel/keys', search: keySearch,
+    extraParams: { status: statusFilter === 'all' ? undefined : statusFilter },
+    mapItem: mapApiKey,
+    clientFilter: (k: KeyItem) => statusFilter === 'all' ? true : k.status === statusFilter,
+  });
+
+  const filterLabels: Record<string, string> = { all: 'Все', Active: 'Активные', Expired: 'Истёкшие', Banned: 'Заблок.' };
+
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHead title="Подписки" sub="Управление ключами VLESS / Vmess">
+        <button className="btn solid" onClick={() => setIsCreateKeyOpen(true)}><Plus size={16} /> Создать</button>
+      </PageHead>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Stat title="Всего ключей" value={fmtInt(total)} icon={Key} />
+        <Stat title="Истёкшие (стр.)" value={keys.filter((k: KeyItem) => k.status === 'Expired').length} icon={Clock} />
+        <Stat title="Заблок. (стр.)" value={keys.filter((k: KeyItem) => k.status === 'Banned' || k.status === 'Blocked').length} icon={Ban} />
+      </div>
+
+      <div className="flex gap-3">
+        <div className="search flex-1">
+          <Search className="ico" size={16} />
+          <input className="input" value={keySearch} onChange={(e) => setKeySearch(e.target.value)} placeholder="Ключ или пользователь…" />
+        </div>
+        <div style={{ position: 'relative' }} ref={filterRef}>
+          <button className={`btn ${statusFilter !== 'all' ? 'solid' : ''}`} onClick={() => setShowFilter(!showFilter)}><Filter size={16} /> {filterLabels[statusFilter]}</button>
+          {showFilter && (
+            <div className="menu" style={{ right: 0, minWidth: 160 }}>
+              {(['all', 'Active', 'Expired', 'Banned'] as const).map((v) => (
+                <button key={v} className="menu-item" onClick={() => { setStatusFilter(v); setShowFilter(false); }}>{filterLabels[v]}</button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {error && <div className="badge danger" style={{ width: '100%', padding: '10px 14px', justifyContent: 'flex-start' }}>{error}</div>}
+
+      <div className="tbl-wrap">
+        <div style={{ overflowX: 'auto' }}>
+          <table className="tbl">
+            <thead><tr><th>ID / Ключ</th><th>Пользователь</th><th>Статус</th><th>Осталось</th><th>Трафик</th><th>Устр.</th><th></th></tr></thead>
+            <tbody>
+              {loading && keys.length === 0 ? <tr className="empty-row"><td colSpan={7}><Spinner size={18} className="inline-block mr-2" />Загрузка…</td></tr>
+                : keys.length === 0 ? <tr className="empty-row"><td colSpan={7}>Ничего не найдено</td></tr>
+                : keys.map((k: KeyItem) => {
+                    const st = keyStatusBadge(k.status);
+                    const pct = k.trafficLimit > 0 ? Math.min(100, (k.trafficUsed / k.trafficLimit) * 100) : 0;
+                    const meterCls = pct > 90 ? 'crit' : pct > 70 ? 'warn' : '';
+                    return (
+                      <tr key={k.id} className="click" onClick={() => setEditingKey(k)}>
+                        <td><div className="mono" style={{ fontWeight: 500 }}>#{k.id}</div><div className="faint mono line-clamp-1" style={{ fontSize: 11, maxWidth: 130 }}>{k.key}</div></td>
+                        <td style={{ fontWeight: 500 }}>{k.user}</td>
+                        <td><span className={`badge ${st.cls}`}>{st.label}</span></td>
+                        <td className="muted">{k.expiry > 0 ? `${k.expiry} дн.` : 'Истёк'}</td>
+                        <td>
+                          <div className="faint mb-1" style={{ fontSize: 12 }}>{gb(k.trafficUsed).toFixed(1)} / {k.trafficLimit > 0 ? gb(k.trafficLimit).toFixed(0) : '∞'} ГБ</div>
+                          <div className="meter" style={{ width: 96 }}><i className={meterCls} style={{ width: `${pct}%` }} /></div>
+                        </td>
+                        <td className="muted" style={{ textAlign: 'center' }}>{k.devicesUsed}/{k.devicesLimit}</td>
+                        <td style={{ textAlign: 'right' }}><span className="icon-btn" style={{ display: 'inline-flex' }}><Edit2 size={15} /></span></td>
+                      </tr>
+                    );
+                  })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <PaginationBar page={page} totalPages={totalPages} total={total} loading={loading} onPrev={prevPage} onNext={nextPage} totalLabel="Всего подписок" />
+    </div>
+  );
+};
+
+// ==========================================================
+// 11. MAILING
+// ==========================================================
+
+const MailingPage: React.FC<{ onToast: (t: string, m: string, ty: ToastType) => void }> = ({ onToast }) => {
+  const [stats, setStats] = useState<{ totalSent: number } | null>(null);
+  const [history, setHistory] = useState<any[]>([]);
+  const [selected, setSelected] = useState<any | null>(null);
+  const [message, setMessage] = useState('');
+  const [buttonType, setButtonType] = useState('');
+  const [buttonLabel, setButtonLabel] = useState('');
+  const [buttonUrl, setButtonUrl] = useState('');
+  const [promoCode, setPromoCode] = useState('');
+  const [imageUrl, setImageUrl] = useState('');
+  const [targetUsers, setTargetUsers] = useState('all');
+  const [isSending, setIsSending] = useState(false);
+
+  const loadHistory = async () => { try { const d = await apiFetch('/panel/mailing/history'); if (Array.isArray(d)) setHistory(d); } catch (e) { console.error(e); } };
+  const loadStats = async () => { try { const d = await apiFetch('/panel/mailing/stats'); if (d) setStats(d); } catch (e) { console.error(e); } };
+
+  useEffect(() => { loadStats(); loadHistory(); }, []);
+  useEffect(() => {
+    if (!history.some((i) => i.status === 'Sending')) return;
+    const timer = setInterval(() => { loadHistory(); loadStats(); }, 4000);
+    return () => clearInterval(timer);
+  }, [history]);
+
+  const handleSend = async () => {
+    if (!message.trim()) { onToast('Ошибка', 'Введите текст сообщения', 'error'); return; }
+    if ((buttonType === 'external_link' || buttonType === 'open_miniapp') && (!buttonLabel.trim() || !buttonUrl.trim())) { onToast('Ошибка', 'Укажите текст кнопки и ссылку', 'error'); return; }
+    if (buttonType === 'activate_promo' && !promoCode.trim()) { onToast('Ошибка', 'Укажите промокод', 'error'); return; }
+    if (!confirm('Запустить рассылку?')) return;
+    setIsSending(true);
+    try {
+      const payload: any = { message, target_users: targetUsers, title: message.substring(0, 50) };
+      if (buttonType === 'external_link' || buttonType === 'open_miniapp') { payload.button_type = buttonType; payload.button_value = `${buttonLabel.trim()}|${buttonUrl.trim()}`; }
+      else if (buttonType === 'activate_promo') { payload.button_type = buttonType; payload.button_value = promoCode.trim(); }
+      if (imageUrl.trim()) payload.image_url = imageUrl.trim();
+      await apiFetch('/panel/mailing', { method: 'POST', body: JSON.stringify(payload) });
+      onToast('Рассылка', 'Запущена и отправляется в фоне', 'success');
+      setMessage(''); setButtonType(''); setButtonLabel(''); setButtonUrl(''); setPromoCode(''); setImageUrl('');
+      loadStats(); loadHistory();
+    } catch { onToast('Ошибка', 'Не удалось запустить рассылку', 'error'); } finally { setIsSending(false); }
+  };
+
+  const targets = [{ v: 'all', l: 'Все' }, { v: 'active', l: 'Активные' }, { v: 'expired', l: 'Истёкшие' }, { v: 'no_subscription', l: 'Без подписки' }];
+  const historyBadge = (s: string) => s === 'Completed' ? { cls: 'solid', label: 'Отправлено' } : s === 'Sending' ? { cls: 'mute', label: 'Отправляется' } : s === 'Cancelled' ? { cls: 'danger', label: 'Отменено' } : { cls: 'line', label: s };
+
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHead title="Рассылка" sub="Массовая отправка сообщений" />
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Stat title="Отправлено сообщений" value={stats ? fmtInt(stats.totalSent) : '—'} icon={Send} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 card" style={{ padding: 24 }}>
+          <h3 className="h-sec mb-4 flex items-center gap-2"><Plus size={18} className="faint" /> Новая рассылка</h3>
+          <div className="flex flex-col gap-4">
+            <div><label className="field-label">Текст сообщения</label><textarea className="textarea" style={{ minHeight: 128 }} value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Текст рассылки… Поддерживается Markdown" /></div>
+            <div><label className="field-label">Тип кнопки</label>
+              <select className="select" value={buttonType} onChange={(e) => { setButtonType(e.target.value); setButtonLabel(''); setButtonUrl(''); setPromoCode(''); }}>
+                <option value="">Без кнопки</option><option value="external_link">Сторонняя ссылка</option><option value="open_miniapp">Открыть мини-приложение</option><option value="activate_promo">Активировать промокод</option>
+              </select>
+            </div>
+            {(buttonType === 'external_link' || buttonType === 'open_miniapp') && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div><label className="field-label">Текст на кнопке</label><input className="input" value={buttonLabel} onChange={(e) => setButtonLabel(e.target.value)} placeholder={buttonType === 'open_miniapp' ? 'Открыть' : 'Перейти'} /></div>
+                <div><label className="field-label">Ссылка</label><input className="input" value={buttonUrl} onChange={(e) => setButtonUrl(e.target.value)} placeholder="https://example.com" /></div>
+              </div>
+            )}
+            {buttonType === 'activate_promo' && <div><label className="field-label">Промокод</label><input className="input mono" value={promoCode} onChange={(e) => setPromoCode(e.target.value)} placeholder="PROMOCODE" /></div>}
+            <div>
+              <label className="field-label">Картинка (URL, опционально)</label>
+              <input className="input" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="https://…/image.jpg" />
+              <div className="faint mt-1" style={{ fontSize: 12 }}>Форматирование: &lt;b&gt;, &lt;i&gt;, &lt;code&gt;, **жирный**, *курсив*, `моно`; premium-emoji: ![ID]</div>
+            </div>
+            <div>
+              <label className="field-label">Получатели</label>
+              <div className="flex flex-wrap gap-2">
+                {targets.map((t) => <button key={t.v} className={`chip ${targetUsers === t.v ? 'on' : ''}`} onClick={() => setTargetUsers(t.v)}>{t.l}</button>)}
+              </div>
+            </div>
+            <button className="btn solid block" onClick={handleSend} disabled={isSending} style={{ padding: 12 }}>{isSending ? <><Spinner size={16} /> Запуск…</> : <><Send size={16} /> Отправить</>}</button>
+          </div>
+        </div>
+
+        <div className="tbl-wrap" style={{ display: 'flex', flexDirection: 'column', maxHeight: 620 }}>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}><h3 className="h-sec">История</h3></div>
+          <div style={{ overflowY: 'auto', flex: 1 }}>
+            {history.length === 0 ? <div className="sub" style={{ padding: 16, textAlign: 'center' }}>Нет рассылок</div>
+              : history.map((item) => {
+                  const b = historyBadge(item.status);
+                  return (
+                    <div key={item.id} style={{ padding: 16, borderBottom: '1px solid var(--border)' }}>
+                      <div className="flex justify-between items-start gap-2 mb-2">
+                        <span className="line-clamp-1" style={{ fontWeight: 500 }}>{item.title || 'Без названия'}</span>
+                        <span className="faint" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{item.date}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className={`badge ${b.cls}`}>{b.label}</span>
+                        <span className="sub flex items-center gap-1"><Users size={12} /> {item.sent_count || 0}</span>
+                      </div>
+                      <div className="flex gap-2 mt-3">
+                        <button className="btn sm" onClick={() => setSelected(item)}>Открыть</button>
+                        <button className="btn sm danger" onClick={async () => {
+                          if (!confirm('Удалить рассылку и попытаться удалить сообщения у пользователей?')) return;
+                          try { await apiFetch(`/panel/mailing/${item.id}`, { method: 'DELETE' }); onToast('Готово', 'Рассылка удалена', 'success'); loadHistory(); }
+                          catch { onToast('Ошибка', 'Не удалось удалить', 'error'); }
+                        }}>Удалить</button>
+                      </div>
+                    </div>
+                  );
+                })}
+          </div>
+        </div>
+      </div>
+
+      {selected && (
+        <Modal onClose={() => setSelected(null)} title={selected.title || 'Текст рассылки'} width={640} z={70}>
+          <div className="inset mono" style={{ padding: 16, whiteSpace: 'pre-wrap', maxHeight: '60vh', overflow: 'auto', fontSize: 13 }}>{selected.message_text || 'Пустое сообщение'}</div>
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+// ==========================================================
+// 12. PROMOCODES
+// ==========================================================
+
+const PromocodesStats: React.FC<{ promos: Promo[] }> = ({ promos }) => {
+  const [stats, setStats] = useState<{ total: number; totalUses: number; activeCount: number } | null>(null);
+  useEffect(() => { (async () => { try { const d = await apiFetch('/panel/promocodes/stats'); if (d) setStats(d); } catch (e) { console.error(e); } })(); }, []);
+  const totalBonus = promos.reduce((s, p) => p.type === 'balance' ? s + Number(p.value) * p.uses : s, 0);
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <Stat title="Активных кодов" value={stats ? stats.activeCount : promos.length} icon={Gift} />
+      <Stat title="Использований" value={stats ? fmtInt(stats.totalUses) : '0'} icon={Users} />
+      <Stat title="Сумма бонусов" value={fmtMoney(totalBonus)} icon={DollarSign} />
+    </div>
+  );
+};
+
+const PromocodesPage: React.FC<{ onToast: (t: string, m: string, ty: ToastType) => void }> = ({ onToast }) => {
+  const [promos, setPromos] = useState<Promo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<Promo | null>(null);
+  const [form, setForm] = useState<{ code: string; type: Promo['type']; value: string; limit: string; expires: string }>({ code: '', type: 'balance', value: '', limit: '', expires: '' });
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const data = await apiFetch('/panel/promocodes');
+      setPromos(Array.isArray(data) ? data.map((p: any) => ({ id: p.id, code: p.code, type: p.type, value: String(p.value ?? ''), uses: Number(p.uses_count || 0), limit: Number(p.uses_limit || 0), expires: String(p.expires_at || '') })) : []);
+    } catch { onToast('Ошибка', 'Не удалось загрузить промокоды', 'error'); } finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const create = async () => {
+    if (!form.code || !form.value) { onToast('Ошибка', 'Заполните код и значение', 'error'); return; }
+    try {
+      await apiFetch('/panel/promocodes', { method: 'POST', body: JSON.stringify({ code: form.code.toUpperCase(), type: form.type, value: form.value, uses_limit: form.limit ? Number(form.limit) : null, expires_at: form.expires || null, is_active: 1 }) });
+      onToast('Готово', 'Промокод создан', 'success');
+      setForm({ code: '', type: 'balance', value: '', limit: '', expires: '' }); load();
+    } catch { onToast('Ошибка', 'Не удалось создать', 'error'); }
+  };
+  const remove = async (id: number) => { if (!confirm('Удалить промокод?')) return; try { await apiFetch(`/panel/promocodes/${id}`, { method: 'DELETE' }); onToast('Готово', 'Промокод удалён', 'success'); load(); } catch { onToast('Ошибка', 'Не удалось удалить', 'error'); } };
+  const save = async () => {
+    if (!editing) return;
+    try {
+      await apiFetch(`/panel/promocodes/${editing.id}`, { method: 'PUT', body: JSON.stringify({ code: editing.code, type: editing.type, value: editing.value, uses_limit: editing.limit || null, expires_at: editing.expires || null }) });
+      onToast('Готово', 'Промокод обновлён', 'success'); setEditing(null); load();
+    } catch { onToast('Ошибка', 'Не удалось обновить', 'error'); }
+  };
+
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHead title="Промокоды" />
+      <PromocodesStats promos={promos} />
+
+      <div className="card" style={{ padding: 24 }}>
+        <h3 className="h-sec mb-4">Новый промокод</h3>
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <input className="input mono" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} placeholder="КОД" />
+          <select className="select" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as Promo['type'] })}><option value="balance">Баланс</option><option value="discount">Скидка</option><option value="subscription">Подписка</option></select>
+          <input className="input" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} placeholder="Значение" />
+          <input className="input" type="number" value={form.limit} onChange={(e) => setForm({ ...form, limit: e.target.value })} placeholder="Лимит" />
+          <input className="input" value={form.expires} onChange={(e) => setForm({ ...form, expires: e.target.value })} placeholder="2026-12-31" />
+        </div>
+        <button className="btn solid mt-4" onClick={create}>Создать</button>
+      </div>
+
+      <div className="tbl-wrap">
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}><h3 className="h-sec">Список промокодов</h3></div>
+        {loading ? <div className="sub" style={{ padding: 32, textAlign: 'center' }}>Загрузка…</div>
+          : promos.length === 0 ? <div className="sub" style={{ padding: 32, textAlign: 'center' }}>Промокодов пока нет</div>
+          : <div style={{ overflowX: 'auto' }}><table className="tbl">
+              <thead><tr><th>Код</th><th>Тип</th><th>Значение</th><th>Исп.</th><th>Лимит</th><th>Срок</th><th style={{ textAlign: 'right' }}>Действия</th></tr></thead>
+              <tbody>{promos.map((p) => (
+                <tr key={p.id}>
+                  <td className="mono">{p.code}</td><td className="muted">{p.type}</td><td className="muted">{p.value}</td>
+                  <td className="muted">{p.uses}</td><td className="muted">{p.limit || '∞'}</td><td className="muted">{p.expires || 'Без срока'}</td>
+                  <td style={{ textAlign: 'right' }}><span className="inline-flex gap-2"><button className="icon-btn" onClick={() => setEditing({ ...p })}><Edit2 size={14} /></button><button className="icon-btn danger" onClick={() => remove(p.id)}><Trash2 size={14} /></button></span></td>
+                </tr>
+              ))}</tbody>
+            </table></div>}
+      </div>
+
+      {editing && (
+        <Modal onClose={() => setEditing(null)} title="Редактировать промокод" width={440}
+          footer={<><button className="btn block" onClick={() => setEditing(null)}>Отмена</button><button className="btn solid block" onClick={save}>Сохранить</button></>}>
+          <div className="flex flex-col gap-3">
+            <input className="input mono" value={editing.code} onChange={(e) => setEditing({ ...editing, code: e.target.value.toUpperCase() })} placeholder="Код" />
+            <select className="select" value={editing.type} onChange={(e) => setEditing({ ...editing, type: e.target.value as Promo['type'] })}><option value="balance">Баланс</option><option value="discount">Скидка</option><option value="subscription">Подписка</option></select>
+            <input className="input" value={editing.value} onChange={(e) => setEditing({ ...editing, value: e.target.value })} placeholder="Значение" />
+            <input className="input" type="number" value={editing.limit || ''} onChange={(e) => setEditing({ ...editing, limit: Number(e.target.value || 0) })} placeholder="Лимит" />
+            <input className="input" value={editing.expires || ''} onChange={(e) => setEditing({ ...editing, expires: e.target.value })} placeholder="2026-12-31" />
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+// ==========================================================
+// 13. PROMOTIONS
+// ==========================================================
 
 type PromotionType = 'deposit_multiplier' | 'global_discount';
 type PromotionItem = {
-    id: number;
-    name: string;
-    type: PromotionType;
-    value: number;
-    min_amount: number | null;
-    max_amount: number | null;
-    uses_limit: number | null;
-    uses_count: number;
-    expires_at: string | null;
-    is_active: boolean;
+  id: number; name: string; type: PromotionType; value: number; min_amount: number | null;
+  max_amount: number | null; uses_limit: number | null; uses_count: number; expires_at: string | null; is_active: boolean;
 };
 
-const PromotionsPage: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
-    const emptyForm = {
-        name: '',
-        type: 'deposit_multiplier' as PromotionType,
-        value: '',
-        min_amount: '',
-        max_amount: '',
-        uses_limit: '',
-        expires_at: '',
-        is_active: true,
+const PromotionsPage: React.FC<{ onToast: (t: string, m: string, ty: ToastType) => void }> = ({ onToast }) => {
+  const emptyForm = { name: '', type: 'deposit_multiplier' as PromotionType, value: '', min_amount: '', max_amount: '', uses_limit: '', expires_at: '', is_active: true };
+  const [items, setItems] = useState<PromotionItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState(emptyForm);
+  const [editing, setEditing] = useState<PromotionItem | null>(null);
+
+  const load = async () => { setLoading(true); try { const d = await apiFetch('/panel/promotions'); setItems(Array.isArray(d) ? d : []); } catch { onToast('Ошибка', 'Не удалось загрузить акции', 'error'); setItems([]); } finally { setLoading(false); } };
+  useEffect(() => { load(); }, []);
+
+  const toPayload = (src: typeof form | PromotionItem) => {
+    const isEdit = 'id' in src;
+    const type = src.type;
+    const valueRaw = isEdit ? String((src as PromotionItem).value) : (src as typeof form).value;
+    const g = (edit: any, f: string) => isEdit ? (edit != null ? String(edit) : '') : f;
+    const minRaw = g((src as PromotionItem).min_amount, (src as typeof form).min_amount);
+    const maxRaw = g((src as PromotionItem).max_amount, (src as typeof form).max_amount);
+    const limitRaw = g((src as PromotionItem).uses_limit, (src as typeof form).uses_limit);
+    const expiresRaw = isEdit ? ((src as PromotionItem).expires_at || '') : ((src as typeof form).expires_at || '');
+    let expires_at: string | null = null;
+    if (expiresRaw) { const d = new Date(expiresRaw); expires_at = Number.isNaN(d.getTime()) ? String(expiresRaw) : d.toISOString(); }
+    return {
+      name: src.name.trim(), type, value: valueRaw,
+      min_amount: type === 'deposit_multiplier' && minRaw !== '' ? Number(minRaw) : null,
+      max_amount: type === 'deposit_multiplier' && maxRaw !== '' ? Number(maxRaw) : null,
+      uses_limit: limitRaw !== '' ? Number(limitRaw) : null,
+      expires_at, is_active: isEdit ? (src as PromotionItem).is_active : (src as typeof form).is_active,
     };
-    const [items, setItems] = useState<PromotionItem[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [form, setForm] = useState(emptyForm);
-    const [editing, setEditing] = useState<PromotionItem | null>(null);
+  };
+  const parseApiError = (e: any, fallback: string) => { try { const p = JSON.parse(e?.message || ''); if (p?.error) return String(p.error); } catch {} return fallback; };
 
-    const loadItems = async () => {
-        setLoading(true);
-        try {
-            const data = await apiFetch('/panel/promotions');
-            setItems(Array.isArray(data) ? data : []);
-        } catch {
-            onToast('Ошибка', 'Не удалось загрузить акции', 'error');
-            setItems([]);
-        } finally {
-            setLoading(false);
-        }
-    };
+  const create = async () => {
+    if (!form.name.trim() || !form.value || !form.expires_at) { onToast('Ошибка', 'Заполните название, значение и дату', 'error'); return; }
+    try { await apiFetch('/panel/promotions', { method: 'POST', body: JSON.stringify(toPayload(form)) }); onToast('Готово', 'Акция создана', 'success'); setForm(emptyForm); load(); }
+    catch (e: any) { onToast('Ошибка', parseApiError(e, 'Не удалось создать'), 'error'); }
+  };
+  const save = async () => {
+    if (!editing || !editing.name.trim() || !editing.expires_at) { onToast('Ошибка', 'Заполните название и дату', 'error'); return; }
+    try { await apiFetch(`/panel/promotions/${editing.id}`, { method: 'PUT', body: JSON.stringify(toPayload(editing)) }); onToast('Готово', 'Акция обновлена', 'success'); setEditing(null); load(); }
+    catch (e: any) { onToast('Ошибка', parseApiError(e, 'Не удалось обновить'), 'error'); }
+  };
+  const remove = async (id: number) => { if (!confirm('Удалить акцию?')) return; try { await apiFetch(`/panel/promotions/${id}`, { method: 'DELETE' }); onToast('Готово', 'Акция удалена', 'success'); load(); } catch { onToast('Ошибка', 'Не удалось удалить', 'error'); } };
+  const toggle = async (item: PromotionItem) => { try { await apiFetch(`/panel/promotions/${item.id}`, { method: 'PUT', body: JSON.stringify({ is_active: !item.is_active }) }); load(); } catch { onToast('Ошибка', 'Не удалось изменить статус', 'error'); } };
 
-    useEffect(() => {
-        loadItems();
-    }, []);
+  const typeLabel = (t: PromotionType) => t === 'deposit_multiplier' ? 'xN к пополнению' : 'Глобальная скидка';
+  const fmtExpires = (s: string | null) => { if (!s) return 'Без срока'; try { return new Date(s).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return s; } };
+  const toLocal = (s: string | null) => { if (!s) return ''; try { const d = new Date(s); if (Number.isNaN(d.getTime())) return ''; const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; } catch { return ''; } };
 
-    const toPayload = (src: typeof form | PromotionItem) => {
-        const isEdit = 'id' in src;
-        const type = src.type;
-        const valueRaw = isEdit ? String((src as PromotionItem).value) : (src as typeof form).value;
-        const minRaw = isEdit
-            ? ((src as PromotionItem).min_amount != null ? String((src as PromotionItem).min_amount) : '')
-            : (src as typeof form).min_amount;
-        const maxRaw = isEdit
-            ? ((src as PromotionItem).max_amount != null ? String((src as PromotionItem).max_amount) : '')
-            : (src as typeof form).max_amount;
-        const limitRaw = isEdit
-            ? ((src as PromotionItem).uses_limit != null ? String((src as PromotionItem).uses_limit) : '')
-            : (src as typeof form).uses_limit;
-        const expiresRaw = isEdit
-            ? ((src as PromotionItem).expires_at || '')
-            : ((src as typeof form).expires_at || '');
-        let expires_at: string | null = null;
-        if (expiresRaw) {
-            const d = new Date(expiresRaw);
-            expires_at = Number.isNaN(d.getTime()) ? String(expiresRaw) : d.toISOString();
-        }
-        return {
-            name: src.name.trim(),
-            type,
-            value: valueRaw,
-            min_amount: type === 'deposit_multiplier' && minRaw !== '' ? Number(minRaw) : null,
-            max_amount: type === 'deposit_multiplier' && maxRaw !== '' ? Number(maxRaw) : null,
-            uses_limit: limitRaw !== '' ? Number(limitRaw) : null,
-            expires_at,
-            is_active: isEdit ? (src as PromotionItem).is_active : (src as typeof form).is_active,
-        };
-    };
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHead title="Акции" sub="xN к пополнению — только при депозите. Глобальная скидка — на все товары без промокода." />
 
-    const parseApiError = (e: any, fallback: string) => {
-        try {
-            const parsed = JSON.parse(e?.message || '');
-            if (parsed?.error) return String(parsed.error);
-        } catch { /* ignore */ }
-        return fallback;
-    };
-
-    const handleCreate = async () => {
-        if (!form.name.trim() || !form.value || !form.expires_at) {
-            onToast('Ошибка', 'Заполните название, значение и дату окончания', 'error');
-            return;
-        }
-        try {
-            await apiFetch('/panel/promotions', {
-                method: 'POST',
-                body: JSON.stringify(toPayload(form)),
-            });
-            onToast('Успех', 'Акция создана', 'success');
-            setForm(emptyForm);
-            await loadItems();
-        } catch (e: any) {
-            onToast('Ошибка', parseApiError(e, 'Не удалось создать акцию'), 'error');
-        }
-    };
-
-    const handleSave = async () => {
-        if (!editing) return;
-        if (!editing.name.trim() || !editing.expires_at) {
-            onToast('Ошибка', 'Заполните название и дату окончания', 'error');
-            return;
-        }
-        try {
-            await apiFetch(`/panel/promotions/${editing.id}`, {
-                method: 'PUT',
-                body: JSON.stringify(toPayload(editing)),
-            });
-            onToast('Успех', 'Акция обновлена', 'success');
-            setEditing(null);
-            await loadItems();
-        } catch (e: any) {
-            onToast('Ошибка', parseApiError(e, 'Не удалось обновить акцию'), 'error');
-        }
-    };
-
-    const handleDelete = async (id: number) => {
-        if (!confirm('Удалить акцию?')) return;
-        try {
-            await apiFetch(`/panel/promotions/${id}`, { method: 'DELETE' });
-            onToast('Успех', 'Акция удалена', 'success');
-            await loadItems();
-        } catch {
-            onToast('Ошибка', 'Не удалось удалить акцию', 'error');
-        }
-    };
-
-    const handleToggle = async (item: PromotionItem) => {
-        try {
-            await apiFetch(`/panel/promotions/${item.id}`, {
-                method: 'PUT',
-                body: JSON.stringify({ is_active: !item.is_active }),
-            });
-            await loadItems();
-        } catch {
-            onToast('Ошибка', 'Не удалось изменить статус', 'error');
-        }
-    };
-
-    const typeLabel = (t: PromotionType) =>
-        t === 'deposit_multiplier' ? 'xN к пополнению' : 'Глобальная скидка';
-
-    const fmtExpires = (s: string | null) => {
-        if (!s) return 'Без срока';
-        try {
-            return new Date(s).toLocaleString('ru-RU', {
-                day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
-            });
-        } catch {
-            return s;
-        }
-    };
-
-    const toDatetimeLocal = (s: string | null) => {
-        if (!s) return '';
-        try {
-            const d = new Date(s);
-            if (Number.isNaN(d.getTime())) return '';
-            const pad = (n: number) => String(n).padStart(2, '0');
-            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-        } catch {
-            return '';
-        }
-    };
-
-    return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div>
-                <h2 className="text-2xl font-bold text-white">Акции</h2>
-                <p className="text-sm text-gray-500 mt-1">
-                    xN к пополнению работает только при депозите. Глобальная скидка — на все товары без промокода.
-                </p>
+      <div className="card" style={{ padding: 24 }}>
+        <h3 className="h-sec mb-4">Новая акция</h3>
+        <div className="flex flex-col gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Название" />
+            <select className="select" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as PromotionType, value: '', min_amount: '', max_amount: '' })}><option value="deposit_multiplier">xN к пополнению</option><option value="global_discount">Глобальная скидка %</option></select>
+            <input className="input" type="number" step="any" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} placeholder={form.type === 'deposit_multiplier' ? 'Множитель (напр. 2)' : 'Скидка % (напр. 15)'} />
+          </div>
+          {form.type === 'deposit_multiplier' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <input className="input" type="number" value={form.min_amount} onChange={(e) => setForm({ ...form, min_amount: e.target.value })} placeholder="Мин. сумма (необяз.)" />
+              <input className="input" type="number" value={form.max_amount} onChange={(e) => setForm({ ...form, max_amount: e.target.value })} placeholder="Макс. сумма (необяз.)" />
             </div>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <input className="input" type="number" value={form.uses_limit} onChange={(e) => setForm({ ...form, uses_limit: e.target.value })} placeholder="Лимит использований (необяз.)" />
+            <input className="input" type="datetime-local" value={form.expires_at} onChange={(e) => setForm({ ...form, expires_at: e.target.value })} />
+          </div>
+          <button className="btn solid" style={{ alignSelf: 'flex-start' }} onClick={create}>Создать</button>
+        </div>
+      </div>
 
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4">
-                <h3 className="text-lg font-bold text-gray-200">Новая акция</h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <input
-                        type="text"
-                        value={form.name}
-                        onChange={e => setForm({ ...form, name: e.target.value })}
-                        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                        placeholder="Название"
-                    />
-                    <select
-                        value={form.type}
-                        onChange={e => setForm({ ...form, type: e.target.value as PromotionType, value: '', min_amount: '', max_amount: '' })}
-                        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                    >
-                        <option value="deposit_multiplier">xN к пополнению</option>
-                        <option value="global_discount">Глобальная скидка %</option>
-                    </select>
-                    <input
-                        type="number"
-                        step="any"
-                        value={form.value}
-                        onChange={e => setForm({ ...form, value: e.target.value })}
-                        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                        placeholder={form.type === 'deposit_multiplier' ? 'Множитель (напр. 2)' : 'Скидка % (напр. 15)'}
-                    />
-                </div>
-                {form.type === 'deposit_multiplier' && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <input
-                            type="number"
-                            value={form.min_amount}
-                            onChange={e => setForm({ ...form, min_amount: e.target.value })}
-                            className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                            placeholder="Мин. сумма (необяз.)"
-                        />
-                        <input
-                            type="number"
-                            value={form.max_amount}
-                            onChange={e => setForm({ ...form, max_amount: e.target.value })}
-                            className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                            placeholder="Макс. сумма (необяз.)"
-                        />
-                    </div>
-                )}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <input
-                        type="number"
-                        value={form.uses_limit}
-                        onChange={e => setForm({ ...form, uses_limit: e.target.value })}
-                        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                        placeholder="Лимит использований (необяз.)"
-                    />
-                    <input
-                        type="datetime-local"
-                        value={form.expires_at}
-                        onChange={e => setForm({ ...form, expires_at: e.target.value })}
-                        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                    />
-                </div>
-                <button onClick={handleCreate} className="px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">
-                    Создать
-                </button>
-            </div>
+      <div className="tbl-wrap">
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}><h3 className="h-sec">Список акций</h3></div>
+        {loading ? <div className="sub" style={{ padding: 32, textAlign: 'center' }}>Загрузка…</div>
+          : items.length === 0 ? <div className="sub" style={{ padding: 32, textAlign: 'center' }}>Акций пока нет</div>
+          : <div style={{ overflowX: 'auto' }}><table className="tbl" style={{ minWidth: 900 }}>
+              <thead><tr><th>Название</th><th>Тип</th><th>Значение</th><th>Диапазон</th><th>Исп.</th><th>До</th><th>Статус</th><th style={{ textAlign: 'right' }}>Действия</th></tr></thead>
+              <tbody>{items.map((p) => (
+                <tr key={p.id} style={!p.is_active ? { opacity: 0.5 } : undefined}>
+                  <td style={{ fontWeight: 500 }}>{p.name}</td>
+                  <td className="muted">{typeLabel(p.type)}</td>
+                  <td style={{ fontWeight: 600 }}>{p.type === 'deposit_multiplier' ? `x${p.value}` : `−${p.value}%`}</td>
+                  <td className="muted" style={{ fontSize: 13 }}>{p.type === 'deposit_multiplier' ? ([p.min_amount != null ? `от ${p.min_amount}` : null, p.max_amount != null ? `до ${p.max_amount}` : null].filter(Boolean).join(' ') || 'любая сумма') : '—'}</td>
+                  <td className="muted">{p.uses_count}{p.uses_limit != null ? ` / ${p.uses_limit}` : ''}</td>
+                  <td className="muted" style={{ fontSize: 13 }}>{fmtExpires(p.expires_at)}</td>
+                  <td><button className={`badge ${p.is_active ? 'solid' : 'line'}`} onClick={() => toggle(p)}>{p.is_active ? 'Активна' : 'Выкл'}</button></td>
+                  <td style={{ textAlign: 'right' }}><span className="inline-flex gap-2"><button className="icon-btn" onClick={() => setEditing({ ...p })}><Edit2 size={14} /></button><button className="icon-btn danger" onClick={() => remove(p.id)}><Trash2 size={14} /></button></span></td>
+                </tr>
+              ))}</tbody>
+            </table></div>}
+      </div>
 
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-                <div className="p-4 border-b border-gray-800">
-                    <h3 className="text-lg font-bold text-gray-200">Список акций</h3>
-                </div>
-                {loading ? (
-                    <div className="p-8 text-center text-gray-500">Загрузка...</div>
-                ) : items.length === 0 ? (
-                    <div className="p-8 text-center text-gray-500">Акций пока нет</div>
-                ) : (
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-left min-w-[900px]">
-                            <thead>
-                                <tr className="bg-gray-800/50 text-gray-400 text-xs uppercase">
-                                    <th className="px-4 py-3">Название</th>
-                                    <th className="px-4 py-3">Тип</th>
-                                    <th className="px-4 py-3">Значение</th>
-                                    <th className="px-4 py-3">Диапазон</th>
-                                    <th className="px-4 py-3">Исп.</th>
-                                    <th className="px-4 py-3">До</th>
-                                    <th className="px-4 py-3">Статус</th>
-                                    <th className="px-4 py-3 text-right">Действия</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-800">
-                                {items.map((p) => (
-                                    <tr key={p.id} className={!p.is_active ? 'opacity-50' : ''}>
-                                        <td className="px-4 py-3 text-white font-medium">{p.name}</td>
-                                        <td className="px-4 py-3 text-gray-300">{typeLabel(p.type)}</td>
-                                        <td className="px-4 py-3 text-gray-200 font-semibold">
-                                            {p.type === 'deposit_multiplier' ? `x${p.value}` : `−${p.value}%`}
-                                        </td>
-                                        <td className="px-4 py-3 text-gray-400 text-sm">
-                                            {p.type === 'deposit_multiplier'
-                                                ? [
-                                                    p.min_amount != null ? `от ${p.min_amount}` : null,
-                                                    p.max_amount != null ? `до ${p.max_amount}` : null,
-                                                ].filter(Boolean).join(' ') || 'любая сумма'
-                                                : '—'}
-                                        </td>
-                                        <td className="px-4 py-3 text-gray-400">
-                                            {p.uses_count}{p.uses_limit != null ? ` / ${p.uses_limit}` : ''}
-                                        </td>
-                                        <td className="px-4 py-3 text-gray-400 text-sm">{fmtExpires(p.expires_at)}</td>
-                                        <td className="px-4 py-3">
-                                            <button
-                                                onClick={() => handleToggle(p)}
-                                                className={`text-xs px-2 py-1 rounded-md border ${
-                                                    p.is_active
-                                                        ? 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10'
-                                                        : 'border-gray-600 text-gray-400 bg-gray-800'
-                                                }`}
-                                            >
-                                                {p.is_active ? 'Активна' : 'Выкл'}
-                                            </button>
-                                        </td>
-                                        <td className="px-4 py-3 text-right">
-                                            <div className="inline-flex gap-2">
-                                                <button
-                                                    onClick={() => setEditing({ ...p })}
-                                                    className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg"
-                                                >
-                                                    <Edit2 size={14} className="text-gray-200" />
-                                                </button>
-                                                <button
-                                                    onClick={() => handleDelete(p.id)}
-                                                    className="p-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg"
-                                                >
-                                                    <Trash2 size={14} className="text-red-400" />
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
-
-            {editing && (
-                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setEditing(null)}>
-                    <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-                        <h3 className="text-xl font-bold text-white mb-4">Редактировать акцию</h3>
-                        <div className="space-y-3">
-                            <input
-                                type="text"
-                                value={editing.name}
-                                onChange={e => setEditing({ ...editing, name: e.target.value })}
-                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                                placeholder="Название"
-                            />
-                            <select
-                                value={editing.type}
-                                onChange={e => setEditing({ ...editing, type: e.target.value as PromotionType })}
-                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                            >
-                                <option value="deposit_multiplier">xN к пополнению</option>
-                                <option value="global_discount">Глобальная скидка %</option>
-                            </select>
-                            <input
-                                type="number"
-                                step="any"
-                                value={editing.value}
-                                onChange={e => setEditing({ ...editing, value: Number(e.target.value) })}
-                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                            />
-                            {editing.type === 'deposit_multiplier' && (
-                                <div className="grid grid-cols-2 gap-3">
-                                    <input
-                                        type="number"
-                                        value={editing.min_amount ?? ''}
-                                        onChange={e => setEditing({
-                                            ...editing,
-                                            min_amount: e.target.value === '' ? null : Number(e.target.value),
-                                        })}
-                                        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                                        placeholder="Мин. сумма"
-                                    />
-                                    <input
-                                        type="number"
-                                        value={editing.max_amount ?? ''}
-                                        onChange={e => setEditing({
-                                            ...editing,
-                                            max_amount: e.target.value === '' ? null : Number(e.target.value),
-                                        })}
-                                        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                                        placeholder="Макс. сумма"
-                                    />
-                                </div>
-                            )}
-                            <input
-                                type="number"
-                                value={editing.uses_limit ?? ''}
-                                onChange={e => setEditing({
-                                    ...editing,
-                                    uses_limit: e.target.value === '' ? null : Number(e.target.value),
-                                })}
-                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                                placeholder="Лимит"
-                            />
-                            <input
-                                type="datetime-local"
-                                value={toDatetimeLocal(editing.expires_at)}
-                                onChange={e => setEditing({ ...editing, expires_at: e.target.value || null })}
-                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
-                            />
-                            <label className="flex items-center gap-2 text-sm text-gray-300">
-                                <input
-                                    type="checkbox"
-                                    checked={!!editing.is_active}
-                                    onChange={e => setEditing({ ...editing, is_active: e.target.checked })}
-                                />
-                                Активна
-                            </label>
-                        </div>
-                        <div className="flex gap-3 mt-5">
-                            <button onClick={() => setEditing(null)} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Отмена</button>
-                            <button onClick={handleSave} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Сохранить</button>
-                        </div>
-                    </div>
-                </div>
+      {editing && (
+        <Modal onClose={() => setEditing(null)} title="Редактировать акцию" width={520}
+          footer={<><button className="btn block" onClick={() => setEditing(null)}>Отмена</button><button className="btn solid block" onClick={save}>Сохранить</button></>}>
+          <div className="flex flex-col gap-3">
+            <input className="input" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="Название" />
+            <select className="select" value={editing.type} onChange={(e) => setEditing({ ...editing, type: e.target.value as PromotionType })}><option value="deposit_multiplier">xN к пополнению</option><option value="global_discount">Глобальная скидка %</option></select>
+            <input className="input" type="number" step="any" value={editing.value} onChange={(e) => setEditing({ ...editing, value: Number(e.target.value) })} />
+            {editing.type === 'deposit_multiplier' && (
+              <div className="grid grid-cols-2 gap-3">
+                <input className="input" type="number" value={editing.min_amount ?? ''} onChange={(e) => setEditing({ ...editing, min_amount: e.target.value === '' ? null : Number(e.target.value) })} placeholder="Мин. сумма" />
+                <input className="input" type="number" value={editing.max_amount ?? ''} onChange={(e) => setEditing({ ...editing, max_amount: e.target.value === '' ? null : Number(e.target.value) })} placeholder="Макс. сумма" />
+              </div>
             )}
-        </div>
-    );
+            <input className="input" type="number" value={editing.uses_limit ?? ''} onChange={(e) => setEditing({ ...editing, uses_limit: e.target.value === '' ? null : Number(e.target.value) })} placeholder="Лимит" />
+            <input className="input" type="datetime-local" value={toLocal(editing.expires_at)} onChange={(e) => setEditing({ ...editing, expires_at: e.target.value || null })} />
+            <label className="flex items-center gap-2 muted" style={{ fontSize: 13, cursor: 'pointer' }}><input type="checkbox" checked={!!editing.is_active} onChange={(e) => setEditing({ ...editing, is_active: e.target.checked })} /> Активна</label>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
 };
 
-const TrackingLinksPage: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
-    const [links, setLinks] = useState<TrackingLink[]>([]);
-    const [stats, setStats] = useState<{ total_links: number; total_clicks: number; total_unique_users: number; total_revenue: number; paid_users: number } | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [detailLink, setDetailLink] = useState<(TrackingLink & { users?: TrackingLinkUser[] }) | null>(null);
-    const [detailLoading, setDetailLoading] = useState(false);
-    const [editingLink, setEditingLink] = useState<TrackingLink | null>(null);
-    const [newLink, setNewLink] = useState({ name: '', code: '', promocode: '', welcome_message: '' });
+// ==========================================================
+// 14. TRACKING LINKS
+// ==========================================================
 
-    const fmtMoney = (n: number) => `${Math.round(n).toLocaleString('ru-RU')} ₽`;
-    const fmtPct = (n: number) => `${n.toFixed(1)}%`;
-    const fmtDate = (s: string) => {
-        if (!s) return '—';
-        try {
-            return new Date(s).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-        } catch {
-            return s;
-        }
-    };
+const TrackingLinksPage: React.FC<{ onToast: (t: string, m: string, ty: ToastType) => void }> = ({ onToast }) => {
+  const [links, setLinks] = useState<TrackingLink[]>([]);
+  const [stats, setStats] = useState<{ total_links: number; total_clicks: number; total_unique_users: number; total_revenue: number; paid_users: number } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState<(TrackingLink & { users?: TrackingLinkUser[] }) | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [editing, setEditing] = useState<TrackingLink | null>(null);
+  const [form, setForm] = useState({ name: '', code: '', promocode: '', welcome_message: '' });
 
-    const copyToClipboard = async (text: string, label = 'Ссылка') => {
-        try {
-            await navigator.clipboard.writeText(text);
-            onToast('Скопировано', `${label} в буфере обмена`, 'success');
-        } catch {
-            onToast('Ошибка', 'Не удалось скопировать', 'error');
-        }
-    };
+  const fmtPct = (n: number) => `${n.toFixed(1)}%`;
+  const fmtDate = (s: string) => { if (!s) return '—'; try { return new Date(s).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return s; } };
+  const copy = async (text: string, label = 'Ссылка') => { try { await navigator.clipboard.writeText(text); onToast('Скопировано', `${label} в буфере`, 'success'); } catch { onToast('Ошибка', 'Не удалось скопировать', 'error'); } };
 
-    const loadLinks = async () => {
-        setLoading(true);
-        try {
-            const [linksData, statsData] = await Promise.all([
-                apiFetch('/panel/tracking-links'),
-                apiFetch('/panel/tracking-links/stats'),
-            ]);
-            if (Array.isArray(linksData)) {
-                setLinks(linksData.map((l: any) => ({
-                    id: l.id,
-                    code: l.code,
-                    name: l.name || '',
-                    promocode: l.promocode || null,
-                    welcome_message: l.welcome_message || null,
-                    url: l.url,
-                    clicks: Number(l.clicks || 0),
-                    is_active: Boolean(l.is_active),
-                    created_at: l.created_at || '',
-                    unique_users: Number(l.unique_users || 0),
-                    new_users: Number(l.new_users || 0),
-                    total_revenue: Number(l.total_revenue || 0),
-                    paid_users: Number(l.paid_users || 0),
-                    active_subscriptions: Number(l.active_subscriptions || 0),
-                    total_keys: Number(l.total_keys || 0),
-                    conversion_rate: Number(l.conversion_rate || 0),
-                })));
-            }
-            if (statsData) setStats(statsData);
-        } catch {
-            onToast('Ошибка', 'Не удалось загрузить специальные ссылки', 'error');
-        } finally {
-            setLoading(false);
-        }
-    };
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [ld, sd] = await Promise.all([apiFetch('/panel/tracking-links'), apiFetch('/panel/tracking-links/stats')]);
+      if (Array.isArray(ld)) setLinks(ld.map((l: any) => ({
+        id: l.id, code: l.code, name: l.name || '', promocode: l.promocode || null, welcome_message: l.welcome_message || null,
+        url: l.url, clicks: Number(l.clicks || 0), is_active: Boolean(l.is_active), created_at: l.created_at || '',
+        unique_users: Number(l.unique_users || 0), new_users: Number(l.new_users || 0), total_revenue: Number(l.total_revenue || 0),
+        paid_users: Number(l.paid_users || 0), active_subscriptions: Number(l.active_subscriptions || 0), total_keys: Number(l.total_keys || 0), conversion_rate: Number(l.conversion_rate || 0),
+      })));
+      if (sd) setStats(sd);
+    } catch { onToast('Ошибка', 'Не удалось загрузить ссылки', 'error'); } finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
 
-    const openDetail = async (link: TrackingLink) => {
-        setDetailLink(link);
-        setDetailLoading(true);
-        try {
-            const data = await apiFetch(`/panel/tracking-links/${link.id}`);
-            setDetailLink(data);
-        } catch {
-            onToast('Ошибка', 'Не удалось загрузить детали', 'error');
-        } finally {
-            setDetailLoading(false);
-        }
-    };
+  const openDetail = async (link: TrackingLink) => { setDetail(link); setDetailLoading(true); try { const d = await apiFetch(`/panel/tracking-links/${link.id}`); setDetail(d); } catch { onToast('Ошибка', 'Не удалось загрузить детали', 'error'); } finally { setDetailLoading(false); } };
 
-    useEffect(() => { loadLinks(); }, []);
+  const create = async () => {
+    if (!form.name.trim()) { onToast('Ошибка', 'Укажите название кампании', 'error'); return; }
+    try {
+      const body: Record<string, string> = { name: form.name.trim() };
+      if (form.code.trim()) body.code = form.code.trim();
+      if (form.promocode.trim()) body.promocode = form.promocode.trim().toUpperCase();
+      if (form.welcome_message.trim()) body.welcome_message = form.welcome_message.trim();
+      const res = await apiFetch('/panel/tracking-links', { method: 'POST', body: JSON.stringify(body) });
+      onToast('Готово', `Ссылка создана${res.url ? `: ${res.url}` : ''}`, 'success');
+      setForm({ name: '', code: '', promocode: '', welcome_message: '' }); load();
+    } catch (e: any) { onToast('Ошибка', e?.message || 'Не удалось создать', 'error'); }
+  };
+  const remove = async (id: number) => { if (!confirm('Удалить ссылку? Статистика по ней будет потеряна.')) return; try { await apiFetch(`/panel/tracking-links/${id}`, { method: 'DELETE' }); onToast('Готово', 'Ссылка удалена', 'success'); if (detail?.id === id) setDetail(null); load(); } catch { onToast('Ошибка', 'Не удалось удалить', 'error'); } };
+  const saveEdit = async () => {
+    if (!editing) return;
+    try { await apiFetch(`/panel/tracking-links/${editing.id}`, { method: 'PUT', body: JSON.stringify({ name: editing.name, code: editing.code, promocode: editing.promocode || '', welcome_message: editing.welcome_message || '', is_active: editing.is_active }) }); onToast('Готово', 'Ссылка обновлена', 'success'); setEditing(null); load(); }
+    catch (e: any) { onToast('Ошибка', e?.message || 'Не удалось обновить', 'error'); }
+  };
+  const toggle = async (link: TrackingLink) => { try { await apiFetch(`/panel/tracking-links/${link.id}`, { method: 'PUT', body: JSON.stringify({ is_active: !link.is_active }) }); load(); } catch { onToast('Ошибка', 'Не удалось изменить статус', 'error'); } };
 
-    const handleCreate = async () => {
-        if (!newLink.name.trim()) {
-            onToast('Ошибка', 'Укажите название кампании', 'error');
-            return;
-        }
-        try {
-            const body: Record<string, string> = { name: newLink.name.trim() };
-            if (newLink.code.trim()) body.code = newLink.code.trim();
-            if (newLink.promocode.trim()) body.promocode = newLink.promocode.trim().toUpperCase();
-            if (newLink.welcome_message.trim()) body.welcome_message = newLink.welcome_message.trim();
-            const res = await apiFetch('/panel/tracking-links', { method: 'POST', body: JSON.stringify(body) });
-            onToast('Успех', `Ссылка создана: ${res.url || ''}`, 'success');
-            setNewLink({ name: '', code: '', promocode: '', welcome_message: '' });
-            await loadLinks();
-        } catch (e: any) {
-            onToast('Ошибка', e?.message || 'Не удалось создать ссылку', 'error');
-        }
-    };
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHead title="Специальные ссылки" sub="Переходы, регистрации и оплаты рекламных кампаний" />
 
-    const handleDelete = async (id: number) => {
-        if (!confirm('Удалить специальную ссылку? Статистика по ней будет потеряна.')) return;
-        try {
-            await apiFetch(`/panel/tracking-links/${id}`, { method: 'DELETE' });
-            onToast('Успех', 'Ссылка удалена', 'success');
-            if (detailLink?.id === id) setDetailLink(null);
-            await loadLinks();
-        } catch {
-            onToast('Ошибка', 'Не удалось удалить', 'error');
-        }
-    };
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Stat title="Активных ссылок" value={stats?.total_links ?? links.length} icon={Link} />
+        <Stat title="Всего переходов" value={fmtInt(stats?.total_clicks ?? 0)} icon={MousePointer} />
+        <Stat title="Уникальных" value={fmtInt(stats?.total_unique_users ?? 0)} icon={Users} />
+        <Stat title="Доход с кампаний" value={fmtMoney(stats?.total_revenue ?? 0)} icon={DollarSign} sub={`${stats?.paid_users ?? 0} оплатили`} />
+      </div>
 
-    const handleSaveEdit = async () => {
-        if (!editingLink) return;
-        try {
-            await apiFetch(`/panel/tracking-links/${editingLink.id}`, {
-                method: 'PUT',
-                body: JSON.stringify({
-                    name: editingLink.name,
-                    code: editingLink.code,
-                    promocode: editingLink.promocode || '',
-                    welcome_message: editingLink.welcome_message || '',
-                    is_active: editingLink.is_active,
-                }),
-            });
-            onToast('Успех', 'Ссылка обновлена', 'success');
-            setEditingLink(null);
-            await loadLinks();
-        } catch (e: any) {
-            onToast('Ошибка', e?.message || 'Не удалось обновить', 'error');
-        }
-    };
-
-    const toggleActive = async (link: TrackingLink) => {
-        try {
-            await apiFetch(`/panel/tracking-links/${link.id}`, {
-                method: 'PUT',
-                body: JSON.stringify({ is_active: !link.is_active }),
-            });
-            await loadLinks();
-        } catch {
-            onToast('Ошибка', 'Не удалось изменить статус', 'error');
-        }
-    };
-
-    return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div>
-                <h2 className="text-2xl font-bold text-white">Специальные ссылки</h2>
-                <p className="text-gray-400 mt-1">Отслеживание рекламных кампаний: переходы, регистрации, оплаты</p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <StatCard title="Активных ссылок" value={stats?.total_links ?? links.length} icon={Link} color="orange" />
-                <StatCard title="Всего переходов" value={(stats?.total_clicks ?? 0).toLocaleString('ru-RU')} icon={MousePointer} color="blue" />
-                <StatCard title="Уникальных пользователей" value={(stats?.total_unique_users ?? 0).toLocaleString('ru-RU')} icon={Users} color="green" />
-                <StatCard title="Доход с кампаний" value={fmtMoney(stats?.total_revenue ?? 0)} icon={DollarSign} color="purple" subValue={`${stats?.paid_users ?? 0} оплатили подписку`} />
-            </div>
-
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <h3 className="text-lg font-bold text-gray-200 mb-1">Новая ссылка</h3>
-                <p className="text-sm text-gray-500 mb-4">
-                    Ссылка будет вида <span className="font-mono text-gray-400">t.me/{BOT_USERNAME}?start=trk_<b>код</b></span>
-                </p>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <input type="text" value={newLink.name} onChange={e => setNewLink({ ...newLink, name: e.target.value })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Название (YouTube, VK Ads…)" />
-                    <input type="text" value={newLink.code} onChange={e => setNewLink({ ...newLink, code: e.target.value.replace(/[^A-Za-z0-9_-]/g, '') })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono" placeholder="Код (ad, youtube1…)" />
-                    <input type="text" value={newLink.promocode} onChange={e => setNewLink({ ...newLink, promocode: e.target.value.toUpperCase() })} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono" placeholder="Промокод (необяз.)" />
-                    <button onClick={handleCreate} className="px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium">Создать ссылку</button>
-                </div>
-                <div className="mt-3">
-                    <textarea
-                        value={newLink.welcome_message}
-                        onChange={e => setNewLink({ ...newLink, welcome_message: e.target.value })}
-                        className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y min-h-[72px]"
-                        placeholder={"Сообщение при первом переходе (необяз.) — поддерживает HTML и Markdown Telegram\nПример: <b>Привет!</b> Держи скидку 🎁\nИли: **Привет!** Держи скидку 🎁"}
-                        rows={3}
-                    />
-                    <p className="text-xs text-gray-600 mt-1">Отправляется пользователю в Telegram только при первом переходе. Поддерживается HTML (<code className="text-gray-500">&lt;b&gt;</code>, <code className="text-gray-500">&lt;i&gt;</code>, <code className="text-gray-500">&lt;a href&gt;</code>, <code className="text-gray-500">&lt;tg-emoji&gt;</code> и т.д.)</p>
-                </div>
-            </div>
-
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-                <div className="p-4 border-b border-gray-800 flex items-center justify-between">
-                    <h3 className="text-lg font-bold text-gray-200">Кампании</h3>
-                    <button onClick={loadLinks} className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800" title="Обновить"><RefreshCw size={16} /></button>
-                </div>
-                {loading ? (
-                    <div className="p-8 text-center text-gray-500">Загрузка...</div>
-                ) : links.length === 0 ? (
-                    <div className="p-12 text-center">
-                        <Link size={40} className="mx-auto text-gray-600 mb-3" />
-                        <p className="text-gray-400">Специальных ссылок пока нет</p>
-                        <p className="text-sm text-gray-600 mt-1">Создайте первую ссылку для рекламной кампании</p>
-                    </div>
-                ) : (
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-left min-w-[900px]">
-                            <thead>
-                                <tr className="bg-gray-800/50 text-gray-400 text-xs uppercase">
-                                    <th className="px-4 py-3">Кампания</th>
-                                    <th className="px-4 py-3">Ссылка</th>
-                                    <th className="px-4 py-3 text-center">Переходы</th>
-                                    <th className="px-4 py-3 text-center">Уник.</th>
-                                    <th className="px-4 py-3 text-center">Новые</th>
-                                    <th className="px-4 py-3 text-center">Оплатили</th>
-                                    <th className="px-4 py-3 text-right">Доход</th>
-                                    <th className="px-4 py-3 text-center">Конверсия</th>
-                                    <th className="px-4 py-3 text-right">Действия</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-800">
-                                {links.map(l => (
-                                    <tr key={l.id} className={`hover:bg-gray-800/30 ${!l.is_active ? 'opacity-50' : ''}`}>
-                                        <td className="px-4 py-3">
-                                            <div className="text-white font-medium">{l.name || l.code}</div>
-                                            <div className="text-xs text-gray-500 font-mono mt-0.5">trk_{l.code}{l.promocode ? ` · ${l.promocode}` : ''}</div>
-                                        </td>
-                                        <td className="px-4 py-3">
-                                            <button onClick={() => copyToClipboard(l.url)} className="flex items-center gap-1.5 text-sm text-gray-200 hover:text-gray-300 font-mono max-w-[180px] truncate" title={l.url}>
-                                                <Copy size={13} /> копировать
-                                            </button>
-                                        </td>
-                                        <td className="px-4 py-3 text-center text-gray-300">{l.clicks}</td>
-                                        <td className="px-4 py-3 text-center text-gray-300">{l.unique_users}</td>
-                                        <td className="px-4 py-3 text-center text-green-400">{l.new_users}</td>
-                                        <td className="px-4 py-3 text-center text-gray-300">{l.paid_users}</td>
-                                        <td className="px-4 py-3 text-right text-white font-medium">{fmtMoney(l.total_revenue)}</td>
-                                        <td className="px-4 py-3 text-center">
-                                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${l.conversion_rate >= 10 ? 'bg-green-500/10 text-green-400' : l.conversion_rate >= 3 ? 'bg-yellow-500/10 text-yellow-400' : 'bg-gray-700 text-gray-400'}`}>
-                                                {fmtPct(l.conversion_rate)}
-                                            </span>
-                                        </td>
-                                        <td className="px-4 py-3 text-right">
-                                            <div className="inline-flex gap-1">
-                                                <button onClick={() => openDetail(l)} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg" title="Детали"><BarChart2 size={14} className="text-gray-200" /></button>
-                                                <button onClick={() => toggleActive(l)} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg" title={l.is_active ? 'Отключить' : 'Включить'}>
-                                                    {l.is_active ? <ToggleRight size={14} className="text-green-400" /> : <ToggleLeft size={14} className="text-gray-500" />}
-                                                </button>
-                                                <button onClick={() => setEditingLink({ ...l })} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg" title="Редактировать"><Edit2 size={14} className="text-gray-200" /></button>
-                                                <button onClick={() => handleDelete(l.id)} className="p-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg" title="Удалить"><Trash2 size={14} className="text-red-400" /></button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
-
-            {editingLink && (
-                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setEditingLink(null)}>
-                    <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-                        <h3 className="text-xl font-bold text-white mb-4">Редактировать ссылку</h3>
-                        <div className="space-y-3">
-                            <input type="text" value={editingLink.name} onChange={e => setEditingLink({ ...editingLink, name: e.target.value })} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white" placeholder="Название" />
-                            <input type="text" value={editingLink.code} onChange={e => setEditingLink({ ...editingLink, code: e.target.value.replace(/[^A-Za-z0-9_-]/g, '') })} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono" placeholder="Код" />
-                            <input type="text" value={editingLink.promocode || ''} onChange={e => setEditingLink({ ...editingLink, promocode: e.target.value.toUpperCase() })} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white font-mono" placeholder="Промокод" />
-                            <div>
-                                <textarea
-                                    value={editingLink.welcome_message || ''}
-                                    onChange={e => setEditingLink({ ...editingLink, welcome_message: e.target.value })}
-                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm font-mono resize-y min-h-[80px]"
-                                    placeholder={"Сообщение при первом переходе (HTML/Markdown Telegram)\n<b>Привет!</b> Держи промокод 🎁"}
-                                    rows={3}
-                                />
-                                <p className="text-xs text-gray-500 mt-1">Отправляется только при первом переходе. Поддерживается HTML Telegram.</p>
-                            </div>
-                            <label className="flex items-center gap-2 text-gray-300 text-sm cursor-pointer">
-                                <input type="checkbox" checked={editingLink.is_active} onChange={e => setEditingLink({ ...editingLink, is_active: e.target.checked })} className="rounded" />
-                                Ссылка активна
-                            </label>
-                        </div>
-                        <div className="flex gap-3 mt-5">
-                            <button onClick={() => setEditingLink(null)} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Отмена</button>
-                            <button onClick={handleSaveEdit} className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg">Сохранить</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {detailLink && (
-                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setDetailLink(null)}>
-                    <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
-                        <div className="p-6 border-b border-gray-800 flex items-start justify-between gap-4">
-                            <div>
-                                <h3 className="text-xl font-bold text-white">{detailLink.name || detailLink.code}</h3>
-                                <button onClick={() => copyToClipboard(detailLink.url)} className="flex items-center gap-1.5 text-sm text-gray-200 hover:text-gray-300 font-mono mt-1">
-                                    <Copy size={13} /> {detailLink.url}
-                                </button>
-                            </div>
-                            <button onClick={() => setDetailLink(null)} className="text-gray-500 hover:text-white p-1"><X size={20} /></button>
-                        </div>
-
-                        <div className="p-6 grid grid-cols-2 md:grid-cols-4 gap-4 border-b border-gray-800">
-                            <div className="bg-gray-950 rounded-xl p-3 border border-gray-800"><div className="text-xs text-gray-500">Переходы</div><div className="text-xl font-bold text-white">{detailLink.clicks}</div></div>
-                            <div className="bg-gray-950 rounded-xl p-3 border border-gray-800"><div className="text-xs text-gray-500">Уникальные</div><div className="text-xl font-bold text-white">{detailLink.unique_users}</div></div>
-                            <div className="bg-gray-950 rounded-xl p-3 border border-gray-800"><div className="text-xs text-gray-500">Доход</div><div className="text-xl font-bold text-green-400">{fmtMoney(detailLink.total_revenue)}</div></div>
-                            <div className="bg-gray-950 rounded-xl p-3 border border-gray-800"><div className="text-xs text-gray-500">Конверсия</div><div className="text-xl font-bold text-gray-200">{fmtPct(detailLink.conversion_rate)}</div></div>
-                        </div>
-
-                        <div className="flex-1 overflow-y-auto p-6">
-                            <h4 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">Пользователи по ссылке</h4>
-                            {detailLoading ? (
-                                <div className="text-center py-8 text-gray-500">Загрузка...</div>
-                            ) : !detailLink.users?.length ? (
-                                <div className="text-center py-8 text-gray-500">Пока никто не перешёл по этой ссылке</div>
-                            ) : (
-                                <table className="w-full text-left text-sm">
-                                    <thead>
-                                        <tr className="text-gray-500 text-xs uppercase border-b border-gray-800">
-                                            <th className="pb-2 pr-4">Пользователь</th>
-                                            <th className="pb-2 pr-4">Переход</th>
-                                            <th className="pb-2 pr-4 text-center">Новый</th>
-                                            <th className="pb-2 pr-4 text-center">Подписки</th>
-                                            <th className="pb-2 text-right">Потратил</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-gray-800">
-                                        {detailLink.users.map(u => (
-                                            <tr key={u.user_id}>
-                                                <td className="py-2.5 pr-4">
-                                                    <div className="text-white">{u.full_name || u.username || `#${u.telegram_id}`}</div>
-                                                    <div className="text-xs text-gray-500 font-mono">{u.telegram_id}{u.username ? ` · @${u.username}` : ''}</div>
-                                                </td>
-                                                <td className="py-2.5 pr-4 text-gray-400">{fmtDate(u.visited_at)}</td>
-                                                <td className="py-2.5 pr-4 text-center">{u.is_new_user ? <span className="text-green-400">да</span> : <span className="text-gray-600">—</span>}</td>
-                                                <td className="py-2.5 pr-4 text-center">
-                                                    {u.active_keys > 0 ? <span className="text-green-400">{u.active_keys} акт.</span> : u.has_paid ? <span className="text-yellow-400">была</span> : u.trial_used ? <span className="text-blue-400">триал</span> : <span className="text-gray-600">—</span>}
-                                                </td>
-                                                <td className="py-2.5 text-right text-white font-medium">{u.total_spent > 0 ? fmtMoney(u.total_spent) : '—'}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            )}
+      <div className="card" style={{ padding: 24 }}>
+        <h3 className="h-sec">Новая ссылка</h3>
+        <p className="sub mt-1 mb-4">Формат: <span className="mono">t.me/{BOT_USERNAME}?start=trk_код</span></p>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Название (YouTube, VK Ads…)" />
+          <input className="input mono" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.replace(/[^A-Za-z0-9_-]/g, '') })} placeholder="Код (ad, yt1…)" />
+          <input className="input mono" value={form.promocode} onChange={(e) => setForm({ ...form, promocode: e.target.value.toUpperCase() })} placeholder="Промокод (необяз.)" />
+          <button className="btn solid" onClick={create}>Создать ссылку</button>
         </div>
-    );
+        <textarea className="textarea mono mt-3" style={{ minHeight: 72, fontSize: 13 }} value={form.welcome_message} onChange={(e) => setForm({ ...form, welcome_message: e.target.value })}
+          placeholder={"Сообщение при первом переходе (необяз.) — HTML/Markdown Telegram\n<b>Привет!</b> Держи скидку 🎁"} />
+        <p className="faint mt-1" style={{ fontSize: 12 }}>Отправляется только при первом переходе. Поддерживается HTML Telegram.</p>
+      </div>
+
+      <div className="tbl-wrap">
+        <div className="flex items-center justify-between" style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
+          <h3 className="h-sec">Кампании</h3>
+          <button className="icon-btn" onClick={load} title="Обновить"><RefreshCw size={15} /></button>
+        </div>
+        {loading ? <div className="sub" style={{ padding: 32, textAlign: 'center' }}>Загрузка…</div>
+          : links.length === 0 ? <div style={{ padding: 48, textAlign: 'center' }}><Link size={36} className="faint" style={{ margin: '0 auto 12px' }} /><p className="muted">Ссылок пока нет</p><p className="sub mt-1">Создайте первую для рекламной кампании</p></div>
+          : <div style={{ overflowX: 'auto' }}><table className="tbl" style={{ minWidth: 900 }}>
+              <thead><tr><th>Кампания</th><th>Ссылка</th><th style={{ textAlign: 'center' }}>Переходы</th><th style={{ textAlign: 'center' }}>Уник.</th><th style={{ textAlign: 'center' }}>Новые</th><th style={{ textAlign: 'center' }}>Оплатили</th><th style={{ textAlign: 'right' }}>Доход</th><th style={{ textAlign: 'center' }}>Конв.</th><th style={{ textAlign: 'right' }}>Действия</th></tr></thead>
+              <tbody>{links.map((l) => (
+                <tr key={l.id} style={!l.is_active ? { opacity: 0.5 } : undefined}>
+                  <td><div style={{ fontWeight: 500 }}>{l.name || l.code}</div><div className="faint mono" style={{ fontSize: 12 }}>trk_{l.code}{l.promocode ? ` · ${l.promocode}` : ''}</div></td>
+                  <td><button className="btn sm" onClick={() => copy(l.url)}><Copy size={13} /> копировать</button></td>
+                  <td className="muted" style={{ textAlign: 'center' }}>{l.clicks}</td>
+                  <td className="muted" style={{ textAlign: 'center' }}>{l.unique_users}</td>
+                  <td style={{ textAlign: 'center' }}>{l.new_users}</td>
+                  <td className="muted" style={{ textAlign: 'center' }}>{l.paid_users}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 500 }}>{fmtMoney(l.total_revenue)}</td>
+                  <td style={{ textAlign: 'center' }}><span className={`badge ${l.conversion_rate >= 10 ? 'solid' : l.conversion_rate >= 3 ? 'mute' : 'line'}`}>{fmtPct(l.conversion_rate)}</span></td>
+                  <td style={{ textAlign: 'right' }}><span className="inline-flex gap-1">
+                    <button className="icon-btn" onClick={() => openDetail(l)} title="Детали"><BarChart2 size={14} /></button>
+                    <button className="icon-btn" onClick={() => toggle(l)} title={l.is_active ? 'Выключить' : 'Включить'}>{l.is_active ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}</button>
+                    <button className="icon-btn" onClick={() => setEditing({ ...l })} title="Редактировать"><Edit2 size={14} /></button>
+                    <button className="icon-btn danger" onClick={() => remove(l.id)} title="Удалить"><Trash2 size={14} /></button>
+                  </span></td>
+                </tr>
+              ))}</tbody>
+            </table></div>}
+      </div>
+
+      {editing && (
+        <Modal onClose={() => setEditing(null)} title="Редактировать ссылку" width={440}
+          footer={<><button className="btn block" onClick={() => setEditing(null)}>Отмена</button><button className="btn solid block" onClick={saveEdit}>Сохранить</button></>}>
+          <div className="flex flex-col gap-3">
+            <input className="input" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="Название" />
+            <input className="input mono" value={editing.code} onChange={(e) => setEditing({ ...editing, code: e.target.value.replace(/[^A-Za-z0-9_-]/g, '') })} placeholder="Код" />
+            <input className="input mono" value={editing.promocode || ''} onChange={(e) => setEditing({ ...editing, promocode: e.target.value.toUpperCase() })} placeholder="Промокод" />
+            <textarea className="textarea mono" style={{ minHeight: 80, fontSize: 13 }} value={editing.welcome_message || ''} onChange={(e) => setEditing({ ...editing, welcome_message: e.target.value })} placeholder={"Сообщение при первом переходе (HTML/Markdown)"} />
+            <label className="flex items-center gap-2 muted" style={{ fontSize: 13, cursor: 'pointer' }}><input type="checkbox" checked={editing.is_active} onChange={(e) => setEditing({ ...editing, is_active: e.target.checked })} /> Ссылка активна</label>
+          </div>
+        </Modal>
+      )}
+
+      {detail && (
+        <div className="modal-backdrop" style={{ zIndex: 60 }} onClick={() => setDetail(null)}>
+          <div className="modal" style={{ maxWidth: 860 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <div>
+                <div className="modal-title">{detail.name || detail.code}</div>
+                <button className="btn sm mt-1" onClick={() => copy(detail.url)}><Copy size={13} /> {detail.url}</button>
+              </div>
+              <button className="icon-btn" onClick={() => setDetail(null)}><X size={18} /></button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3" style={{ padding: 20, borderBottom: '1px solid var(--border)' }}>
+              <div className="inset" style={{ padding: 12 }}><div className="sub">Переходы</div><div className="stat-value" style={{ fontSize: 20 }}>{detail.clicks}</div></div>
+              <div className="inset" style={{ padding: 12 }}><div className="sub">Уникальные</div><div className="stat-value" style={{ fontSize: 20 }}>{detail.unique_users}</div></div>
+              <div className="inset" style={{ padding: 12 }}><div className="sub">Доход</div><div className="stat-value" style={{ fontSize: 20 }}>{fmtMoney(detail.total_revenue)}</div></div>
+              <div className="inset" style={{ padding: 12 }}><div className="sub">Конверсия</div><div className="stat-value" style={{ fontSize: 20 }}>{fmtPct(detail.conversion_rate)}</div></div>
+            </div>
+            <div className="modal-body">
+              <div className="eyebrow mb-3">Пользователи по ссылке</div>
+              {detailLoading ? <div className="sub" style={{ textAlign: 'center', padding: 32 }}>Загрузка…</div>
+                : !detail.users?.length ? <div className="sub" style={{ textAlign: 'center', padding: 32 }}>Пока никто не перешёл</div>
+                : <table className="tbl">
+                    <thead><tr><th>Пользователь</th><th>Переход</th><th style={{ textAlign: 'center' }}>Новый</th><th style={{ textAlign: 'center' }}>Подписки</th><th style={{ textAlign: 'right' }}>Потратил</th></tr></thead>
+                    <tbody>{detail.users.map((u) => (
+                      <tr key={u.user_id}>
+                        <td><div>{u.full_name || u.username || `#${u.telegram_id}`}</div><div className="faint mono" style={{ fontSize: 12 }}>{u.telegram_id}{u.username ? ` · @${u.username}` : ''}</div></td>
+                        <td className="muted">{fmtDate(u.visited_at)}</td>
+                        <td style={{ textAlign: 'center' }}>{u.is_new_user ? 'да' : <span className="faint">—</span>}</td>
+                        <td style={{ textAlign: 'center' }}>{u.active_keys > 0 ? `${u.active_keys} акт.` : u.has_paid ? 'была' : u.trial_used ? 'триал' : <span className="faint">—</span>}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 500 }}>{u.total_spent > 0 ? fmtMoney(u.total_spent) : '—'}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
-interface PublicPagesProps {
-    onToast: (title: string, msg: string, type: ToastType) => void;
-}
-
-const PromocodesStats: React.FC<{ promos: Promo[] }> = ({ promos }) => {
-    const [stats, setStats] = useState<{ total: number; totalUses: number; activeCount: number } | null>(null);
-
-    useEffect(() => {
-        (async () => {
-            try {
-                const data = await apiFetch('/panel/promocodes/stats');
-                if (data) {
-                    setStats(data);
-                }
-            } catch (e) {
-                console.error('Failed to load promocodes stats', e);
-            }
-        })();
-    }, []);
-
-    const totalBonus = promos.reduce((sum, p) => {
-        if (p.type === 'balance') return sum + (Number(p.value) * p.uses);
-        return sum;
-    }, 0);
-
-    return (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <StatCard 
-                title="Активных кодов" 
-                value={stats ? stats.activeCount : promos.length} 
-                icon={Tag} 
-                color="green" 
-            />
-            <StatCard 
-                title="Использований" 
-                value={stats ? stats.totalUses.toLocaleString('ru-RU') : '0'} 
-                icon={Users} 
-                color="blue" 
-            />
-            <StatCard 
-                title="Сумма бонусов" 
-                value={`${totalBonus.toLocaleString('ru-RU')} ₽`} 
-                icon={Gift} 
-                color="purple" 
-            />
-        </div>
-    );
-};
-
-const AutoDiscountsPage: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
-    const [discounts, setDiscounts] = useState<any[]>([]);
-    const [showCreateModal, setShowCreateModal] = useState(false);
-    const [newDiscount, setNewDiscount] = useState({
-        name: '',
-        condition_type: 'payment_amount',
-        condition_value: '',
-        discount_type: 'percent',
-        discount_value: '',
-        is_active: true
-    });
-
-    useEffect(() => {
-        (async () => {
-            try {
-                const data = await apiFetch('/panel/auto-discounts');
-                if (Array.isArray(data)) {
-                    setDiscounts(data);
-                }
-            } catch (e) {
-                console.error('Failed to load auto discounts', e);
-            }
-        })();
-    }, []);
-
-    const handleCreate = async () => {
-        if (!newDiscount.name || !newDiscount.condition_value || !newDiscount.discount_value) {
-            onToast('Ошибка', 'Заполните все поля', 'error');
-            return;
-        }
-        try {
-            await apiFetch('/panel/auto-discounts', {
-                method: 'POST',
-                body: JSON.stringify(newDiscount),
-            });
-            onToast('Успех', 'Правило создано', 'success');
-            setShowCreateModal(false);
-            setNewDiscount({ name: '', condition_type: 'payment_amount', condition_value: '', discount_type: 'percent', discount_value: '', is_active: true });
-            const data = await apiFetch('/panel/auto-discounts');
-            if (Array.isArray(data)) setDiscounts(data);
-        } catch (e: any) {
-            onToast('Ошибка', 'Не удалось создать правило', 'error');
-        }
-    };
-
-    return (
-        <>
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-                <div className="p-4 border-b border-gray-800 flex justify-between items-center">
-                    <h3 className="text-lg font-bold text-white">Автоматические правила</h3>
-                    <button 
-                        onClick={() => setShowCreateModal(true)}
-                        className="text-gray-200 text-sm hover:underline font-medium"
-                    >
-                        + Добавить правило
-                    </button>
-                </div>
-                <table className="w-full text-left">
-                    <thead>
-                        <tr className="bg-gray-800/50 text-gray-400 text-xs uppercase">
-                            <th className="px-6 py-4">Название</th>
-                            <th className="px-6 py-4">Условие</th>
-                            <th className="px-6 py-4">Бонус</th>
-                            <th className="px-6 py-4">Статус</th>
-                            <th className="px-6 py-4 text-right"></th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-800">
-                        {discounts.length === 0 ? (
-                            <tr>
-                                <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
-                                    Нет правил. Создайте первое правило.
-                                </td>
-                            </tr>
-                        ) : (
-                            discounts.map((d) => (
-                                <tr key={d.id}>
-                                    <td className="px-6 py-4 text-white font-medium">{d.name}</td>
-                                    <td className="px-6 py-4 text-gray-400 text-sm">
-                                        {d.condition_type === 'payment_amount' && `Пополнение > ${d.condition_value}₽`}
-                                        {d.condition_type === 'payment_method' && `Оплата через ${d.condition_value}`}
-                                        {d.condition_type === 'plan_type' && `Покупка тарифа "${d.condition_value}"`}
-                                    </td>
-                                    <td className="px-6 py-4 text-green-400 font-bold">
-                                        {d.discount_type === 'percent' ? `+${d.discount_value}%` : `+${d.discount_value}₽`}
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <span className={`px-2 py-0.5 rounded text-xs border ${
-                                            d.is_active 
-                                                ? 'bg-green-500/10 text-green-400 border-green-500/20' 
-                                                : 'bg-gray-500/10 text-gray-400 border-gray-500/20'
-                                        }`}>
-                                            {d.is_active ? 'Активна' : 'Неактивна'}
-                                        </span>
-                                    </td>
-                                    <td className="px-6 py-4 text-right">
-                                        <button 
-                                            onClick={async () => {
-                                                try {
-                                                    await apiFetch(`/panel/auto-discounts/${d.id}`, { method: 'DELETE' });
-                                                    onToast('Успех', 'Правило удалено', 'success');
-                                                    const data = await apiFetch('/panel/auto-discounts');
-                                                    if (Array.isArray(data)) setDiscounts(data);
-                                                } catch (e) {
-                                                    onToast('Ошибка', 'Не удалось удалить правило', 'error');
-                                                }
-                                            }}
-                                            className="text-red-500 hover:text-red-400"
-                                        >
-                                            <Trash2 size={16} />
-                                        </button>
-                                    </td>
-                                </tr>
-                            ))
-                        )}
-                    </tbody>
-                </table>
-            </div>
-
-            {showCreateModal && (
-                <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md" onClick={() => setShowCreateModal(false)}>
-                    <div className="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-lg shadow-2xl relative" onClick={e => e.stopPropagation()}>
-                        <div className="p-5 border-b border-gray-800 flex justify-between items-center">
-                            <h3 className="text-xl font-bold text-white">Создать правило</h3>
-                            <button onClick={() => setShowCreateModal(false)} className="text-gray-400 hover:text-white"><X size={24} /></button>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            <div>
-                                <label className="text-sm text-gray-400 mb-1.5 block">Название</label>
-                                <input 
-                                    type="text"
-                                    value={newDiscount.name}
-                                    onChange={e => setNewDiscount({ ...newDiscount, name: e.target.value })}
-                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white"
-                                    placeholder="Бонус за крипту"
-                                />
-                            </div>
-                            <div>
-                                <label className="text-sm text-gray-400 mb-1.5 block">Тип условия</label>
-                                <select 
-                                    value={newDiscount.condition_type}
-                                    onChange={e => setNewDiscount({ ...newDiscount, condition_type: e.target.value })}
-                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white"
-                                >
-                                    <option value="payment_amount">Сумма пополнения</option>
-                                    <option value="payment_method">Способ оплаты</option>
-                                    <option value="plan_type">Тип тарифа</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="text-sm text-gray-400 mb-1.5 block">Значение условия</label>
-                                <input 
-                                    type="text"
-                                    value={newDiscount.condition_value}
-                                    onChange={e => setNewDiscount({ ...newDiscount, condition_value: e.target.value })}
-                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white"
-                                    placeholder={newDiscount.condition_type === 'payment_amount' ? '1000' : newDiscount.condition_type === 'payment_method' ? 'crypto' : '1 год'}
-                                />
-                            </div>
-                            <div>
-                                <label className="text-sm text-gray-400 mb-1.5 block">Тип бонуса</label>
-                                <select 
-                                    value={newDiscount.discount_type}
-                                    onChange={e => setNewDiscount({ ...newDiscount, discount_type: e.target.value })}
-                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white"
-                                >
-                                    <option value="percent">Процент (%)</option>
-                                    <option value="fixed">Фиксированная сумма (₽)</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="text-sm text-gray-400 mb-1.5 block">Значение бонуса</label>
-                                <input 
-                                    type="text"
-                                    value={newDiscount.discount_value}
-                                    onChange={e => setNewDiscount({ ...newDiscount, discount_value: e.target.value })}
-                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-2.5 text-white"
-                                    placeholder="10"
-                                />
-                            </div>
-                        </div>
-                        <div className="p-5 border-t border-gray-800">
-                            <button onClick={handleCreate} className="w-full py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-bold">
-                                Создать правило
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-        </>
-    );
-};
-
-const PublicPages: React.FC<PublicPagesProps> = ({ onToast }) => {
-    const [activeTab, setActiveTab] = useState<'offer' | 'privacy'>('offer');
-    const [content, setContent] = useState('');
-    const [lastUpdated, setLastUpdated] = useState<string | null>(null);
-    const [loading, setLoading] = useState(true);
-
-    useEffect(() => {
-        (async () => {
-            try {
-                const data = await apiFetch('/panel/public-pages');
-                if (data) {
-                    setContent(data[activeTab]?.content || '');
-                    setLastUpdated(data[activeTab]?.updated_at || null);
-                }
-            } catch (e) {
-                console.error('Failed to load public pages', e);
-            } finally {
-                setLoading(false);
-            }
-        })();
-    }, []);
-
-    useEffect(() => {
-        (async () => {
-            try {
-                const data = await apiFetch('/panel/public-pages');
-                if (data && data[activeTab]) {
-                    setContent(data[activeTab].content || '');
-                    setLastUpdated(data[activeTab].updated_at || null);
-                }
-            } catch (e) {
-                console.error('Failed to load public page', e);
-            }
-        })();
-    }, [activeTab]);
-
-    const handleSave = async () => {
-        try {
-            await apiFetch(`/panel/public-pages/${activeTab}`, {
-                method: 'PUT',
-                body: JSON.stringify({ content }),
-            });
-            onToast('Сохранено', 'Документ успешно обновлен и синхронизирован с мини-приложением', 'success');
-            setLastUpdated(new Date().toISOString());
-        } catch (e) {
-            onToast('Ошибка', 'Не удалось сохранить документ', 'error');
-        }
-    };
-
-    if (loading) {
-        return (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-gray-300" size={32} /></div>
-            </div>
-        );
-    }
-
-    return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div><h2 className="text-2xl font-bold text-white">Публичные страницы</h2><p className="text-gray-400 mt-1">Редактирование юридических документов</p></div>
-                <div className="flex bg-gray-900 border border-gray-800 rounded-xl p-1">
-                    <button onClick={() => setActiveTab('offer')} className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${activeTab === 'offer' ? 'bg-gray-800 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}>Договор оферты</button>
-                    <button onClick={() => setActiveTab('privacy')} className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${activeTab === 'privacy' ? 'bg-gray-800 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}>Политика конфиденциальности</button>
-                </div>
-            </div>
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 flex flex-col h-[calc(100vh-240px)]">
-                <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-lg font-bold text-gray-200 flex items-center">
-                        {activeTab === 'offer' ? <FileTextIcon size={20} className="mr-2 text-gray-300"/> : <Shield size={20} className="mr-2 text-green-500"/>}
-                        {activeTab === 'offer' ? 'Редактор оферты' : 'Редактор политики'}
-                    </h3>
-                    <div className="text-xs text-gray-500 flex items-center">
-                        <Clock size={12} className="mr-1"/> 
-                        Последнее сохранение: {lastUpdated ? new Date(lastUpdated).toLocaleString('ru-RU') : 'Никогда'}
-                    </div>
-                </div>
-                <textarea 
-                    value={content}
-                    onChange={e => setContent(e.target.value)}
-                    className="flex-1 w-full bg-gray-950 border border-gray-700 rounded-xl p-6 text-gray-300 font-mono text-sm leading-relaxed focus:outline-none focus:border-gray-500 resize-none mb-4" 
-                    placeholder={activeTab === 'offer' ? "# Договор оферты\n\n1. Общие положения..." : "# Политика конфиденциальности\n\n1. Сбор данных..."} 
-                />
-                <div className="flex justify-end">
-                    <button onClick={handleSave} className="px-6 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-black/40 transition-all flex items-center">
-                        <FileCheck size={18} className="mr-2" /> Сохранить изменения
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-// Компонент настроек подписок с загрузкой сквадов из Remnawave
-const SubscriptionSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
-    const [squads, setSquads] = useState<any[]>([]);
-    const [vpnSquads, setVpnSquads] = useState<string[]>([]);
-    const [trialEnabled, setTrialEnabled] = useState(true);
-    const [trialHours, setTrialHours] = useState('24');
-    const [loading, setLoading] = useState(true);
-    const [saving, setSaving] = useState(false);
-    const [syncing, setSyncing] = useState(false);
-
-    useEffect(() => {
-        loadData();
-    }, []);
-
-    const loadData = async () => {
-        setLoading(true);
-        try {
-            // Загружаем сквады из Remnawave
-            const squadsData = await apiFetch('/panel/remnawave/squads');
-            if (Array.isArray(squadsData)) {
-                setSquads(squadsData);
-            }
-            
-            // Загружаем сохраненные сквады по умолчанию
-            const defaultSquadsData = await apiFetch('/panel/default-squads');
-            if (defaultSquadsData) {
-                if (Array.isArray(defaultSquadsData.vpn_squads)) {
-                    setVpnSquads(defaultSquadsData.vpn_squads);
-                }
-            }
-        } catch (e) {
-            console.error('Failed to load squads:', e);
-            onToast('Предупреждение', 'Не удалось загрузить сквады из Remnawave', 'info');
-        }
-        setLoading(false);
-    };
-
-    const toggleSquad = (uuid: string) => {
-        setVpnSquads(prev => 
-            prev.includes(uuid) ? prev.filter(s => s !== uuid) : [...prev, uuid]
-        );
-    };
-
-    const saveSquads = async () => {
-        setSaving(true);
-        try {
-            await apiFetch('/panel/default-squads', {
-                method: 'PUT',
-                body: JSON.stringify({ 
-                    vpn_squads: vpnSquads
-                })
-            });
-            onToast('Успешно', 'Сквады сохранены', 'success');
-        } catch (e) {
-            console.error('Failed to save default squads:', e);
-            onToast('Ошибка', 'Не удалось сохранить сквады', 'error');
-        }
-        setSaving(false);
-    };
-
-    const syncWithRemnawave = async () => {
-        setSyncing(true);
-        try {
-            const result = await apiFetch('/panel/remnawave/sync', { method: 'POST' });
-            if (result.success) {
-                onToast('Синхронизация', `Удалено ключей: ${result.deleted_keys}`, 'success');
-            } else {
-                onToast('Ошибка', result.error || 'Ошибка синхронизации', 'error');
-            }
-        } catch (e) {
-            console.error('Failed to sync with Remnawave:', e);
-            onToast('Ошибка', 'Не удалось синхронизировать с Remnawave', 'error');
-        }
-        setSyncing(false);
-    };
-
-    const SquadSelector = ({ title, description, selectedSquads, color }: { 
-        title: string, description: string, selectedSquads: string[], color: string 
-    }) => (
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-            <h3 className="text-lg font-bold text-white mb-2">{title}</h3>
-            <p className="text-sm text-gray-400 mb-4">{description}</p>
-            {loading ? (
-                <div className="flex items-center justify-center py-4">
-                    <Loader className="animate-spin text-gray-300" size={20} />
-                    <span className="ml-2 text-gray-400">Загрузка...</span>
-                </div>
-            ) : squads.length === 0 ? (
-                <div className="p-3 bg-yellow-900/20 border border-yellow-500/30 rounded-xl text-yellow-400 text-sm">
-                    Сквады не найдены
-                </div>
-            ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {squads.map(sq => (
-                        <label 
-                            key={sq.uuid} 
-                            className={`flex items-center space-x-3 px-3 py-2 rounded-xl border cursor-pointer transition-all ${
-                                selectedSquads.includes(sq.uuid) 
-                                    ? 'bg-gray-700/20 border-gray-600 shadow-lg shadow-black/40' 
-                                    : 'bg-gray-950 border-gray-700 hover:border-gray-600'
-                            }`}
-                            style={selectedSquads.includes(sq.uuid) ? {
-                                backgroundColor: 'rgba(249, 115, 22, 0.2)',
-                                borderColor: '#f97316'
-                            } : {}}
-                            onClick={() => toggleSquad(sq.uuid)}
-                        >
-                            <input 
-                                type="checkbox" 
-                                checked={selectedSquads.includes(sq.uuid)}
-                                onChange={() => {}}
-                                className="w-4 h-4 rounded bg-gray-800 border-gray-600 cursor-pointer" 
-                            />
-                            <div className="flex-1 min-w-0">
-                                <span className="text-sm font-medium text-gray-200 block truncate">{sq.name}</span>
-                                <span className="text-xs text-gray-500">{sq.members_count || 0} участников</span>
-                            </div>
-                        </label>
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-
-    return (
-        <div className="space-y-6">
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <h3 className="text-lg font-bold text-white mb-6 border-b border-gray-800 pb-4">Пробный период</h3>
-                <div className="space-y-6">
-                    <div className="flex justify-between items-center p-4 bg-gray-950 rounded-xl border border-gray-800">
-                        <span className="text-gray-300 font-medium">Включить пробный период</span>
-                        <button onClick={() => setTrialEnabled(!trialEnabled)} className={`w-12 h-6 rounded-full p-1 transition-colors relative ${trialEnabled ? 'bg-gray-700' : 'bg-gray-700'}`}>
-                            <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${trialEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
-                        </button>
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-400 mb-2">Длительность (часов)</label>
-                        <input 
-                            type="number" 
-                            value={trialHours}
-                            onChange={e => setTrialHours(e.target.value)}
-                            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gray-500 transition-colors" 
-                            placeholder="24" 
-                        />
-                    </div>
-                </div>
-            </div>
-            
-            <div className="flex justify-between items-center">
-                <h3 className="text-lg font-bold text-white">Балансировщик сквадов</h3>
-                <button 
-                    onClick={saveSquads}
-                    disabled={saving}
-                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center"
-                >
-                    {saving && <Loader className="animate-spin mr-2" size={14} />}
-                    Сохранить
-                </button>
-            </div>
-
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <div className="flex items-start gap-3 p-4 bg-gray-800/20 border border-white/10 rounded-xl mb-4">
-                    <Zap className="text-gray-200 shrink-0 mt-0.5" size={20} />
-                    <div>
-                        <div className="text-gray-200 font-bold mb-1">Автоматический балансировщик</div>
-                        <div className="text-gray-300 text-sm">
-                            При создании ключа система автоматически выберет сквад с наименьшим количеством пользователей из выбранных ниже. 
-                            Если сквады не выбраны — будет использован сквад с минимальной нагрузкой из всех доступных.
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <SquadSelector 
-                title="🔒 Сквады для подписок" 
-                description="Выберите сквады для единой подписки (VPN + обход блокировок)"
-                selectedSquads={vpnSquads}
-                color="blue"
-            />
-            
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <h3 className="text-lg font-bold text-white mb-2">Синхронизация с Remnawave</h3>
-                <p className="text-sm text-gray-400 mb-4">
-                    Удалить из БД бота ключи, которые были удалены из Remnawave
-                </p>
-                <button 
-                    onClick={syncWithRemnawave}
-                    disabled={syncing}
-                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center"
-                >
-                    {syncing && <Loader className="animate-spin mr-2" size={14} />}
-                    {syncing ? 'Синхронизация...' : '🔄 Синхронизировать'}
-                </button>
-            </div>
-        </div>
-    );
-};
-
-// Компонент настроек резервного копирования
-const BackupSettingsTab: React.FC<{ onToast: (title: string, msg: string, type: ToastType) => void }> = ({ onToast }) => {
-    const [backupEnabled, setBackupEnabled] = useState(false);
-    const [backupInterval, setBackupInterval] = useState('12');
-    const [lastBackup, setLastBackup] = useState<string | null>(null);
-    const [creating, setCreating] = useState(false);
-
-    useEffect(() => {
-        loadBackupStatus();
-    }, []);
-
-    const loadBackupStatus = async () => {
-        try {
-            const data = await apiFetch('/panel/backups/status');
-            if (data) {
-                setBackupEnabled(data.enabled || false);
-                setBackupInterval(data.interval_hours?.toString() || '12');
-                setLastBackup(data.last_backup || null);
-            }
-        } catch (e) {
-            console.error('Failed to load backup status', e);
-        }
-    };
-
-    const handleCreateBackup = async () => {
-        setCreating(true);
-        try {
-            await apiFetch('/panel/backups/create', { method: 'POST' });
-            onToast('Успех', 'Резервная копия создана и отправлена администратору', 'success');
-            loadBackupStatus();
-        } catch (e) {
-            onToast('Ошибка', 'Не удалось создать резервную копию', 'error');
-        }
-        setCreating(false);
-    };
-
-    const handleSaveSettings = async () => {
-        try {
-            await apiFetch('/panel/backups/settings', {
-                method: 'PUT',
-                body: JSON.stringify({ enabled: backupEnabled, interval_hours: parseInt(backupInterval) })
-            });
-            onToast('Успех', 'Настройки бекапов сохранены', 'success');
-        } catch (e) {
-            onToast('Ошибка', 'Не удалось сохранить настройки', 'error');
-        }
-    };
-
-    return (
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 mb-6">
-            <h3 className="text-lg font-bold text-white mb-6 border-b border-gray-800 pb-4">Резервное копирование</h3>
-            <div className="space-y-6">
-                <div className="flex justify-between items-center p-4 bg-gray-950 rounded-xl border border-gray-800">
-                    <div>
-                        <span className="text-gray-300 font-medium">Автоматическое резервное копирование</span>
-                        <p className="text-xs text-gray-500 mt-1">Бекапы будут создаваться автоматически и отправляться администратору</p>
-                    </div>
-                    <button onClick={() => setBackupEnabled(!backupEnabled)} className={`w-12 h-6 rounded-full p-1 transition-colors relative ${backupEnabled ? 'bg-gray-700' : 'bg-gray-700'}`}>
-                        <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${backupEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
-                    </button>
-                </div>
-                
-                <div>
-                    <label className="block text-sm font-medium text-gray-400 mb-2">Частота создания бэкапов (в часах)</label>
-                    <input 
-                        type="number" 
-                        value={backupInterval}
-                        onChange={e => setBackupInterval(e.target.value)}
-                        className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gray-500 transition-colors" 
-                        placeholder="12" 
-                    />
-                </div>
-
-                {lastBackup && (
-                    <div className="p-3 bg-gray-950 rounded-xl border border-gray-800">
-                        <span className="text-gray-500 text-sm">Последний бекап: </span>
-                        <span className="text-white text-sm">{new Date(lastBackup).toLocaleString('ru-RU')}</span>
-                    </div>
-                )}
-
-                <div className="p-4 bg-gray-800/20 border border-white/10 rounded-xl flex items-start">
-                    <Cloud className="text-gray-200 mr-3 mt-0.5" size={20} />
-                    <div>
-                        <h4 className="text-gray-200 font-bold text-sm">Важно</h4>
-                        <p className="text-gray-300/80 text-xs mt-1">Бэкапы будут отправляться в личные сообщения администратору в виде архива базы данных.</p>
-                    </div>
-                </div>
-
-                <div className="flex gap-3">
-                    <button 
-                        onClick={handleCreateBackup}
-                        disabled={creating}
-                        className="flex-1 px-4 py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 text-white rounded-xl font-medium transition-colors flex items-center justify-center"
-                    >
-                        {creating ? <Loader className="animate-spin mr-2" size={18} /> : <Download size={18} className="mr-2" />}
-                        Создать бекап сейчас
-                    </button>
-                    <button 
-                        onClick={handleSaveSettings}
-                        className="flex-1 px-4 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-medium transition-colors flex items-center justify-center"
-                    >
-                        <Save size={18} className="mr-2" />
-                        Сохранить настройки
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-// ==========================================
-// SQUADS PAGE - Управление сквадами
-// ==========================================
-
-interface SquadsPageProps {
-    onToast: (title: string, msg: string, type: ToastType) => void;
-}
+// ==========================================================
+// 15. SQUADS
+// ==========================================================
 
 interface SquadConfig {
-    id: number;
-    squad_uuid: string;
-    squad_name: string;
-    squad_type: string;
-    max_users: number;
-    current_users: number;
-    inbounds_count?: number;
-    is_active: boolean;
-    priority: number;
+  id: number; squad_uuid: string; squad_name: string; squad_type: string;
+  max_users: number; current_users: number; inbounds_count?: number; is_active: boolean; priority: number;
 }
 
-const SquadsPage: React.FC<SquadsPageProps> = ({ onToast }) => {
-    const [squads, setSquads] = useState<SquadConfig[]>([]);
-    const [mapping, setMapping] = useState<{vpn: string[], trial: string[]}>({vpn: [], trial: []});
-    const [loading, setLoading] = useState(true);
-    const [syncing, setSyncing] = useState(false);
-    const [editingSquad, setEditingSquad] = useState<SquadConfig | null>(null);
+const SquadsPage: React.FC<{ onToast: (t: string, m: string, ty: ToastType) => void }> = ({ onToast }) => {
+  const [squads, setSquads] = useState<SquadConfig[]>([]);
+  const [mapping, setMapping] = useState<{ vpn: string[]; trial: string[] }>({ vpn: [], trial: [] });
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [editing, setEditing] = useState<SquadConfig | null>(null);
 
-    const loadSquads = async () => {
-        try {
-            const data = await apiFetch('/panel/squads');
-            if (data) {
-                setSquads(data.squads || []);
-                setMapping({vpn: data.mapping?.vpn || [], trial: data.mapping?.trial || []});
-            }
-        } catch (e) {
-            onToast('Ошибка', 'Не удалось загрузить сквады', 'error');
-        } finally {
-            setLoading(false);
-        }
-    };
+  const load = async () => {
+    try { const d = await apiFetch('/panel/squads'); if (d) { setSquads(d.squads || []); setMapping({ vpn: d.mapping?.vpn || [], trial: d.mapping?.trial || [] }); } }
+    catch { onToast('Ошибка', 'Не удалось загрузить сквады', 'error'); } finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
 
-    useEffect(() => { loadSquads(); }, []);
+  const sync = async () => {
+    setSyncing(true);
+    try { const r = await apiFetch('/panel/squads/sync', { method: 'POST' }); if (r?.success) { onToast('Готово', `Синхронизировано ${r.count} сквадов`, 'success'); load(); } else onToast('Ошибка', r?.error || 'Ошибка синхронизации', 'error'); }
+    catch { onToast('Ошибка', 'Не удалось синхронизировать', 'error'); } finally { setSyncing(false); }
+  };
+  const saveSquad = async (squad: SquadConfig) => {
+    try { const r = await apiFetch(`/panel/squads/${squad.squad_uuid}`, { method: 'PUT', body: JSON.stringify({ squad_name: squad.squad_name, squad_type: squad.squad_type, max_users: squad.max_users, priority: squad.priority, is_active: squad.is_active }) }); if (r?.success) { onToast('Готово', 'Сквад обновлён', 'success'); setEditing(null); load(); } }
+    catch { onToast('Ошибка', 'Не удалось сохранить', 'error'); }
+  };
+  const saveMapping = async () => { try { const r = await apiFetch('/panel/squads/mapping', { method: 'PUT', body: JSON.stringify(mapping) }); if (r?.success) onToast('Готово', 'Привязки сохранены', 'success'); } catch { onToast('Ошибка', 'Не удалось сохранить привязки', 'error'); } };
+  const toggleMapping = (type: 'vpn' | 'trial', uuid: string) => setMapping((prev) => { const cur = prev[type] || []; return { ...prev, [type]: cur.includes(uuid) ? cur.filter((u) => u !== uuid) : [...cur, uuid] }; });
 
-    const handleSync = async () => {
-        setSyncing(true);
-        try {
-            const result = await apiFetch('/panel/squads/sync', { method: 'POST' });
-            if (result?.success) {
-                onToast('Успех', `Синхронизировано ${result.count} сквадов`, 'success');
-                loadSquads();
-            } else {
-                onToast('Ошибка', result?.error || 'Ошибка синхронизации', 'error');
-            }
-        } catch (e) {
-            onToast('Ошибка', 'Не удалось синхронизировать', 'error');
-        } finally {
-            setSyncing(false);
-        }
-    };
+  if (loading) return <div className="flex items-center justify-center" style={{ height: 240 }}><Spinner size={28} /></div>;
 
-    const handleSaveSquad = async (squad: SquadConfig) => {
-        try {
-            const result = await apiFetch(`/panel/squads/${squad.squad_uuid}`, {
-                method: 'PUT',
-                body: JSON.stringify({
-                    squad_name: squad.squad_name,
-                    squad_type: squad.squad_type,
-                    max_users: squad.max_users,
-                    priority: squad.priority,
-                    is_active: squad.is_active
-                })
-            });
-            if (result?.success) {
-                onToast('Успех', 'Сквад обновлён', 'success');
-                setEditingSquad(null);
-                loadSquads();
-            }
-        } catch (e) {
-            onToast('Ошибка', 'Не удалось сохранить', 'error');
-        }
-    };
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHead title="Сквады" sub="Распределение нагрузки по серверам">
+        <button className="btn solid" onClick={sync} disabled={syncing}>{syncing ? <Spinner size={16} /> : <RefreshCw size={16} />} Синхронизировать</button>
+      </PageHead>
 
-    const handleSaveMapping = async () => {
-        try {
-            const result = await apiFetch('/panel/squads/mapping', {
-                method: 'PUT',
-                body: JSON.stringify(mapping)
-            });
-            if (result?.success) {
-                onToast('Успех', 'Привязки сохранены', 'success');
-            }
-        } catch (e) {
-            onToast('Ошибка', 'Не удалось сохранить привязки', 'error');
-        }
-    };
-
-    const toggleSquadMapping = (type: 'vpn' | 'trial', uuid: string) => {
-        setMapping(prev => {
-            const current = prev[type] || [];
-            if (current.includes(uuid)) {
-                return { ...prev, [type]: current.filter(u => u !== uuid) };
-            } else {
-                return { ...prev, [type]: [...current, uuid] };
-            }
-        });
-    };
-
-    const getSquadTypeColor = (type: string) => {
-        switch(type) {
-            case 'vpn': return 'bg-white/10 text-gray-200 border-white/10';
-            case 'trial': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
-            case 'whitelist': return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-            default: return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
-        }
-    };
-
-    if (loading) {
-        return <div className="flex items-center justify-center h-64"><Loader className="animate-spin text-gray-300" size={32} /></div>;
-    }
-
-    return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {/* Header */}
-            <div className="flex justify-between items-center">
-                <div>
-                    <h1 className="text-2xl font-bold text-white">Сквады (Распределение нагрузки)</h1>
-                    <p className="text-gray-400 mt-1">Управление распределением пользователей по серверам</p>
-                </div>
-                <button
-                    onClick={handleSync}
-                    disabled={syncing}
-                    className="flex items-center px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
-                >
-                    {syncing ? <Loader className="animate-spin mr-2" size={18} /> : <RefreshCw size={18} className="mr-2" />}
-                    Синхронизировать с Remnawave
-                </button>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {squads.map((sq) => {
+          const pct = sq.max_users > 0 ? Math.min(100, (sq.current_users / sq.max_users) * 100) : 0;
+          return (
+            <div key={sq.squad_uuid} className="card card-hover" style={{ padding: 18, opacity: sq.is_active ? 1 : 0.5 }}>
+              <div className="flex justify-between items-start mb-3">
+                <div><h3 style={{ fontWeight: 600 }}>{sq.squad_name}</h3><span className="badge line mt-1" style={{ marginTop: 6 }}>{sq.squad_type.toUpperCase()}</span></div>
+                <button className="icon-btn" onClick={() => setEditing(sq)}><Edit2 size={15} /></button>
+              </div>
+              <div className="flex flex-col gap-2" style={{ fontSize: 14 }}>
+                <div className="flex justify-between"><span className="muted">Пользователей</span><span style={{ fontWeight: 500 }}>{sq.current_users}{sq.max_users > 0 && ` / ${sq.max_users}`}</span></div>
+                {sq.inbounds_count != null && <div className="flex justify-between"><span className="muted">Инбаундов</span><span>{sq.inbounds_count}</span></div>}
+                <div className="flex justify-between"><span className="muted">Приоритет</span><span>{sq.priority}</span></div>
+                {sq.max_users > 0 && <div className="meter mt-1"><i style={{ width: `${pct}%` }} /></div>}
+              </div>
             </div>
+          );
+        })}
+      </div>
 
-            {/* Squads Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {squads.map(squad => (
-                    <div 
-                        key={squad.squad_uuid} 
-                        className={`bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-all ${!squad.is_active ? 'opacity-50' : ''}`}
-                    >
-                        <div className="flex justify-between items-start mb-3">
-                            <div>
-                                <h3 className="font-bold text-white">{squad.squad_name}</h3>
-                                <span className={`inline-block mt-1 px-2 py-0.5 text-xs font-medium rounded border ${getSquadTypeColor(squad.squad_type)}`}>
-                                    {squad.squad_type.toUpperCase()}
-                                </span>
-                            </div>
-                            <button 
-                                onClick={() => setEditingSquad(squad)}
-                                className="text-gray-400 hover:text-white p-1"
-                            >
-                                <Edit2 size={16} />
-                            </button>
-                        </div>
-                        
-                        <div className="space-y-2 text-sm">
-                            <div className="flex justify-between">
-                                <span className="text-gray-400">Пользователей:</span>
-                                <span className="text-white font-medium">
-                                    {squad.current_users} {squad.max_users > 0 && `/ ${squad.max_users}`}
-                                </span>
-                            </div>
-                            {squad.inbounds_count != null && (
-                                <div className="flex justify-between">
-                                    <span className="text-gray-400">Инбаундов:</span>
-                                    <span className="text-white">{squad.inbounds_count}</span>
-                                </div>
-                            )}
-                            <div className="flex justify-between">
-                                <span className="text-gray-400">Приоритет:</span>
-                                <span className="text-white">{squad.priority}</span>
-                            </div>
-                            {squad.max_users > 0 && (
-                                <div className="w-full bg-gray-800 rounded-full h-2 mt-2">
-                                    <div 
-                                        className="bg-gray-700 h-2 rounded-full transition-all"
-                                        style={{ width: `${Math.min(100, (squad.current_users / squad.max_users) * 100)}%` }}
-                                    />
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                ))}
-            </div>
-
-            {squads.length === 0 && (
-                <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
-                    <Zap size={48} className="mx-auto text-gray-600 mb-4" />
-                    <h3 className="text-lg font-bold text-white mb-2">Нет сквадов</h3>
-                    <p className="text-gray-400 mb-4">Синхронизируйте сквады с Remnawave</p>
-                    <button onClick={handleSync} className="px-4 py-2 bg-gray-700 text-white rounded-lg font-medium">
-                        Синхронизировать
-                    </button>
-                </div>
-            )}
-
-            {/* Squad Mapping */}
-            {squads.length > 0 && (
-                <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                    <h2 className="text-lg font-bold text-white mb-4">Привязка сквадов к типам подписок</h2>
-                    <p className="text-gray-400 text-sm mb-6">
-                        Выберите, на какие сквады будут распределяться пользователи для каждого типа подписки.
-                        Система автоматически выберет сквад с наименьшей нагрузкой.
-                    </p>
-                    
-                    <div className="space-y-6">
-                        {(['vpn', 'trial'] as const).map(type => (
-                            <div key={type}>
-                                <h3 className="font-medium text-white mb-3 flex items-center">
-                                    <span className={`w-3 h-3 rounded-full mr-2 ${
-                                        type === 'vpn' ? 'bg-gray-700' : 'bg-yellow-500'
-                                    }`} />
-                                    {type === 'vpn' ? 'Подписка (VPN + обход блокировок)' : 'Пробный период'}
-                                </h3>
-                                <div className="flex flex-wrap gap-2">
-                                    {squads.filter(s => s.is_active).map(squad => (
-                                        <button
-                                            key={squad.squad_uuid}
-                                            onClick={() => toggleSquadMapping(type, squad.squad_uuid)}
-                                            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${
-                                                mapping[type]?.includes(squad.squad_uuid)
-                                                    ? 'bg-gray-700 border-gray-600 text-white'
-                                                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600'
-                                            }`}
-                                        >
-                                            {squad.squad_name}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-
-                    <button 
-                        onClick={handleSaveMapping}
-                        className="mt-6 px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium transition-colors"
-                    >
-                        Сохранить привязки
-                    </button>
-                </div>
-            )}
-
-            {/* Edit Squad Modal */}
-            {editingSquad && (
-                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setEditingSquad(null)}>
-                    <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-                        <h2 className="text-xl font-bold text-white mb-4">Редактирование сквада</h2>
-                        
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-400 mb-2">Название</label>
-                                <input
-                                    type="text"
-                                    value={editingSquad.squad_name}
-                                    onChange={e => setEditingSquad({...editingSquad, squad_name: e.target.value})}
-                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-400 mb-2">Тип</label>
-                                <select
-                                    value={editingSquad.squad_type}
-                                    onChange={e => setEditingSquad({...editingSquad, squad_type: e.target.value})}
-                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
-                                >
-                                    <option value="vpn">Подписка (VPN + обход)</option>
-                                    <option value="trial">Trial (пробный)</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-400 mb-2">Макс. пользователей (0 = без лимита)</label>
-                                <input
-                                    type="number"
-                                    value={editingSquad.max_users}
-                                    onChange={e => setEditingSquad({...editingSquad, max_users: parseInt(e.target.value) || 0})}
-                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-400 mb-2">Приоритет</label>
-                                <input
-                                    type="number"
-                                    value={editingSquad.priority}
-                                    onChange={e => setEditingSquad({...editingSquad, priority: parseInt(e.target.value) || 0})}
-                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white"
-                                />
-                            </div>
-                            <div className="flex items-center">
-                                <input
-                                    type="checkbox"
-                                    checked={editingSquad.is_active}
-                                    onChange={e => setEditingSquad({...editingSquad, is_active: e.target.checked})}
-                                    className="mr-2"
-                                />
-                                <label className="text-gray-400">Активен</label>
-                            </div>
-                        </div>
-
-                        <div className="flex gap-3 mt-6">
-                            <button
-                                onClick={() => setEditingSquad(null)}
-                                className="flex-1 px-4 py-2 bg-gray-800 text-gray-300 rounded-lg font-medium hover:bg-gray-700 transition-colors"
-                            >
-                                Отмена
-                            </button>
-                            <button
-                                onClick={() => handleSaveSquad(editingSquad)}
-                                className="flex-1 px-4 py-2 bg-gray-700 text-white rounded-lg font-medium hover:bg-gray-600 transition-colors"
-                            >
-                                Сохранить
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+      {squads.length === 0 && (
+        <div className="card" style={{ padding: 32, textAlign: 'center' }}>
+          <Zap size={40} className="faint" style={{ margin: '0 auto 12px' }} />
+          <h3 className="h-sec mb-2">Нет сквадов</h3>
+          <p className="sub mb-4">Синхронизируйте сквады с Remnawave</p>
+          <button className="btn solid" onClick={sync} style={{ margin: '0 auto' }}>Синхронизировать</button>
         </div>
-    );
+      )}
+
+      {squads.length > 0 && (
+        <div className="card" style={{ padding: 24 }}>
+          <h3 className="h-sec mb-2">Привязка сквадов к типам подписок</h3>
+          <p className="sub mb-6">Система выберет сквад с наименьшей нагрузкой из выбранных для каждого типа.</p>
+          <div className="flex flex-col gap-5">
+            {(['vpn', 'trial'] as const).map((type) => (
+              <div key={type}>
+                <h4 className="mb-3" style={{ fontWeight: 500 }}>{type === 'vpn' ? 'Подписка (VPN + обход блокировок)' : 'Пробный период'}</h4>
+                <div className="flex flex-wrap gap-2">
+                  {squads.filter((s) => s.is_active).map((sq) => (
+                    <button key={sq.squad_uuid} className={`chip ${mapping[type]?.includes(sq.squad_uuid) ? 'on' : ''}`} onClick={() => toggleMapping(type, sq.squad_uuid)}>{sq.squad_name}</button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <button className="btn solid mt-6" onClick={saveMapping}>Сохранить привязки</button>
+        </div>
+      )}
+
+      {editing && (
+        <Modal onClose={() => setEditing(null)} title="Редактирование сквада" width={440}
+          footer={<><button className="btn block" onClick={() => setEditing(null)}>Отмена</button><button className="btn solid block" onClick={() => saveSquad(editing)}>Сохранить</button></>}>
+          <div className="flex flex-col gap-4">
+            <div><label className="field-label">Название</label><input className="input" value={editing.squad_name} onChange={(e) => setEditing({ ...editing, squad_name: e.target.value })} /></div>
+            <div><label className="field-label">Тип</label><select className="select" value={editing.squad_type} onChange={(e) => setEditing({ ...editing, squad_type: e.target.value })}><option value="vpn">Подписка (VPN + обход)</option><option value="trial">Trial (пробный)</option></select></div>
+            <div><label className="field-label">Макс. пользователей (0 = без лимита)</label><input className="input" type="number" value={editing.max_users} onChange={(e) => setEditing({ ...editing, max_users: parseInt(e.target.value) || 0 })} /></div>
+            <div><label className="field-label">Приоритет</label><input className="input" type="number" value={editing.priority} onChange={(e) => setEditing({ ...editing, priority: parseInt(e.target.value) || 0 })} /></div>
+            <label className="flex items-center gap-2 muted" style={{ fontSize: 13, cursor: 'pointer' }}><input type="checkbox" checked={editing.is_active} onChange={(e) => setEditing({ ...editing, is_active: e.target.checked })} /> Активен</label>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
 };
 
-// ===== TOOLS PAGE =====
-interface ToolsPageProps {
-    onToast: (title: string, msg: string, type: ToastType) => void;
-}
+// ==========================================================
+// 16. BACKUPS
+// ==========================================================
 
-const ToolsPage: React.FC<ToolsPageProps> = ({ onToast }) => {
-    const [exporting, setExporting] = useState<string | null>(null);
-    const [syncing, setSyncing] = useState(false);
-    const [diagnostics, setDiagnostics] = useState<any>(null);
-    const [loadingDiag, setLoadingDiag] = useState(false);
+const BackupSettingsTab: React.FC<{ onToast: (t: string, m: string, ty: ToastType) => void }> = ({ onToast }) => {
+  const [enabled, setEnabled] = useState(false);
+  const [interval, setInterval] = useState('12');
+  const [lastBackup, setLastBackup] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
-    const exportData = async (type: 'users' | 'keys' | 'transactions') => {
-        setExporting(type);
-        try {
-            const res = await apiFetch(`/panel/export/${type}`);
-            if (res && res.data) {
-                const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `${type}_export_${new Date().toISOString().slice(0,10)}.json`;
-                a.click();
-                URL.revokeObjectURL(url);
-                onToast('Успех', `Экспортировано ${res.data.length} записей`, 'success');
-            }
-        } catch (e: any) {
-            onToast('Ошибка', e.message || 'Не удалось экспортировать', 'error');
-        } finally {
-            setExporting(null);
-        }
-    };
+  const loadStatus = async () => {
+    try { const d = await apiFetch('/panel/backups/status'); if (d) { setEnabled(d.enabled || false); setInterval(d.interval_hours?.toString() || '12'); setLastBackup(d.last_backup || null); } }
+    catch (e) { console.error(e); }
+  };
+  useEffect(() => { loadStatus(); }, []);
 
-    const runDiagnostics = async () => {
-        setLoadingDiag(true);
-        try {
-            const res = await apiFetch('/panel/diagnostics');
-            setDiagnostics(res);
-        } catch (e) {
-            onToast('Ошибка', 'Не удалось получить диагностику', 'error');
-        } finally {
-            setLoadingDiag(false);
-        }
-    };
+  const createNow = async () => { setCreating(true); try { await apiFetch('/panel/backups/create', { method: 'POST' }); onToast('Готово', 'Копия создана и отправлена администратору', 'success'); loadStatus(); } catch { onToast('Ошибка', 'Не удалось создать копию', 'error'); } setCreating(false); };
+  const saveSettings = async () => { try { await apiFetch('/panel/backups/settings', { method: 'PUT', body: JSON.stringify({ enabled, interval_hours: parseInt(interval) }) }); onToast('Готово', 'Настройки сохранены', 'success'); } catch { onToast('Ошибка', 'Не удалось сохранить', 'error'); } };
 
-    const syncRemnawave = async () => {
-        setSyncing(true);
-        try {
-            const res = await apiFetch('/panel/remnawave/sync', { method: 'POST' });
-            if (res?.success) {
-                onToast('Успех', `Синхронизировано: ${res.synced || 0} ключей`, 'success');
-            }
-        } catch (e) {
-            onToast('Ошибка', 'Не удалось синхронизировать', 'error');
-        } finally {
-            setSyncing(false);
-        }
-    };
-
-    const cleanupExpired = async () => {
-        if (!confirm('Удалить все истёкшие ключи старше 30 дней?')) return;
-        try {
-            const res = await apiFetch('/panel/tools/cleanup-expired', { method: 'POST' });
-            onToast('Успех', `Удалено ${res?.deleted || 0} истёкших ключей`, 'success');
-        } catch (e) {
-            onToast('Ошибка', 'Не удалось выполнить очистку', 'error');
-        }
-    };
-
-    return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div>
-                <h2 className="text-2xl font-bold text-white">Инструменты</h2>
-                <p className="text-gray-400 mt-1">Полезные утилиты для администрирования</p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Экспорт данных */}
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                    <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 rounded-xl bg-gray-700/20 flex items-center justify-center">
-                            <Download size={20} className="text-gray-200" />
-                        </div>
-                        <div>
-                            <h3 className="text-white font-bold">Экспорт данных</h3>
-                            <p className="text-gray-500 text-sm">Скачать данные в JSON</p>
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2">
-                        <button onClick={() => exportData('users')} disabled={!!exporting} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-                            {exporting === 'users' ? <Loader size={14} className="animate-spin mx-auto" /> : 'Пользователи'}
-                        </button>
-                        <button onClick={() => exportData('keys')} disabled={!!exporting} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-                            {exporting === 'keys' ? <Loader size={14} className="animate-spin mx-auto" /> : 'Ключи'}
-                        </button>
-                        <button onClick={() => exportData('transactions')} disabled={!!exporting} className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-                            {exporting === 'transactions' ? <Loader size={14} className="animate-spin mx-auto" /> : 'Транзакции'}
-                        </button>
-                    </div>
-                </div>
-
-                {/* Синхронизация */}
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                    <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 rounded-xl bg-green-600/20 flex items-center justify-center">
-                            <RefreshCw size={20} className="text-green-400" />
-                        </div>
-                        <div>
-                            <h3 className="text-white font-bold">Синхронизация</h3>
-                            <p className="text-gray-500 text-sm">Обновить данные из Remnawave</p>
-                        </div>
-                    </div>
-                    <button onClick={syncRemnawave} disabled={syncing} className="w-full px-4 py-2.5 bg-green-600 hover:bg-green-500 text-white rounded-xl font-medium disabled:opacity-50 transition-colors flex items-center justify-center gap-2">
-                        {syncing ? <Loader size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-                        {syncing ? 'Синхронизация...' : 'Синхронизировать ключи'}
-                    </button>
-                </div>
-
-                {/* Очистка */}
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                    <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 rounded-xl bg-red-600/20 flex items-center justify-center">
-                            <Trash2 size={20} className="text-red-400" />
-                        </div>
-                        <div>
-                            <h3 className="text-white font-bold">Очистка данных</h3>
-                            <p className="text-gray-500 text-sm">Удалить устаревшие записи</p>
-                        </div>
-                    </div>
-                    <button onClick={cleanupExpired} className="w-full px-4 py-2.5 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 rounded-xl font-medium transition-colors">
-                        Удалить истёкшие ключи (30+ дней)
-                    </button>
-                </div>
-
-                {/* Диагностика */}
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                    <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 rounded-xl bg-purple-600/20 flex items-center justify-center">
-                            <Activity size={20} className="text-purple-400" />
-                        </div>
-                        <div>
-                            <h3 className="text-white font-bold">Диагностика</h3>
-                            <p className="text-gray-500 text-sm">Проверка состояния системы</p>
-                        </div>
-                    </div>
-                    <button onClick={runDiagnostics} disabled={loadingDiag} className="w-full px-4 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-medium disabled:opacity-50 transition-colors flex items-center justify-center gap-2">
-                        {loadingDiag ? <Loader size={16} className="animate-spin" /> : <Activity size={16} />}
-                        Запустить диагностику
-                    </button>
-                </div>
-            </div>
-
-            {/* Результаты диагностики */}
-            {diagnostics && (
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                    <h3 className="text-white font-bold mb-4">Результаты диагностики</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className="bg-gray-800 rounded-xl p-4">
-                            <div className="text-2xl font-bold text-white">{diagnostics.users_count || 0}</div>
-                            <div className="text-gray-400 text-sm">Пользователей</div>
-                        </div>
-                        <div className="bg-gray-800 rounded-xl p-4">
-                            <div className="text-2xl font-bold text-white">{diagnostics.keys_count || 0}</div>
-                            <div className="text-gray-400 text-sm">Ключей</div>
-                        </div>
-                        <div className="bg-gray-800 rounded-xl p-4">
-                            <div className="text-2xl font-bold text-white">{diagnostics.active_keys || 0}</div>
-                            <div className="text-gray-400 text-sm">Активных ключей</div>
-                        </div>
-                        <div className="bg-gray-800 rounded-xl p-4">
-                            <div className="text-2xl font-bold text-green-400">{diagnostics.remnawave_status || 'N/A'}</div>
-                            <div className="text-gray-400 text-sm">Remnawave</div>
-                        </div>
-                    </div>
-                    {diagnostics.issues && diagnostics.issues.length > 0 && (
-                        <div className="mt-4 bg-red-600/10 border border-red-500/30 rounded-xl p-4">
-                            <div className="text-red-400 font-bold mb-2">Обнаружены проблемы:</div>
-                            <ul className="text-red-300 text-sm space-y-1">
-                                {diagnostics.issues.map((issue: string, i: number) => (
-                                    <li key={i}>• {issue}</li>
-                                ))}
-                            </ul>
-                        </div>
-                    )}
-                </div>
-            )}
+  return (
+    <div className="card" style={{ padding: 24 }}>
+      <h3 className="h-sec" style={{ paddingBottom: 16, borderBottom: '1px solid var(--border)', marginBottom: 20 }}>Резервное копирование</h3>
+      <div className="flex flex-col gap-5">
+        <div className="inset flex items-center justify-between gap-3" style={{ padding: 14 }}>
+          <div><div style={{ fontWeight: 500 }}>Автоматическое копирование</div><div className="sub mt-0.5">Копии создаются автоматически и отправляются администратору</div></div>
+          <Toggle on={enabled} onChange={() => setEnabled(!enabled)} />
         </div>
-    );
+        <div><label className="field-label">Частота, часов</label><input className="input" type="number" value={interval} onChange={(e) => setInterval(e.target.value)} placeholder="12" /></div>
+        {lastBackup && <div className="inset" style={{ padding: 12 }}><span className="sub">Последняя копия: </span><span>{new Date(lastBackup).toLocaleString('ru-RU')}</span></div>}
+        <div className="inset flex items-start gap-3" style={{ padding: 14 }}>
+          <Cloud size={18} className="faint" style={{ marginTop: 2, flex: 'none' }} />
+          <div><div style={{ fontWeight: 500 }}>Как это работает</div><div className="sub mt-1">Копии отправляются администратору в личные сообщения в виде архива базы данных.</div></div>
+        </div>
+        <div className="flex gap-3">
+          <button className="btn solid block" onClick={createNow} disabled={creating}>{creating ? <Spinner size={16} /> : <Download size={16} />} Создать сейчас</button>
+          <button className="btn block" onClick={saveSettings}><Save size={16} /> Сохранить настройки</button>
+        </div>
+      </div>
+    </div>
+  );
 };
 
-interface SettingsPageProps {
-    onToast: (title: string, msg: string, type: ToastType) => void;
-}
+// ==========================================================
+// 17. SETTINGS
+// ==========================================================
 
-const SettingsPage: React.FC<SettingsPageProps> = ({ onToast }) => {
-    const [activeTab, setActiveTab] = useState<'squads' | 'backups'>('squads');
+const SettingsPage: React.FC<{ onToast: (t: string, m: string, ty: ToastType) => void }> = ({ onToast }) => {
+  const [activeTab, setActiveTab] = useState<'squads' | 'backups'>('squads');
+  const tabs = [{ id: 'squads', icon: Zap, label: 'Сквады' }, { id: 'backups', icon: Cloud, label: 'Резервные копии' }] as const;
 
-    return (
-        <div className="flex flex-col lg:flex-row gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {/* Sidebar */}
-            <div className="w-full lg:w-64 flex-shrink-0">
-                <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden sticky top-24">
-                    <div className="p-4 border-b border-gray-800"><h2 className="font-bold text-white">Категории</h2></div>
-                    <nav className="p-2 space-y-1">
-                        {[{id: 'squads', icon: Zap, label: 'Сквады'}, {id: 'backups', icon: Cloud, label: 'Резервные копии'}].map(tab => (
-                            <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`w-full flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-colors ${activeTab === tab.id ? 'bg-white/5 text-gray-200' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
-                                <tab.icon size={18} className="mr-3"/> {tab.label}
-                            </button>
-                        ))}
-                    </nav>
-                </div>
-            </div>
-
-            {/* Content */}
-            <div className="flex-1">
-                {activeTab === 'squads' && (
-                    <SquadsPage onToast={onToast} />
-                )}
-
-                {activeTab === 'backups' && (
-                    <BackupSettingsTab onToast={onToast} />
-                )}
-            </div>
+  return (
+    <div className="flex flex-col lg:flex-row gap-6">
+      <div style={{ width: 220, flex: 'none' }} className="w-full lg:!w-[220px]">
+        <div className="card" style={{ position: 'sticky', top: 80, overflow: 'hidden' }}>
+          <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}><span className="h-sec">Категории</span></div>
+          <div style={{ padding: 8 }} className="flex flex-col gap-1">
+            {tabs.map((t) => (
+              <button key={t.id} className={`nav-item ${activeTab === t.id ? 'on' : ''}`} onClick={() => setActiveTab(t.id)}><t.icon size={16} className={activeTab === t.id ? '' : 'faint'} /> {t.label}</button>
+            ))}
+          </div>
         </div>
-    );
+      </div>
+      <div className="flex-1">
+        {activeTab === 'squads' && <SquadsPage onToast={onToast} />}
+        {activeTab === 'backups' && <BackupSettingsTab onToast={onToast} />}
+      </div>
+    </div>
+  );
 };
